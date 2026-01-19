@@ -130,12 +130,22 @@ describe("FTS5 Search", () => {
 
   test("finds by multiple keywords", async () => {
     const results = await searchFTS("JWT tokens", "proj1");
-    expect(results.length).toBeGreaterThan(0);
+    expect(results.length).toBe(1);
+    expect(results[0]?.snippet).toContain("JWT");
   });
 
-  test("handles special characters in query", async () => {
+  test("handles special characters without crashing", async () => {
+    // Special characters should be escaped/handled gracefully
     const results = await searchFTS("user's login", "proj1");
-    expect(results.length).toBeGreaterThanOrEqual(0);
+    // Should find the memory with "user login" despite the apostrophe
+    expect(results.length).toBe(1);
+    expect(results[0]?.snippet).toContain("login");
+  });
+
+  test("handles query with only special characters", async () => {
+    // Pure special characters should return empty, not throw
+    const results = await searchFTS("!@#$%", "proj1");
+    expect(results).toEqual([]);
   });
 
   test("respects limit parameter", async () => {

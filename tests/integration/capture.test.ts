@@ -161,6 +161,11 @@ describe("Full Capture Flow Integration", () => {
       sessionId
     );
 
+    // Lower the salience so we can verify dedup boosts it
+    await store.deemphasize(mem1.id, 0.5);
+    const loweredMem = await store.get(mem1.id);
+    expect(loweredMem?.salience).toBe(0.5);
+
     const sessionId2 = `dedup-session-2-${Date.now()}`;
     await getOrCreateSession(sessionId2, project.id);
 
@@ -170,8 +175,10 @@ describe("Full Capture Flow Integration", () => {
       sessionId2
     );
 
+    // Dedup should return the same memory with boosted salience
     expect(mem2.id).toBe(mem1.id);
-    expect(mem2.salience).toBeGreaterThanOrEqual(mem1.salience);
+    expect(mem2.salience).toBeGreaterThan(0.5);
+    expect(mem2.accessCount).toBeGreaterThan(mem1.accessCount);
   });
 
   test("memory reinforcement increases salience", async () => {

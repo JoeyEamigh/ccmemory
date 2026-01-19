@@ -475,7 +475,7 @@ CREATE TABLE IF NOT EXISTS memories (
 
     -- Classification (5-sector model)
     sector TEXT NOT NULL,       -- 'episodic' | 'semantic' | 'procedural' | 'emotional' | 'reflective'
-    tier TEXT DEFAULT 'project', -- 'session' | 'project' | 'global'
+    tier TEXT DEFAULT 'project', -- 'session' | 'project'
     importance REAL DEFAULT 0.5, -- Base importance for decay calculation
     categories_json TEXT,       -- Auto-labeled categories
 

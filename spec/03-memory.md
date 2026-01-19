@@ -30,7 +30,7 @@ Based on OpenMemory research, memories are classified into 5 sectors with differ
 ```typescript
 // src/services/memory/sectors.ts
 type MemorySector = 'episodic' | 'semantic' | 'procedural' | 'emotional' | 'reflective';
-type MemoryTier = 'session' | 'project' | 'global';
+type MemoryTier = 'session' | 'project';
 
 type Memory = {
   id: string;

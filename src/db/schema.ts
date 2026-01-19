@@ -32,7 +32,7 @@ export const SCHEMA_STATEMENTS = [
     summary TEXT,
     content_hash TEXT,
     sector TEXT NOT NULL,
-    tier TEXT DEFAULT 'project',
+    tier TEXT DEFAULT 'project', -- 'session' | 'project'
     importance REAL DEFAULT 0.5,
     categories_json TEXT,
     simhash TEXT,

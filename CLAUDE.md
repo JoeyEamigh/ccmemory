@@ -20,7 +20,7 @@ CCMemory uses a 5-sector memory model:
 - **Emotional**: Frustrations, preferences, successes
 - **Reflective**: Session summaries, insights
 
-Memories have tiers: `session` (temporary) → `project` (persistent) → `global` (cross-project).
+Memories have tiers: `session` (temporary) → `project` (persistent).
 
 ## Project Structure
 

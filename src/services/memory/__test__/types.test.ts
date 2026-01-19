@@ -94,10 +94,20 @@ describe("Memory Sector Classification", () => {
     expect(classifyMemorySector(content)).toBe("semantic");
   });
 
-  test("handles mixed content by highest match", () => {
+  test("handles mixed content by highest match count", () => {
+    // "asked" -> episodic (1 match)
+    // "function", "is located" -> semantic (2 matches)
+    // semantic wins with more matches
     const content = "User asked about the function that is located in src/auth.ts";
     const result = classifyMemorySector(content);
-    expect(result === "episodic" || result === "semantic").toBe(true);
+    expect(result).toBe("semantic");
+  });
+
+  test("priority order breaks ties (emotional > reflective > episodic > procedural > semantic)", () => {
+    // Both have 1 match each, but episodic has higher priority than semantic
+    const content = "User asked about a file";
+    const result = classifyMemorySector(content);
+    expect(result).toBe("episodic");
   });
 });
 
@@ -152,7 +162,10 @@ describe("Type Validators", () => {
   test("isValidTier accepts valid tiers", () => {
     expect(isValidTier("session")).toBe(true);
     expect(isValidTier("project")).toBe(true);
-    expect(isValidTier("global")).toBe(true);
+  });
+
+  test("isValidTier rejects global tier", () => {
+    expect(isValidTier("global")).toBe(false);
   });
 
   test("isValidTier rejects invalid tiers", () => {

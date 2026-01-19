@@ -1,6 +1,6 @@
 export type MemorySector = "episodic" | "semantic" | "procedural" | "emotional" | "reflective";
 
-export type MemoryTier = "session" | "project" | "global";
+export type MemoryTier = "session" | "project";
 
 export type Memory = {
   id: string;
@@ -152,5 +152,5 @@ export function isValidSector(sector: string): sector is MemorySector {
 }
 
 export function isValidTier(tier: string): tier is MemoryTier {
-  return tier === "session" || tier === "project" || tier === "global";
+  return tier === "session" || tier === "project";
 }

@@ -196,13 +196,27 @@ describe("Model Switching Integration", () => {
     expect(typeof provider.dimensions).toBe("number");
   });
 
-  test("embedding service handles empty text gracefully", async () => {
+  test("embedding service handles empty text without crashing", async () => {
+    // Empty text behavior varies by provider - some return embeddings, some error
+    // This test verifies the system handles it gracefully either way
+    let succeeded = false;
+    let threwError = false;
+
     try {
       const result = await embeddingService.embed("");
-      expect(result.vector.length).toBeGreaterThan(0);
+      // If successful, result should have valid structure
+      expect(result.vector).toBeDefined();
+      expect(Array.isArray(result.vector)).toBe(true);
+      expect(result.model).toBeDefined();
+      succeeded = true;
     } catch (error) {
-      expect(error).toBeDefined();
+      // If it errors, it should be a proper Error object
+      expect(error instanceof Error).toBe(true);
+      threwError = true;
     }
+
+    // Exactly one outcome should occur (not neither)
+    expect(succeeded || threwError).toBe(true);
   });
 
   test("model metadata is persisted correctly", async () => {

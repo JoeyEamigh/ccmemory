@@ -5,7 +5,7 @@ export type MemorySector =
   | "emotional"
   | "reflective";
 
-export type MemoryTier = "session" | "project" | "global";
+export type MemoryTier = "session" | "project";
 
 export type RelationshipType =
   | "SUPERSEDES"

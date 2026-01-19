@@ -47,12 +47,31 @@ describe("Text Chunking", () => {
 
   test("tracks offsets correctly", () => {
     const text = "First part. Second part. Third part.";
-    const chunks = chunkText(text, { targetTokens: 5 });
+    const chunks = chunkText(text, { targetTokens: 5, overlap: 0 });
 
     for (const chunk of chunks) {
       expect(chunk.startOffset).toBeGreaterThanOrEqual(0);
-      expect(chunk.endOffset).toBeLessThanOrEqual(text.length + 50);
+      // Without overlap, endOffset should never exceed text length
+      expect(chunk.endOffset).toBeLessThanOrEqual(text.length);
       expect(chunk.endOffset).toBeGreaterThan(chunk.startOffset);
+    }
+
+    // Start offsets should be non-decreasing
+    for (let i = 1; i < chunks.length; i++) {
+      expect(chunks[i]!.startOffset).toBeGreaterThanOrEqual(chunks[i - 1]!.startOffset);
+    }
+  });
+
+  test("offsets with overlap may exceed original boundaries", () => {
+    const text = "First sentence here. Second sentence here. Third sentence here.";
+    const chunks = chunkText(text, { targetTokens: 10, overlap: 0.2 });
+
+    for (const chunk of chunks) {
+      expect(chunk.startOffset).toBeGreaterThanOrEqual(0);
+      expect(chunk.endOffset).toBeGreaterThan(chunk.startOffset);
+      // With overlap, chunks contain repeated content but offsets track logical position
+      // endOffset should still be bounded by text length + reasonable overlap margin
+      expect(chunk.endOffset).toBeLessThanOrEqual(text.length + chunk.content.length);
     }
   });
 

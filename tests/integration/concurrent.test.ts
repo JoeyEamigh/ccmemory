@@ -74,7 +74,8 @@ describe("Concurrent Instance Integration", () => {
 
     for (const sessionId of sessionIds) {
       const sessionMemories = await store.getBySession(sessionId);
-      expect(sessionMemories.length).toBeGreaterThanOrEqual(5);
+      // Each session creates exactly 5 unique memories (UUIDs ensure no deduplication)
+      expect(sessionMemories.length).toBe(5);
     }
   });
 
@@ -237,7 +238,8 @@ describe("Concurrent Instance Integration", () => {
     expect(elapsed).toBeLessThan(5000);
 
     const memories = await store.getBySession(sessionId);
-    expect(memories.length).toBeGreaterThanOrEqual(45);
+    // All 50 unique memories should be created (UUIDs prevent deduplication)
+    expect(memories.length).toBe(50);
   });
 
   test("concurrent get and update operations are consistent", async () => {
@@ -268,6 +270,9 @@ describe("Concurrent Instance Integration", () => {
     ];
 
     const results = await Promise.all(concurrentOps);
+
+    // All concurrent operations should complete without error
+    expect(results.length).toBe(5);
 
     const finalMemory = await store.get(memory.id);
     expect(finalMemory).not.toBeNull();

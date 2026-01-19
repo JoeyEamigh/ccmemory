@@ -393,7 +393,8 @@ describe("Session Context", () => {
 
     const context = await search.getSessionContext(memory.id);
 
-    expect(context?.memoriesInSession).toBeGreaterThanOrEqual(2);
+    expect(context).not.toBeNull();
+    expect(context?.memoriesInSession).toBe(2);
   });
 
   test("includes session summary", async () => {
@@ -448,12 +449,18 @@ describe("Ranking", () => {
       projectId: "proj1",
     });
 
+    // Both memories should be found
+    expect(results.length).toBe(2);
+
     const highIndex = results.findIndex((r) => r.memory.id === highSalience.id);
     const lowIndex = results.findIndex((r) => r.memory.id === lowSalience.id);
 
-    if (highIndex !== -1 && lowIndex !== -1) {
-      expect(highIndex).toBeLessThan(lowIndex);
-    }
+    // Assert both memories were found
+    expect(highIndex).not.toBe(-1);
+    expect(lowIndex).not.toBe(-1);
+
+    // Higher salience should rank first
+    expect(highIndex).toBeLessThan(lowIndex);
   });
 });
 
