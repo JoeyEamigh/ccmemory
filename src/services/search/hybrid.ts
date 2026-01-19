@@ -1,0 +1,390 @@
+import { getDatabase } from "../../db/database.js";
+import { log } from "../../utils/log.js";
+import type { Memory, MemorySector, MemoryTier, UsageType } from "../memory/types.js";
+import { rowToMemory } from "../memory/utils.js";
+import { getSupersedingMemory } from "../memory/relationships.js";
+import type { EmbeddingService } from "../embedding/types.js";
+import { searchFTS } from "./fts.js";
+import { searchVector } from "./vector.js";
+import { computeScore, type RankingWeights, DEFAULT_WEIGHTS } from "./ranking.js";
+
+export type SearchMode = "hybrid" | "semantic" | "keyword";
+
+export type SearchOptions = {
+  query: string;
+  projectId?: string;
+  sector?: MemorySector;
+  tier?: MemoryTier;
+  limit?: number;
+  minSalience?: number;
+  includeDocuments?: boolean;
+  includeSuperseded?: boolean;
+  sessionId?: string;
+  mode?: SearchMode;
+  weights?: RankingWeights;
+};
+
+export type SessionSummary = {
+  id: string;
+  startedAt: number;
+  summary?: string;
+  projectId: string;
+};
+
+export type SearchResult = {
+  memory: Memory;
+  score: number;
+  matchType: "semantic" | "keyword" | "both";
+  highlights?: string[];
+  sourceSession?: SessionSummary;
+  isSuperseded: boolean;
+  supersededBy?: {
+    id: string;
+    content: string;
+    createdAt: number;
+  };
+  relatedMemoryCount: number;
+};
+
+export type SessionContext = {
+  session: {
+    id: string;
+    startedAt: number;
+    endedAt?: number;
+    summary?: string;
+    projectId: string;
+  };
+  memoriesInSession: number;
+  usageType: UsageType;
+};
+
+export type TimelineResult = {
+  anchor: Memory;
+  before: Memory[];
+  after: Memory[];
+  sessions: Map<string, SessionSummary>;
+};
+
+export type SearchService = {
+  search(options: SearchOptions): Promise<SearchResult[]>;
+  timeline(anchorId: string, depthBefore?: number, depthAfter?: number): Promise<TimelineResult>;
+  getSessionContext(memoryId: string): Promise<SessionContext | null>;
+};
+
+async function getMemoryById(id: string): Promise<Memory | null> {
+  const db = await getDatabase();
+  const result = await db.execute("SELECT * FROM memories WHERE id = ?", [id]);
+  if (result.rows.length === 0) return null;
+  const row = result.rows[0];
+  if (!row) return null;
+  return rowToMemory(row);
+}
+
+async function getSourceSession(memoryId: string): Promise<SessionSummary | undefined> {
+  const db = await getDatabase();
+  const result = await db.execute(
+    `SELECT s.id, s.started_at, s.summary, s.project_id
+     FROM session_memories sm
+     JOIN sessions s ON sm.session_id = s.id
+     WHERE sm.memory_id = ? AND sm.usage_type = 'created'
+     LIMIT 1`,
+    [memoryId]
+  );
+
+  if (result.rows.length === 0) return undefined;
+
+  const row = result.rows[0];
+  if (!row) return undefined;
+
+  return {
+    id: String(row["id"]),
+    startedAt: Number(row["started_at"]),
+    summary: row["summary"] ? String(row["summary"]) : undefined,
+    projectId: String(row["project_id"]),
+  };
+}
+
+async function getRelatedMemoryCount(memoryId: string): Promise<number> {
+  const db = await getDatabase();
+  const result = await db.execute(
+    `SELECT COUNT(*) as count FROM memory_relationships
+     WHERE (source_memory_id = ? OR target_memory_id = ?)
+       AND valid_until IS NULL`,
+    [memoryId, memoryId]
+  );
+
+  const row = result.rows[0];
+  return row ? Number(row["count"]) : 0;
+}
+
+async function checkSessionLink(memoryId: string, sessionId: string): Promise<boolean> {
+  const db = await getDatabase();
+  const result = await db.execute(
+    `SELECT 1 FROM session_memories
+     WHERE memory_id = ? AND session_id = ?
+     LIMIT 1`,
+    [memoryId, sessionId]
+  );
+  return result.rows.length > 0;
+}
+
+async function reinforceMemory(id: string, amount: number): Promise<void> {
+  const db = await getDatabase();
+  const now = Date.now();
+  await db.execute(
+    `UPDATE memories
+     SET salience = MIN(1.0, salience + ? * (1.0 - salience)),
+         last_accessed = ?,
+         access_count = access_count + 1,
+         updated_at = ?
+     WHERE id = ? AND is_deleted = 0`,
+    [amount, now, now, id]
+  );
+}
+
+async function linkToSession(
+  memoryId: string,
+  sessionId: string,
+  usageType: UsageType
+): Promise<void> {
+  const db = await getDatabase();
+  const now = Date.now();
+  try {
+    await db.execute(
+      `INSERT INTO session_memories (session_id, memory_id, created_at, usage_type)
+       VALUES (?, ?, ?, ?)`,
+      [sessionId, memoryId, now, usageType]
+    );
+  } catch {
+    // Ignore duplicate key errors
+  }
+}
+
+export function createSearchService(
+  embeddingService: EmbeddingService
+): SearchService {
+  const service: SearchService = {
+    async search(options: SearchOptions): Promise<SearchResult[]> {
+      const {
+        query,
+        projectId,
+        sector,
+        tier,
+        limit = 10,
+        minSalience = 0,
+        includeSuperseded = false,
+        sessionId,
+        mode = "hybrid",
+        weights = DEFAULT_WEIGHTS,
+      } = options;
+
+      const start = Date.now();
+      log.info("search", "Hybrid search starting", {
+        query: query.slice(0, 50),
+        mode,
+        projectId,
+      });
+
+      const [ftsResults, vectorResults] = await Promise.all([
+        mode !== "semantic" ? searchFTS(query, projectId, limit * 2) : [],
+        mode !== "keyword"
+          ? searchVector(query, embeddingService, projectId, limit * 2)
+          : [],
+      ]);
+
+      const resultMap = new Map<
+        string,
+        {
+          ftsRank: number;
+          similarity: number;
+          snippet?: string;
+        }
+      >();
+
+      for (const r of ftsResults) {
+        resultMap.set(r.memoryId, {
+          ftsRank: r.rank,
+          similarity: 0,
+          snippet: r.snippet,
+        });
+      }
+
+      for (const r of vectorResults) {
+        const existing = resultMap.get(r.memoryId);
+        if (existing) {
+          existing.similarity = r.similarity;
+        } else {
+          resultMap.set(r.memoryId, {
+            ftsRank: 0,
+            similarity: r.similarity,
+          });
+        }
+      }
+
+      const memoryIds = Array.from(resultMap.keys());
+      const memories = await Promise.all(memoryIds.map(getMemoryById));
+
+      const results: SearchResult[] = [];
+
+      for (let i = 0; i < memories.length; i++) {
+        const memory = memories[i];
+        const memoryId = memoryIds[i];
+        if (!memory || memory.isDeleted || !memoryId) continue;
+
+        if (sector && memory.sector !== sector) continue;
+        if (tier && memory.tier !== tier) continue;
+        if (memory.salience < minSalience) continue;
+        if (!includeSuperseded && memory.validUntil) continue;
+
+        if (sessionId) {
+          const hasLink = await checkSessionLink(memory.id, sessionId);
+          if (!hasLink) continue;
+        }
+
+        const data = resultMap.get(memory.id);
+        if (!data) continue;
+
+        const score = computeScore(
+          memory,
+          data.similarity,
+          data.ftsRank,
+          weights
+        );
+
+        const matchType: "semantic" | "keyword" | "both" =
+          data.similarity > 0 && data.ftsRank !== 0
+            ? "both"
+            : data.similarity > 0
+              ? "semantic"
+              : "keyword";
+
+        const sourceSession = await getSourceSession(memory.id);
+        const supersedingMemory = await getSupersedingMemory(memory.id);
+        const relatedCount = await getRelatedMemoryCount(memory.id);
+
+        results.push({
+          memory,
+          score,
+          matchType,
+          highlights: data.snippet ? [data.snippet] : undefined,
+          sourceSession,
+          isSuperseded: !!memory.validUntil,
+          supersededBy: supersedingMemory
+            ? {
+                id: supersedingMemory.id,
+                content: supersedingMemory.content.slice(0, 200),
+                createdAt: supersedingMemory.createdAt,
+              }
+            : undefined,
+          relatedMemoryCount: relatedCount,
+        });
+      }
+
+      results.sort((a, b) => b.score - a.score);
+
+      const topResults = results.slice(0, limit);
+
+      for (const result of topResults) {
+        await reinforceMemory(result.memory.id, 0.02);
+        if (sessionId) {
+          await linkToSession(result.memory.id, sessionId, "recalled");
+        }
+      }
+
+      log.info("search", "Hybrid search complete", {
+        total: results.length,
+        returned: topResults.length,
+        mode,
+        ms: Date.now() - start,
+      });
+
+      return topResults;
+    },
+
+    async timeline(
+      anchorId: string,
+      depthBefore = 5,
+      depthAfter = 5
+    ): Promise<TimelineResult> {
+      log.debug("search", "Timeline query", { anchorId, depthBefore, depthAfter });
+
+      const db = await getDatabase();
+      const anchor = await getMemoryById(anchorId);
+
+      if (!anchor) {
+        log.warn("search", "Timeline anchor not found", { anchorId });
+        throw new Error("Anchor memory not found");
+      }
+
+      const [beforeResult, afterResult] = await Promise.all([
+        db.execute(
+          `SELECT * FROM memories
+           WHERE project_id = ? AND created_at < ? AND is_deleted = 0
+           ORDER BY created_at DESC
+           LIMIT ?`,
+          [anchor.projectId, anchor.createdAt, depthBefore]
+        ),
+        db.execute(
+          `SELECT * FROM memories
+           WHERE project_id = ? AND created_at > ? AND is_deleted = 0
+           ORDER BY created_at ASC
+           LIMIT ?`,
+          [anchor.projectId, anchor.createdAt, depthAfter]
+        ),
+      ]);
+
+      const before = beforeResult.rows.map(rowToMemory).reverse();
+      const after = afterResult.rows.map(rowToMemory);
+
+      const allMemories = [...before, anchor, ...after];
+      const sessions = new Map<string, SessionSummary>();
+
+      for (const memory of allMemories) {
+        const sessionContext = await service.getSessionContext(memory.id);
+        if (sessionContext && !sessions.has(sessionContext.session.id)) {
+          sessions.set(sessionContext.session.id, {
+            id: sessionContext.session.id,
+            startedAt: sessionContext.session.startedAt,
+            summary: sessionContext.session.summary,
+            projectId: sessionContext.session.projectId,
+          });
+        }
+      }
+
+      return { anchor, before, after, sessions };
+    },
+
+    async getSessionContext(memoryId: string): Promise<SessionContext | null> {
+      const db = await getDatabase();
+      const result = await db.execute(
+        `SELECT s.*, sm.usage_type,
+                (SELECT COUNT(*) FROM session_memories WHERE session_id = s.id) as memory_count
+         FROM session_memories sm
+         JOIN sessions s ON sm.session_id = s.id
+         WHERE sm.memory_id = ?
+         ORDER BY sm.created_at DESC
+         LIMIT 1`,
+        [memoryId]
+      );
+
+      if (result.rows.length === 0) return null;
+
+      const row = result.rows[0];
+      if (!row) return null;
+
+      return {
+        session: {
+          id: String(row["id"]),
+          startedAt: Number(row["started_at"]),
+          endedAt: row["ended_at"] ? Number(row["ended_at"]) : undefined,
+          summary: row["summary"] ? String(row["summary"]) : undefined,
+          projectId: String(row["project_id"]),
+        },
+        memoriesInSession: Number(row["memory_count"]),
+        usageType: String(row["usage_type"]) as UsageType,
+      };
+    },
+  };
+
+  return service;
+}

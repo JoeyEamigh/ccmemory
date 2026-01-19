@@ -135,30 +135,30 @@ After completing a task:
 ## Phase 4: Search System
 
 ### P4.1: FTS5 Search
-- [ ] **T073** Implement `src/services/search/fts.ts`
-- [ ] **T074** Query preparation (prefix matching)
-- [ ] **T075** Snippet extraction
-- [ ] **T076** Project filtering
-- [ ] **T077** Write FTS tests (`src/services/search/__test__/fts.test.ts`)
+- [x] **T073** Implement `src/services/search/fts.ts`
+- [x] **T074** Query preparation (prefix matching)
+- [x] **T075** Snippet extraction
+- [x] **T076** Project filtering
+- [x] **T077** Write FTS tests (`src/services/search/__test__/fts.test.ts`)
 
 ### P4.2: Vector Search
-- [ ] **T078** Implement `src/services/search/vector.ts`
-- [ ] **T079** Query embedding
-- [ ] **T080** vector_top_k usage
-- [ ] **T081** Model-aware search
-- [ ] **T082** Write vector search tests (`src/services/search/__test__/vector.test.ts`)
+- [x] **T078** Implement `src/services/search/vector.ts`
+- [x] **T079** Query embedding
+- [x] **T080** vector_top_k usage
+- [x] **T081** Model-aware search
+- [x] **T082** Write vector search tests (`src/services/search/__test__/vector.test.ts`)
 
 ### P4.3: Hybrid Search & Ranking
-- [ ] **T083** Implement `src/services/search/ranking.ts`
-- [ ] **T084** Score computation with weights
-- [ ] **T085** Sector-specific boosts
-- [ ] **T086** Implement `src/services/search/hybrid.ts`
-- [ ] **T087** Result merging
-- [ ] **T088** Filtering (sector, tier, salience)
-- [ ] **T089** Salience boost on retrieval
-- [ ] **T090** Session context in results (session_id, agent_name)
-- [ ] **T091** Timeline function with session grouping
-- [ ] **T092** Write hybrid search tests (`src/services/search/__test__/hybrid.test.ts`)
+- [x] **T083** Implement `src/services/search/ranking.ts`
+- [x] **T084** Score computation with weights
+- [x] **T085** Sector-specific boosts
+- [x] **T086** Implement `src/services/search/hybrid.ts`
+- [x] **T087** Result merging
+- [x] **T088** Filtering (sector, tier, salience)
+- [x] **T089** Salience boost on retrieval
+- [x] **T090** Session context in results (session_id, agent_name)
+- [x] **T091** Timeline function with session grouping
+- [x] **T092** Write hybrid search tests (`src/services/search/__test__/hybrid.test.ts`)
 
 ---
 
