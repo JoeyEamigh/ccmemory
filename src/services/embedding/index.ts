@@ -31,46 +31,11 @@ async function registerModel(provider: EmbeddingProvider): Promise<void> {
   ]);
 }
 
-export async function createEmbeddingService(
-  config: EmbeddingConfig = defaultConfig
-): Promise<EmbeddingService> {
-  const ollamaProvider = new OllamaProvider(config.ollama);
-  const openrouterProvider = new OpenRouterProvider(config.openrouter);
-
-  const providers: Record<"ollama" | "openrouter", EmbeddingProvider> = {
-    ollama: ollamaProvider,
-    openrouter: openrouterProvider,
-  };
-
-  log.debug("embedding", "Checking provider availability", { provider: config.provider });
-
-  let active: EmbeddingProvider = providers[config.provider];
-
-  if (!(await active.isAvailable())) {
-    const fallback = config.provider === "ollama" ? "openrouter" : "ollama";
-    log.warn("embedding", "Primary provider unavailable, trying fallback", {
-      primary: config.provider,
-      fallback,
-    });
-
-    const fallbackProvider = providers[fallback];
-    if (await fallbackProvider.isAvailable()) {
-      active = fallbackProvider;
-      log.info("embedding", "Using fallback provider", { provider: fallback });
-    } else {
-      log.error("embedding", "No embedding provider available");
-      throw new Error("No embedding provider available");
-    }
-  }
-
-  await registerModel(active);
-  log.info("embedding", "Embedding service initialized", {
-    provider: active.name,
-    model: active.model,
-    dimensions: active.dimensions,
-  });
-
-  const service: EmbeddingService = {
+function createService(
+  active: EmbeddingProvider,
+  providers: Record<"ollama" | "openrouter", EmbeddingProvider>
+): EmbeddingService {
+  return {
     getProvider(): EmbeddingProvider {
       return active;
     },
@@ -110,8 +75,84 @@ export async function createEmbeddingService(
       log.info("embedding", "Switched provider", { provider: active.name, model: active.model });
     },
   };
+}
 
-  return service;
+async function initializeProvider(
+  config: EmbeddingConfig
+): Promise<{ active: EmbeddingProvider; providers: Record<"ollama" | "openrouter", EmbeddingProvider> } | null> {
+  const ollamaProvider = new OllamaProvider(config.ollama);
+  const openrouterProvider = new OpenRouterProvider(config.openrouter);
+
+  const providers: Record<"ollama" | "openrouter", EmbeddingProvider> = {
+    ollama: ollamaProvider,
+    openrouter: openrouterProvider,
+  };
+
+  log.debug("embedding", "Checking provider availability", { provider: config.provider });
+
+  let active: EmbeddingProvider = providers[config.provider];
+
+  if (!(await active.isAvailable())) {
+    const fallback = config.provider === "ollama" ? "openrouter" : "ollama";
+    log.warn("embedding", "Primary provider unavailable, trying fallback", {
+      primary: config.provider,
+      fallback,
+    });
+
+    const fallbackProvider = providers[fallback];
+    if (await fallbackProvider.isAvailable()) {
+      active = fallbackProvider;
+      log.info("embedding", "Using fallback provider", { provider: fallback });
+    } else {
+      return null;
+    }
+  }
+
+  return { active, providers };
+}
+
+export async function createEmbeddingService(
+  config: EmbeddingConfig = defaultConfig
+): Promise<EmbeddingService> {
+  const result = await initializeProvider(config);
+
+  if (!result) {
+    log.error("embedding", "No embedding provider available");
+    throw new Error("No embedding provider available");
+  }
+
+  const { active, providers } = result;
+
+  await registerModel(active);
+  log.info("embedding", "Embedding service initialized", {
+    provider: active.name,
+    model: active.model,
+    dimensions: active.dimensions,
+  });
+
+  return createService(active, providers);
+}
+
+export async function createEmbeddingServiceOptional(
+  config: EmbeddingConfig = defaultConfig
+): Promise<EmbeddingService | null> {
+  const result = await initializeProvider(config);
+
+  if (!result) {
+    log.warn("embedding", "No embedding provider available, running in degraded mode");
+    return null;
+  }
+
+  const { active, providers } = result;
+
+  await registerModel(active);
+  log.info("embedding", "Embedding service initialized", {
+    provider: active.name,
+    model: active.model,
+    dimensions: active.dimensions,
+  });
+
+  return createService(active, providers);
 }
 
 export { OllamaProvider } from "./ollama.js";

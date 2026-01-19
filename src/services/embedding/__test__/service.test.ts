@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createDatabase, closeDatabase, setDatabase, type Database } from "../../../db/database.js";
-import { createEmbeddingService } from "../index.js";
+import { createEmbeddingService, createEmbeddingServiceOptional } from "../index.js";
 import type { EmbeddingConfig } from "../types.js";
 
 describe("EmbeddingService", () => {
@@ -254,5 +254,34 @@ describe("EmbeddingService", () => {
     await expect(service.switchProvider("openrouter")).rejects.toThrow(
       "Provider openrouter not available"
     );
+  });
+
+  test("createEmbeddingServiceOptional returns null when no providers available", async () => {
+    globalThis.fetch = mock(async () => {
+      throw new Error("Network error");
+    });
+
+    const config: EmbeddingConfig = {
+      provider: "ollama",
+      ollama: { baseUrl: "http://localhost:11434", model: "qwen3-embedding" },
+      openrouter: { model: "openai/text-embedding-3-small" },
+    };
+
+    const service = await createEmbeddingServiceOptional(config);
+    expect(service).toBeNull();
+  });
+
+  test("createEmbeddingServiceOptional returns service when provider available", async () => {
+    mockOllamaAvailable();
+
+    const config: EmbeddingConfig = {
+      provider: "ollama",
+      ollama: { baseUrl: "http://localhost:11434", model: "qwen3-embedding" },
+      openrouter: { apiKey: "test-key", model: "openai/text-embedding-3-small" },
+    };
+
+    const service = await createEmbeddingServiceOptional(config);
+    expect(service).not.toBeNull();
+    expect(service?.getProvider().name).toBe("ollama");
   });
 });

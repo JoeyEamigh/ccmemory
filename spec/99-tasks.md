@@ -305,15 +305,15 @@ After completing a task:
 - [x] **T188** Multi-agent WebSocket test (`tests/integration/websocket.test.ts`)
 
 ### P9.2: Documentation
-- [ ] **T189** Update CLAUDE.md for project
-- [ ] **T190** README.md
-- [ ] **T191** Installation instructions
+- [x] **T189** Update CLAUDE.md for project
+- [x] **T190** README.md
+- [x] **T191** Installation instructions
 
 ### P9.3: Error Handling
-- [ ] **T192** Graceful degradation (no Ollama)
-- [ ] **T193** Database recovery
-- [ ] **T194** Hook failure isolation
-- [ ] **T195** WebSocket reconnection
+- [x] **T192** Graceful degradation (no Ollama)
+- [x] **T193** Database recovery
+- [x] **T194** Hook failure isolation
+- [x] **T195** WebSocket reconnection
 
 ---
 

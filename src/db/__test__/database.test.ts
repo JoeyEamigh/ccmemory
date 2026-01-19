@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createDatabase } from "../database.js";
+import { createDatabase, checkIntegrity, checkpointWAL } from "../database.js";
 
 describe("Database", () => {
   test("sets WAL mode for file-based databases", async () => {
@@ -80,6 +80,36 @@ describe("Database", () => {
     const db = await createDatabase(":memory:");
     expect(db.client).toBeDefined();
     expect(typeof db.client.execute).toBe("function");
+    db.close();
+  });
+});
+
+describe("Database Recovery", () => {
+  test("checkIntegrity returns ok for valid database", async () => {
+    const db = await createDatabase(":memory:");
+    const result = await checkIntegrity(db);
+    expect(result.ok).toBe(true);
+    expect(result.errors).toHaveLength(0);
+    db.close();
+  });
+
+  test("checkpointWAL succeeds on valid database", async () => {
+    const db = await createDatabase(":memory:");
+    const success = await checkpointWAL(db);
+    expect(success).toBe(true);
+    db.close();
+  });
+
+  test("checkIntegrity checks all tables", async () => {
+    const db = await createDatabase(":memory:");
+
+    await db.execute(
+      `INSERT INTO projects (id, path, name) VALUES (?, ?, ?)`,
+      ["p1", "/test", "Test Project"]
+    );
+
+    const result = await checkIntegrity(db);
+    expect(result.ok).toBe(true);
     db.close();
   });
 });

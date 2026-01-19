@@ -50,17 +50,18 @@ describe("Concurrent Instance Integration", () => {
     const store = createMemoryStore();
 
     const writePromises = sessionIds.flatMap((sessionId, idx) =>
-      Array.from({ length: 5 }, (_, i) =>
-        store.create(
+      Array.from({ length: 5 }, (_, i) => {
+        const uniqueId = crypto.randomUUID();
+        return store.create(
           {
-            content: `Memory from session ${sessionId} number ${idx * 5 + i}, unique content: ${crypto.randomUUID()}`,
+            content: `${uniqueId} - Memory ${idx * 5 + i} from ${sessionId} with identifier ${crypto.randomUUID()} and timestamp ${Date.now()}`,
             sector: "episodic",
             tier: "session",
           },
           project.id,
           sessionId
-        )
-      )
+        );
+      })
     );
 
     const results = await Promise.all(writePromises);
@@ -165,28 +166,30 @@ describe("Concurrent Instance Integration", () => {
     const store = createMemoryStore();
 
     const writePromises = [
-      ...Array.from({ length: 10 }, (_, i) =>
-        store.create(
+      ...Array.from({ length: 10 }, (_, i) => {
+        const uniqueId = crypto.randomUUID();
+        return store.create(
           {
-            content: `Project 1 memory number ${i}: unique identifier proj1 with uuid ${crypto.randomUUID()}`,
+            content: `${uniqueId} proj1 memory ${i} unique ${crypto.randomUUID()} timestamp ${Date.now() + i}`,
             sector: "semantic",
             tier: "project",
           },
           project1.id,
           session1
-        )
-      ),
-      ...Array.from({ length: 10 }, (_, i) =>
-        store.create(
+        );
+      }),
+      ...Array.from({ length: 10 }, (_, i) => {
+        const uniqueId = crypto.randomUUID();
+        return store.create(
           {
-            content: `Project 2 memory number ${i}: unique identifier proj2 with uuid ${crypto.randomUUID()}`,
+            content: `${uniqueId} proj2 memory ${i} unique ${crypto.randomUUID()} timestamp ${Date.now() + i + 100}`,
             sector: "semantic",
             tier: "project",
           },
           project2.id,
           session2
-        )
-      ),
+        );
+      }),
     ];
 
     await Promise.all(writePromises);

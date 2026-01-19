@@ -10,11 +10,39 @@ type HookInput = {
   transcript_path?: string;
 };
 
+const TIMEOUT_MS = 30000;
 const abortController = new AbortController();
 
+function parseInput(text: string): HookInput | null {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj["session_id"] !== "string") return null;
+    if (typeof obj["cwd"] !== "string") return null;
+    return obj as unknown as HookInput;
+  } catch {
+    return null;
+  }
+}
+
 async function main(): Promise<void> {
+  const timeoutId = setTimeout(() => {
+    log.warn("summarize", "Summarize hook timed out");
+    abortController.abort();
+    closeDatabase();
+    process.exit(0);
+  }, TIMEOUT_MS);
+
   const inputText = await Bun.stdin.text();
-  const input: HookInput = JSON.parse(inputText);
+  const input = parseInput(inputText);
+
+  if (!input) {
+    log.warn("summarize", "Invalid hook input, skipping");
+    clearTimeout(timeoutId);
+    process.exit(0);
+  }
+
   const { session_id, cwd } = input;
 
   log.info("summarize", "Starting session summary", { session_id });
@@ -70,6 +98,7 @@ async function main(): Promise<void> {
 
   log.info("summarize", "Session summary stored", { session_id });
 
+  clearTimeout(timeoutId);
   closeDatabase();
   process.exit(0);
 }

@@ -456,3 +456,121 @@ describe("Ranking", () => {
     }
   });
 });
+
+describe("Degraded Mode (no embedding service)", () => {
+  let db: Database;
+  let store: MemoryStore;
+  let search: SearchService;
+
+  beforeEach(async () => {
+    db = await createDatabase(":memory:");
+    setDatabase(db);
+    store = createMemoryStore();
+    search = createSearchService(null);
+
+    const now = Date.now();
+    await db.execute(
+      `INSERT INTO projects (id, path, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+      ["proj1", "/test/path", "Test Project", now, now]
+    );
+    await db.execute(
+      `INSERT INTO sessions (id, project_id, started_at) VALUES (?, ?, ?)`,
+      ["sess1", "proj1", now]
+    );
+  });
+
+  afterEach(() => {
+    closeDatabase();
+  });
+
+  test("falls back to keyword search when no embedding service", async () => {
+    await store.create(
+      { content: "React TypeScript frontend application" },
+      "proj1",
+      "sess1"
+    );
+
+    const results = await search.search({
+      query: "React TypeScript",
+      projectId: "proj1",
+    });
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.matchType === "keyword")).toBe(true);
+  });
+
+  test("handles hybrid mode request gracefully", async () => {
+    await store.create(
+      { content: "Testing graceful degradation with hybrid mode" },
+      "proj1",
+      "sess1"
+    );
+
+    const results = await search.search({
+      query: "graceful degradation",
+      projectId: "proj1",
+      mode: "hybrid",
+    });
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.matchType === "keyword")).toBe(true);
+  });
+
+  test("handles semantic mode request gracefully", async () => {
+    await store.create(
+      { content: "Semantic search fallback test" },
+      "proj1",
+      "sess1"
+    );
+
+    const results = await search.search({
+      query: "semantic search",
+      projectId: "proj1",
+      mode: "semantic",
+    });
+
+    expect(results.every((r) => r.matchType === "keyword")).toBe(true);
+  });
+
+  test("keyword mode works normally", async () => {
+    await store.create(
+      { content: "Keyword only mode test memory" },
+      "proj1",
+      "sess1"
+    );
+
+    const results = await search.search({
+      query: "Keyword mode test",
+      projectId: "proj1",
+      mode: "keyword",
+    });
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.matchType === "keyword")).toBe(true);
+  });
+
+  test("timeline works without embedding service", async () => {
+    const anchor = await store.create(
+      { content: "Anchor for degraded timeline" },
+      "proj1",
+      "sess1"
+    );
+
+    const timeline = await search.timeline(anchor.id);
+
+    expect(timeline.anchor.id).toBe(anchor.id);
+  });
+
+  test("getSessionContext works without embedding service", async () => {
+    const memory = await store.create(
+      { content: "Memory for session context test" },
+      "proj1",
+      "sess1"
+    );
+
+    const context = await search.getSessionContext(memory.id);
+
+    expect(context).not.toBeNull();
+    expect(context?.session.id).toBe("sess1");
+  });
+});

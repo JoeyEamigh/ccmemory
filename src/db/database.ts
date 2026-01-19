@@ -1,6 +1,7 @@
 import { createClient, type Client, type InArgs, type ResultSet } from "@libsql/client";
 import { getPaths, ensureDirectories } from "../utils/paths.js";
 import { runMigrations } from "./migrations.js";
+import { log } from "../utils/log.js";
 
 export type DatabaseStatement = {
   sql: string;
@@ -93,4 +94,169 @@ export function closeDatabase(): void {
 
 export function setDatabase(db: Database): void {
   singleton = db;
+}
+
+export type IntegrityCheckResult = {
+  ok: boolean;
+  errors: string[];
+};
+
+export async function checkIntegrity(db: Database): Promise<IntegrityCheckResult> {
+  const errors: string[] = [];
+
+  try {
+    const result = await db.execute("PRAGMA integrity_check");
+    for (const row of result.rows) {
+      const value = String(row["integrity_check"] ?? row[0]);
+      if (value !== "ok") {
+        errors.push(value);
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push(`Integrity check failed: ${message}`);
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+  };
+}
+
+export async function checkpointWAL(db: Database): Promise<boolean> {
+  try {
+    await db.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+    log.debug("db", "WAL checkpoint completed");
+    return true;
+  } catch (error) {
+    log.warn("db", "WAL checkpoint failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+export type RecoveryResult = {
+  success: boolean;
+  message: string;
+  recoveredRows?: number;
+};
+
+export async function recoverDatabase(dbPath: string): Promise<RecoveryResult> {
+  log.info("db", "Starting database recovery", { path: dbPath });
+
+  const backupPath = `${dbPath}.backup-${Date.now()}`;
+  const recoveryPath = `${dbPath}.recovery`;
+
+  try {
+    const { copyFile, unlink } = await import("node:fs/promises");
+
+    await copyFile(dbPath, backupPath);
+    log.debug("db", "Created backup", { backupPath });
+
+    const sourceClient = createClient({ url: `file:${dbPath}` });
+    const recoveryClient = createClient({ url: `file:${recoveryPath}` });
+
+    await recoveryClient.execute("PRAGMA journal_mode=WAL");
+
+    const tableResult = await sourceClient.execute(
+      `SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`
+    );
+
+    let recoveredRows = 0;
+    const failedTables: string[] = [];
+
+    for (const tableRow of tableResult.rows) {
+      const tableName = String(tableRow["name"]);
+      const createSql = String(tableRow["sql"]);
+
+      try {
+        await recoveryClient.execute(createSql);
+
+        const dataResult = await sourceClient.execute(`SELECT * FROM "${tableName}"`);
+        for (const row of dataResult.rows) {
+          const columns = Object.keys(row);
+          const placeholders = columns.map(() => "?").join(", ");
+          const values = columns.map((c) => row[c]);
+
+          await recoveryClient.execute({
+            sql: `INSERT OR IGNORE INTO "${tableName}" (${columns.join(", ")}) VALUES (${placeholders})`,
+            args: values as InArgs,
+          });
+          recoveredRows++;
+        }
+
+        log.debug("db", "Recovered table", { table: tableName, rows: dataResult.rows.length });
+      } catch (error) {
+        log.warn("db", "Failed to recover table", {
+          table: tableName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        failedTables.push(tableName);
+      }
+    }
+
+    sourceClient.close();
+    recoveryClient.close();
+
+    await copyFile(recoveryPath, dbPath);
+    await unlink(recoveryPath);
+
+    log.info("db", "Database recovery completed", { recoveredRows, failedTables });
+
+    return {
+      success: true,
+      message: failedTables.length > 0
+        ? `Recovery completed with ${failedTables.length} failed tables: ${failedTables.join(", ")}`
+        : "Recovery completed successfully",
+      recoveredRows,
+    };
+  } catch (error) {
+    log.error("db", "Database recovery failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    return {
+      success: false,
+      message: `Recovery failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+export async function createDatabaseWithRecovery(dbPath?: string): Promise<Database> {
+  const paths = getPaths();
+  const actualPath = dbPath ?? paths.db;
+
+  if (actualPath === ":memory:") {
+    return createDatabase(actualPath);
+  }
+
+  try {
+    const db = await createDatabase(actualPath);
+    const integrity = await checkIntegrity(db);
+
+    if (!integrity.ok) {
+      log.warn("db", "Database integrity check failed, attempting recovery", {
+        errors: integrity.errors,
+      });
+      db.close();
+
+      const recovery = await recoverDatabase(actualPath);
+      if (!recovery.success) {
+        throw new Error(`Database recovery failed: ${recovery.message}`);
+      }
+
+      return createDatabase(actualPath);
+    }
+
+    return db;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("SQLITE_BUSY")) {
+      log.error("db", "Database is locked, waiting for availability", { path: actualPath });
+      await new Promise((r) => setTimeout(r, 1000));
+      return createDatabaseWithRecovery(dbPath);
+    }
+
+    throw error;
+  }
 }

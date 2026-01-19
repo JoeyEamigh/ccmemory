@@ -5,9 +5,36 @@ type HookInput = {
   session_id: string;
 };
 
+const TIMEOUT_MS = 10000;
+
+function parseInput(text: string): HookInput | null {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj["session_id"] !== "string") return null;
+    return obj as unknown as HookInput;
+  } catch {
+    return null;
+  }
+}
+
 async function main(): Promise<void> {
+  const timeoutId = setTimeout(() => {
+    log.warn("cleanup", "Cleanup hook timed out");
+    closeDatabase();
+    process.exit(0);
+  }, TIMEOUT_MS);
+
   const inputText = await Bun.stdin.text();
-  const input: HookInput = JSON.parse(inputText);
+  const input = parseInput(inputText);
+
+  if (!input) {
+    log.warn("cleanup", "Invalid hook input, skipping");
+    clearTimeout(timeoutId);
+    process.exit(0);
+  }
+
   const { session_id } = input;
 
   log.info("cleanup", "Starting session cleanup", { session_id });
@@ -35,6 +62,7 @@ async function main(): Promise<void> {
     count: promoted.rowsAffected,
   });
 
+  clearTimeout(timeoutId);
   closeDatabase();
 
   log.info("cleanup", "Session cleanup complete", { session_id });

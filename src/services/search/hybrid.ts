@@ -161,7 +161,7 @@ async function linkToSession(
 }
 
 export function createSearchService(
-  embeddingService: EmbeddingService
+  embeddingService: EmbeddingService | null
 ): SearchService {
   const service: SearchService = {
     async search(options: SearchOptions): Promise<SearchResult[]> {
@@ -174,20 +174,29 @@ export function createSearchService(
         minSalience = 0,
         includeSuperseded = false,
         sessionId,
-        mode = "hybrid",
         weights = DEFAULT_WEIGHTS,
       } = options;
+
+      let { mode = "hybrid" } = options;
+
+      if (!embeddingService && mode !== "keyword") {
+        log.warn("search", "No embedding service available, falling back to keyword search", {
+          requestedMode: mode,
+        });
+        mode = "keyword";
+      }
 
       const start = Date.now();
       log.info("search", "Hybrid search starting", {
         query: query.slice(0, 50),
         mode,
         projectId,
+        degraded: !embeddingService,
       });
 
       const [ftsResults, vectorResults] = await Promise.all([
         mode !== "semantic" ? searchFTS(query, projectId, limit * 2) : [],
-        mode !== "keyword"
+        mode !== "keyword" && embeddingService
           ? searchVector(query, embeddingService, projectId, limit * 2)
           : [],
       ]);
