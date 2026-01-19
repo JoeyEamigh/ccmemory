@@ -25,7 +25,8 @@ export function Layout({
 }: LayoutProps): JSX.Element {
   const toggleTheme = (): void => {
     if (typeof document !== "undefined") {
-      document.documentElement.classList.toggle("dark");
+      const isDark = document.documentElement.classList.toggle("dark");
+      localStorage.setItem("ccmemory-theme", isDark ? "dark" : "light");
     }
   };
 

@@ -14,11 +14,11 @@ const badgeVariants = cva(
         destructive:
           "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
         outline: "text-foreground",
-        episodic: "border-transparent bg-blue-500 text-white",
-        semantic: "border-transparent bg-green-600 text-white",
-        procedural: "border-transparent bg-yellow-500 text-black",
-        emotional: "border-transparent bg-red-500 text-white",
-        reflective: "border-transparent bg-purple-500 text-white",
+        episodic: "border-transparent bg-sector-episodic text-white",
+        semantic: "border-transparent bg-sector-semantic text-white",
+        procedural: "border-transparent bg-sector-procedural text-black",
+        emotional: "border-transparent bg-sector-emotional text-white",
+        reflective: "border-transparent bg-sector-reflective text-white",
       },
     },
     defaultVariants: {

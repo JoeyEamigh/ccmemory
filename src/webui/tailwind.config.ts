@@ -4,6 +4,13 @@ export default {
   darkMode: ["class"],
   content: ["./src/webui/**/*.{ts,tsx}"],
   theme: {
+    container: {
+      center: true,
+      padding: "1rem",
+      screens: {
+        "2xl": "1400px",
+      },
+    },
     extend: {
       colors: {
         border: "hsl(var(--border))",
@@ -35,6 +42,15 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        sector: {
+          episodic: "hsl(var(--sector-episodic))",
+          semantic: "hsl(var(--sector-semantic))",
+          procedural: "hsl(var(--sector-procedural))",
+          emotional: "hsl(var(--sector-emotional))",
+          reflective: "hsl(var(--sector-reflective))",
+        },
+      },
+      borderColor: {
         sector: {
           episodic: "hsl(var(--sector-episodic))",
           semantic: "hsl(var(--sector-semantic))",
