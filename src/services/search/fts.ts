@@ -1,5 +1,5 @@
-import { getDatabase } from "../../db/database.js";
-import { log } from "../../utils/log.js";
+import { getDatabase } from '../../db/database.js';
+import { log } from '../../utils/log.js';
 
 export type FTSResult = {
   memoryId: string;
@@ -10,30 +10,26 @@ export type FTSResult = {
 function prepareQuery(query: string): string {
   const tokens = query
     .split(/\s+/)
-    .filter((t) => t.length > 1)
-    .map((t) => t.replace(/['"]/g, ""))
-    .map((t) => `"${t}"*`)
-    .join(" OR ");
+    .filter(t => t.length > 1)
+    .map(t => t.replace(/['"]/g, ''))
+    .map(t => `"${t}"*`)
+    .join(' OR ');
 
   return tokens;
 }
 
-export async function searchFTS(
-  query: string,
-  projectId?: string,
-  limit = 20
-): Promise<FTSResult[]> {
+export async function searchFTS(query: string, projectId?: string, limit = 20): Promise<FTSResult[]> {
   const db = await getDatabase();
   const start = Date.now();
 
   const ftsQuery = prepareQuery(query);
 
   if (!ftsQuery) {
-    log.debug("search", "Empty FTS query", { original: query });
+    log.debug('search', 'Empty FTS query', { original: query });
     return [];
   }
 
-  log.debug("search", "FTS search", { query: ftsQuery, projectId, limit });
+  log.debug('search', 'FTS search', { query: ftsQuery, projectId, limit });
 
   let sql: string;
   const args: (string | number)[] = [ftsQuery];
@@ -73,18 +69,18 @@ export async function searchFTS(
   try {
     const result = await db.execute(sql, args);
 
-    log.info("search", "FTS search complete", {
+    log.info('search', 'FTS search complete', {
       results: result.rows.length,
       ms: Date.now() - start,
     });
 
-    return result.rows.map((row) => ({
-      memoryId: String(row["memory_id"]),
-      rank: Number(row["rank"]),
-      snippet: String(row["snippet"]),
+    return result.rows.map(row => ({
+      memoryId: String(row['memory_id']),
+      rank: Number(row['rank']),
+      snippet: String(row['snippet']),
     }));
   } catch (error) {
-    log.error("search", "FTS search failed", {
+    log.error('search', 'FTS search failed', {
       error: error instanceof Error ? error.message : String(error),
     });
     return [];

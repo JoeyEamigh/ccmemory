@@ -1,10 +1,10 @@
-import { appendFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
-import { getPaths } from "./paths.js";
+import { appendFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { getPaths } from './paths.js';
 
-const isTestEnvironment = process.env["NODE_ENV"] === "test";
+const isTestEnvironment = process.env['NODE_ENV'] === 'test';
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export type LogContext = Record<string, unknown>;
 
@@ -29,10 +29,10 @@ function parseLogLevel(str: string | undefined): LogLevel {
   if (str && str in LEVELS) {
     return str as LogLevel;
   }
-  return "info";
+  return 'info';
 }
 
-let currentLevel: LogLevel = parseLogLevel(process.env["LOG_LEVEL"]);
+let currentLevel: LogLevel = parseLogLevel(process.env['LOG_LEVEL']);
 let logPath: string | null = null;
 let logPathExplicitlySet = false;
 let pendingWrites: Promise<void>[] = [];
@@ -65,15 +65,10 @@ async function ensureLogDirectory(): Promise<void> {
   directoryEnsured = true;
 }
 
-function formatLine(
-  level: LogLevel,
-  module: string,
-  message: string,
-  context?: LogContext
-): string {
+function formatLine(level: LogLevel, module: string, message: string, context?: LogContext): string {
   const timestamp = new Date().toISOString();
   const pid = process.pid;
-  const contextStr = context ? ` ${JSON.stringify(context)}` : "";
+  const contextStr = context ? ` ${JSON.stringify(context)}` : '';
   return `[${timestamp}] [${level.toUpperCase().padEnd(5)}] [${pid}:${module}] ${message}${contextStr}\n`;
 }
 
@@ -81,12 +76,7 @@ function shouldLog(level: LogLevel): boolean {
   return LEVELS[level] >= LEVELS[currentLevel];
 }
 
-async function writeLog(
-  level: LogLevel,
-  module: string,
-  message: string,
-  context?: LogContext
-): Promise<void> {
+async function writeLog(level: LogLevel, module: string, message: string, context?: LogContext): Promise<void> {
   if (!shouldLog(level)) return;
 
   const line = formatLine(level, module, message, context);
@@ -104,12 +94,7 @@ async function writeLog(
   }
 }
 
-function logAsync(
-  level: LogLevel,
-  module: string,
-  message: string,
-  context?: LogContext
-): void {
+function logAsync(level: LogLevel, module: string, message: string, context?: LogContext): void {
   const promise = writeLog(level, module, message, context);
   pendingWrites.push(promise);
   promise.finally(() => {
@@ -120,16 +105,16 @@ function logAsync(
 
 export const log: Logger = {
   debug(module, message, context) {
-    logAsync("debug", module, message, context);
+    logAsync('debug', module, message, context);
   },
   info(module, message, context) {
-    logAsync("info", module, message, context);
+    logAsync('info', module, message, context);
   },
   warn(module, message, context) {
-    logAsync("warn", module, message, context);
+    logAsync('warn', module, message, context);
   },
   error(module, message, context) {
-    logAsync("error", module, message, context);
+    logAsync('error', module, message, context);
   },
   setLevel(level) {
     currentLevel = level;

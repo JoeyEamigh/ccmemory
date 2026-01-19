@@ -1,6 +1,6 @@
-import { getDatabase } from "../../db/database.js";
-import { log } from "../../utils/log.js";
-import type { EmbeddingService } from "../embedding/types.js";
+import { getDatabase } from '../../db/database.js';
+import { log } from '../../utils/log.js';
+import type { EmbeddingService } from '../embedding/types.js';
 
 export type VectorResult = {
   memoryId: string;
@@ -35,7 +35,7 @@ function parseVector(blob: unknown): number[] {
     return Array.from(new Float32Array(buffer));
   }
 
-  if (typeof blob === "string") {
+  if (typeof blob === 'string') {
     try {
       return JSON.parse(blob) as number[];
     } catch {
@@ -54,12 +54,12 @@ export async function searchVector(
   query: string,
   embeddingService: EmbeddingService,
   projectId?: string,
-  limit = 20
+  limit = 20,
 ): Promise<VectorResult[]> {
   const db = await getDatabase();
   const start = Date.now();
 
-  log.debug("search", "Vector search starting", {
+  log.debug('search', 'Vector search starting', {
     queryLength: query.length,
     projectId,
     limit,
@@ -68,7 +68,7 @@ export async function searchVector(
   const queryEmbedding = await embeddingService.embed(query);
   const modelId = embeddingService.getActiveModelId();
 
-  log.debug("search", "Query embedded", {
+  log.debug('search', 'Query embedded', {
     model: modelId,
     ms: Date.now() - start,
   });
@@ -85,7 +85,7 @@ export async function searchVector(
   const args: (string | number)[] = [modelId];
 
   if (projectId) {
-    sql += " AND m.project_id = ?";
+    sql += ' AND m.project_id = ?';
     args.push(projectId);
   }
 
@@ -94,8 +94,8 @@ export async function searchVector(
   const scored: VectorResult[] = [];
 
   for (const row of result.rows) {
-    const memoryId = String(row["memory_id"]);
-    const vectorData = row["vector"];
+    const memoryId = String(row['memory_id']);
+    const vectorData = row['vector'];
     const vector = parseVector(vectorData);
 
     if (vector.length !== queryEmbedding.dimensions) {
@@ -116,7 +116,7 @@ export async function searchVector(
 
   const topResults = scored.slice(0, limit);
 
-  log.info("search", "Vector search complete", {
+  log.info('search', 'Vector search complete', {
     candidates: result.rows.length,
     results: topResults.length,
     ms: Date.now() - start,

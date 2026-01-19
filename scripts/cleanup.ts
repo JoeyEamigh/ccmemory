@@ -1,5 +1,5 @@
-import { getDatabase, closeDatabase } from "../src/db/database.js";
-import { log } from "../src/utils/log.js";
+import { closeDatabase, getDatabase } from '../src/db/database.js';
+import { log } from '../src/utils/log.js';
 
 type HookInput = {
   session_id: string;
@@ -10,9 +10,9 @@ const TIMEOUT_MS = 10000;
 function parseInput(text: string): HookInput | null {
   try {
     const parsed = JSON.parse(text) as unknown;
-    if (typeof parsed !== "object" || parsed === null) return null;
+    if (typeof parsed !== 'object' || parsed === null) return null;
     const obj = parsed as Record<string, unknown>;
-    if (typeof obj["session_id"] !== "string") return null;
+    if (typeof obj['session_id'] !== 'string') return null;
     return obj as unknown as HookInput;
   } catch {
     return null;
@@ -21,7 +21,7 @@ function parseInput(text: string): HookInput | null {
 
 async function main(): Promise<void> {
   const timeoutId = setTimeout(() => {
-    log.warn("cleanup", "Cleanup hook timed out");
+    log.warn('cleanup', 'Cleanup hook timed out');
     closeDatabase();
     process.exit(0);
   }, TIMEOUT_MS);
@@ -30,21 +30,18 @@ async function main(): Promise<void> {
   const input = parseInput(inputText);
 
   if (!input) {
-    log.warn("cleanup", "Invalid hook input, skipping");
+    log.warn('cleanup', 'Invalid hook input, skipping');
     clearTimeout(timeoutId);
     process.exit(0);
   }
 
   const { session_id } = input;
 
-  log.info("cleanup", "Starting session cleanup", { session_id });
+  log.info('cleanup', 'Starting session cleanup', { session_id });
 
   const db = await getDatabase();
 
-  await db.execute(
-    "UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL",
-    [Date.now(), session_id]
-  );
+  await db.execute('UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL', [Date.now(), session_id]);
 
   const promoted = await db.execute(
     `UPDATE memories
@@ -54,10 +51,10 @@ async function main(): Promise<void> {
        JOIN session_memories sm ON sm.memory_id = m.id
        WHERE sm.session_id = ? AND m.tier = 'session' AND m.salience > 0.7
      )`,
-    [Date.now(), session_id]
+    [Date.now(), session_id],
   );
 
-  log.debug("cleanup", "Promoted high-salience memories", {
+  log.debug('cleanup', 'Promoted high-salience memories', {
     session_id,
     count: promoted.rowsAffected,
   });
@@ -65,12 +62,12 @@ async function main(): Promise<void> {
   clearTimeout(timeoutId);
   closeDatabase();
 
-  log.info("cleanup", "Session cleanup complete", { session_id });
+  log.info('cleanup', 'Session cleanup complete', { session_id });
   process.exit(0);
 }
 
 main().catch((err: Error) => {
-  log.error("cleanup", "Cleanup hook failed", { error: err.message });
+  log.error('cleanup', 'Cleanup hook failed', { error: err.message });
   closeDatabase();
   process.exit(0);
 });

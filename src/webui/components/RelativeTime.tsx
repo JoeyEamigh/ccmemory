@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from 'react';
 
 type RelativeTimeProps = {
   timestamp: number;
@@ -31,9 +31,9 @@ export function RelativeTime({ timestamp, className }: RelativeTimeProps): JSX.E
     const delay = interval - (now % interval);
 
     const timeoutId = setTimeout(() => {
-      setTick((t) => t + 1);
+      setTick(t => t + 1);
       const intervalId = setInterval(() => {
-        setTick((t) => t + 1);
+        setTick(t => t + 1);
       }, interval);
 
       // Store interval ID for cleanup
@@ -52,13 +52,13 @@ export function RelativeTime({ timestamp, className }: RelativeTimeProps): JSX.E
 }
 
 export function formatRelativeTime(ts: number): string {
-  if (!ts || !Number.isFinite(ts)) return "";
+  if (!ts || !Number.isFinite(ts)) return '';
 
   const now = Date.now();
   const diffMs = now - ts;
   const diffSecs = Math.floor(diffMs / 1000);
 
-  if (diffSecs < 5) return "just now";
+  if (diffSecs < 5) return 'just now';
   if (diffSecs < 60) return `${diffSecs}s ago`;
 
   const diffMins = Math.floor(diffSecs / 60);
@@ -68,27 +68,27 @@ export function formatRelativeTime(ts: number): string {
   if (diffHours < 24) return `${diffHours}h ago`;
 
   const diffDays = Math.floor(diffHours / 24);
-  if (diffDays === 1) return "yesterday";
+  if (diffDays === 1) return 'yesterday';
   if (diffDays < 7) return `${diffDays}d ago`;
 
   const date = new Date(ts);
   const nowDate = new Date(now);
 
   return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: date.getFullYear() !== nowDate.getFullYear() ? "numeric" : undefined,
+    month: 'short',
+    day: 'numeric',
+    year: date.getFullYear() !== nowDate.getFullYear() ? 'numeric' : undefined,
   });
 }
 
 export function formatRelativeTimeShort(ts: number): string {
-  if (!ts || !Number.isFinite(ts)) return "";
+  if (!ts || !Number.isFinite(ts)) return '';
 
   const now = Date.now();
   const diffMs = now - ts;
   const diffSecs = Math.floor(diffMs / 1000);
 
-  if (diffSecs < 5) return "just now";
+  if (diffSecs < 5) return 'just now';
   if (diffSecs < 60) return `${diffSecs}s ago`;
 
   const diffMins = Math.floor(diffSecs / 60);
@@ -98,7 +98,7 @@ export function formatRelativeTimeShort(ts: number): string {
   if (diffHours < 24) return `${diffHours}h ago`;
 
   return new Date(ts).toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
+    hour: 'numeric',
+    minute: '2-digit',
   });
 }

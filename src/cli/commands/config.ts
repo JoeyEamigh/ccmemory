@@ -1,11 +1,11 @@
-import { getPaths, ensureDirectories } from "../../utils/paths.js";
-import { log } from "../../utils/log.js";
+import { log } from '../../utils/log.js';
+import { ensureDirectories, getPaths } from '../../utils/paths.js';
 
-type ToolMode = "full" | "recall" | "custom";
+type ToolMode = 'full' | 'recall' | 'custom';
 
 type Config = {
   embedding: {
-    provider: "ollama" | "openrouter";
+    provider: 'ollama' | 'openrouter';
     ollama: { baseUrl: string; model: string };
     openrouter: { apiKey?: string; model: string };
   };
@@ -22,27 +22,27 @@ type Config = {
 function getDefaultConfig(): Config {
   return {
     embedding: {
-      provider: "ollama",
-      ollama: { baseUrl: "http://localhost:11434", model: "qwen3-embedding" },
-      openrouter: { model: "openai/text-embedding-3-small" },
+      provider: 'ollama',
+      ollama: { baseUrl: 'http://localhost:11434', model: 'qwen3-embedding' },
+      openrouter: { model: 'openai/text-embedding-3-small' },
     },
     capture: {
       enabled: true,
       maxResultSize: 10000,
     },
     tools: {
-      mode: "full",
+      mode: 'full',
       enabledTools: [],
     },
   };
 }
 
 function getNestedValue(obj: unknown, path: string): unknown {
-  const keys = path.split(".");
+  const keys = path.split('.');
   let current: unknown = obj;
 
   for (const key of keys) {
-    if (typeof current !== "object" || current === null) {
+    if (typeof current !== 'object' || current === null) {
       return undefined;
     }
     current = (current as Record<string, unknown>)[key];
@@ -52,13 +52,13 @@ function getNestedValue(obj: unknown, path: string): unknown {
 }
 
 function setNestedValue(obj: unknown, path: string, value: unknown): void {
-  const keys = path.split(".");
+  const keys = path.split('.');
   const lastKey = keys.pop();
   if (!lastKey) return;
 
   let current: unknown = obj;
   for (const key of keys) {
-    if (typeof current !== "object" || current === null) return;
+    if (typeof current !== 'object' || current === null) return;
     const record = current as Record<string, unknown>;
     if (!(key in record)) {
       record[key] = {};
@@ -66,14 +66,14 @@ function setNestedValue(obj: unknown, path: string, value: unknown): void {
     current = record[key];
   }
 
-  if (typeof current === "object" && current !== null) {
+  if (typeof current === 'object' && current !== null) {
     (current as Record<string, unknown>)[lastKey] = value;
   }
 }
 
 function parseValue(str: string): unknown {
-  if (str === "true") return true;
-  if (str === "false") return false;
+  if (str === 'true') return true;
+  if (str === 'false') return false;
   if (/^\d+$/.test(str)) return parseInt(str, 10);
   if (/^\d+\.\d+$/.test(str)) return parseFloat(str);
   return str;
@@ -106,12 +106,12 @@ export async function configCommand(args: string[]): Promise<void> {
 
   if (!value) {
     const val = getNestedValue(config, key);
-    console.log(val !== undefined ? JSON.stringify(val) : "Not set");
+    console.log(val !== undefined ? JSON.stringify(val) : 'Not set');
     return;
   }
 
   setNestedValue(config, key, parseValue(value));
   await Bun.write(configPath, JSON.stringify(config, null, 2));
-  log.info("cli", "Config updated", { key, value });
+  log.info('cli', 'Config updated', { key, value });
   console.log(`Set ${key} = ${value}`);
 }

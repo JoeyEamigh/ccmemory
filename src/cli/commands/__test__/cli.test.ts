@@ -1,5 +1,5 @@
-import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { getDatabase, closeDatabase } from "../../../db/database.js";
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { closeDatabase, getDatabase } from '../../../db/database.js';
 
 let testDir: string;
 
@@ -32,162 +32,183 @@ afterEach(async () => {
   await Bun.$`rm -rf ${testDir}`.quiet();
 });
 
-describe("CLI Help", () => {
-  test("prints help when no command given", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
-    expect(result).toContain("CCMemory");
-    expect(result).toContain("Usage:");
-    expect(result).toContain("Commands:");
+describe('CLI Help', () => {
+  test('prints help when no command given', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
+    expect(result).toContain('CCMemory');
+    expect(result).toContain('Usage:');
+    expect(result).toContain('Commands:');
   });
 
-  test("prints help with help command", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts help`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
-    expect(result).toContain("search <query>");
+  test('prints help with help command', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts help`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
+    expect(result).toContain('search <query>');
   });
 
-  test("prints version", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts --version`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
-    expect(result).toContain("0.1.0");
+  test('prints version', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts --version`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
+    expect(result).toContain('0.1.0');
   });
 });
 
-describe("CLI Config Command", () => {
-  test("shows all config when no args", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts config`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
-    expect(result).toContain("embedding");
+describe('CLI Config Command', () => {
+  test('shows all config when no args', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts config`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
+    expect(result).toContain('embedding');
   });
 
-  test("gets specific key", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts config embedding.provider`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
+  test('gets specific key', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts config embedding.provider`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
     expect(result).toMatch(/ollama|openrouter/);
   });
 
-  test("sets value", async () => {
+  test('sets value', async () => {
     await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts config capture.enabled false`.env({
       ...process.env,
       CCMEMORY_DATA_DIR: testDir,
       CCMEMORY_CONFIG_DIR: testDir,
     });
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts config capture.enabled`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
-    expect(result).toContain("false");
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts config capture.enabled`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
+    expect(result).toContain('false');
   });
 });
 
-describe("CLI Stats Command", () => {
-  test("shows statistics", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts stats`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
-    expect(result).toContain("CCMemory Statistics");
-    expect(result).toContain("Totals:");
-    expect(result).toContain("Memories:");
+describe('CLI Stats Command', () => {
+  test('shows statistics', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts stats`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
+    expect(result).toContain('CCMemory Statistics');
+    expect(result).toContain('Totals:');
+    expect(result).toContain('Memories:');
   });
 });
 
-describe("CLI Show Command", () => {
-  test("shows memory details", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts show mem1`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
-    expect(result).toContain("mem1");
-    expect(result).toContain("React");
-    expect(result).toContain("semantic");
+describe('CLI Show Command', () => {
+  test('shows memory details', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts show mem1`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
+    expect(result).toContain('mem1');
+    expect(result).toContain('React');
+    expect(result).toContain('semantic');
   });
 
-  test("outputs JSON when requested", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts show mem1 --json`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
+  test('outputs JSON when requested', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts show mem1 --json`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
     const parsed = JSON.parse(result);
-    expect(parsed.id).toBe("mem1");
-    expect(parsed.sector).toBe("semantic");
+    expect(parsed.id).toBe('mem1');
+    expect(parsed.sector).toBe('semantic');
   });
 
-  test("exits with error for non-existent memory", async () => {
-    const proc = Bun.spawn(
-      ["bun", "/home/joey/Documents/ccmemory/src/cli/index.ts", "show", "nonexistent"],
-      {
-        env: {
-          ...process.env,
-          CCMEMORY_DATA_DIR: testDir,
-          CCMEMORY_CONFIG_DIR: testDir,
-        },
-        stderr: "pipe",
-      }
-    );
+  test('exits with error for non-existent memory', async () => {
+    const proc = Bun.spawn(['bun', '/home/joey/Documents/ccmemory/src/cli/index.ts', 'show', 'nonexistent'], {
+      env: {
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      },
+      stderr: 'pipe',
+    });
     await proc.exited;
     expect(proc.exitCode).toBe(1);
   });
 });
 
-describe("CLI Delete Command", () => {
-  test("deletes memory with force flag", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts delete mem1 --force`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
-    expect(result).toContain("soft-deleted");
+describe('CLI Delete Command', () => {
+  test('deletes memory with force flag', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts delete mem1 --force`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
+    expect(result).toContain('soft-deleted');
 
     const db = await getDatabase();
-    const check = await db.execute("SELECT is_deleted FROM memories WHERE id = ?", ["mem1"]);
-    expect(check.rows[0]?.["is_deleted"]).toBe(1);
+    const check = await db.execute('SELECT is_deleted FROM memories WHERE id = ?', ['mem1']);
+    expect(check.rows[0]?.['is_deleted']).toBe(1);
   });
 });
 
-describe("CLI Export Command", () => {
-  test("exports as JSON to stdout", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts export`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
+describe('CLI Export Command', () => {
+  test('exports as JSON to stdout', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts export`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
     const parsed = JSON.parse(result);
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed.length).toBe(3);
   });
 
-  test("exports as CSV", async () => {
-    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts export -f csv`.env({
-      ...process.env,
-      CCMEMORY_DATA_DIR: testDir,
-      CCMEMORY_CONFIG_DIR: testDir,
-    }).text();
-    expect(result).toContain("id,sector,tier,salience,content,created_at");
-    expect(result).toContain("mem1");
+  test('exports as CSV', async () => {
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts export -f csv`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
+    expect(result).toContain('id,sector,tier,salience,content,created_at');
+    expect(result).toContain('mem1');
   });
 
-  test("exports to file", async () => {
+  test('exports to file', async () => {
     const outFile = `${testDir}/export.json`;
     await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts export -o ${outFile}`.env({
       ...process.env,
@@ -200,19 +221,16 @@ describe("CLI Export Command", () => {
   });
 });
 
-describe("CLI Unknown Command", () => {
-  test("exits with error for unknown command", async () => {
-    const proc = Bun.spawn(
-      ["bun", "/home/joey/Documents/ccmemory/src/cli/index.ts", "foobar"],
-      {
-        env: {
-          ...process.env,
-          CCMEMORY_DATA_DIR: testDir,
-          CCMEMORY_CONFIG_DIR: testDir,
-        },
-        stderr: "pipe",
-      }
-    );
+describe('CLI Unknown Command', () => {
+  test('exits with error for unknown command', async () => {
+    const proc = Bun.spawn(['bun', '/home/joey/Documents/ccmemory/src/cli/index.ts', 'foobar'], {
+      env: {
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      },
+      stderr: 'pipe',
+    });
     await proc.exited;
     expect(proc.exitCode).toBe(1);
   });

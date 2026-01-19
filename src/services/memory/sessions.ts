@@ -1,7 +1,7 @@
-import { getDatabase } from "../../db/database.js";
-import { log } from "../../utils/log.js";
-import type { Memory, UsageType } from "./types.js";
-import { rowToMemory } from "./utils.js";
+import { getDatabase } from '../../db/database.js';
+import { log } from '../../utils/log.js';
+import type { Memory, UsageType } from './types.js';
+import { rowToMemory } from './utils.js';
 
 export type Session = {
   id: string;
@@ -39,21 +39,21 @@ export type SessionService = {
 
 function rowToSession(row: Record<string, unknown>): Session {
   return {
-    id: String(row["id"]),
-    projectId: String(row["project_id"]),
-    startedAt: Number(row["started_at"]),
-    endedAt: row["ended_at"] ? Number(row["ended_at"]) : undefined,
-    summary: row["summary"] ? String(row["summary"]) : undefined,
-    userPrompt: row["user_prompt"] ? String(row["user_prompt"]) : undefined,
-    context: parseJsonObject(row["context_json"]),
+    id: String(row['id']),
+    projectId: String(row['project_id']),
+    startedAt: Number(row['started_at']),
+    endedAt: row['ended_at'] ? Number(row['ended_at']) : undefined,
+    summary: row['summary'] ? String(row['summary']) : undefined,
+    userPrompt: row['user_prompt'] ? String(row['user_prompt']) : undefined,
+    context: parseJsonObject(row['context_json']),
   };
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     try {
       const parsed = JSON.parse(value);
-      if (typeof parsed === "object" && parsed !== null) {
+      if (typeof parsed === 'object' && parsed !== null) {
         return parsed as Record<string, unknown>;
       }
     } catch {
@@ -63,15 +63,10 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
   return {};
 }
 
-export async function getOrCreateSession(
-  sessionId: string,
-  projectId: string
-): Promise<Session> {
+export async function getOrCreateSession(sessionId: string, projectId: string): Promise<Session> {
   const db = await getDatabase();
 
-  const existing = await db.execute("SELECT * FROM sessions WHERE id = ?", [
-    sessionId,
-  ]);
+  const existing = await db.execute('SELECT * FROM sessions WHERE id = ?', [sessionId]);
 
   if (existing.rows.length > 0 && existing.rows[0]) {
     return rowToSession(existing.rows[0]);
@@ -81,10 +76,10 @@ export async function getOrCreateSession(
   await db.execute(
     `INSERT INTO sessions (id, project_id, started_at, context_json)
      VALUES (?, ?, ?, ?)`,
-    [sessionId, projectId, now, "{}"]
+    [sessionId, projectId, now, '{}'],
   );
 
-  log.info("session", "Created session", { id: sessionId, projectId });
+  log.info('session', 'Created session', { id: sessionId, projectId });
 
   return {
     id: sessionId,
@@ -101,27 +96,21 @@ export function createSessionService(): SessionService {
       const id = crypto.randomUUID();
       const now = Date.now();
 
-      log.debug("session", "Creating session", {
+      log.debug('session', 'Creating session', {
         projectId: input.projectId,
       });
 
       await db.execute(
         `INSERT INTO sessions (id, project_id, started_at, user_prompt, context_json)
          VALUES (?, ?, ?, ?, ?)`,
-        [
-          id,
-          input.projectId,
-          now,
-          input.userPrompt ?? null,
-          JSON.stringify(input.context ?? {}),
-        ]
+        [id, input.projectId, now, input.userPrompt ?? null, JSON.stringify(input.context ?? {})],
       );
 
-      log.info("session", "Session created", { id, projectId: input.projectId });
+      log.info('session', 'Session created', { id, projectId: input.projectId });
 
       const created = await service.get(id);
       if (!created) {
-        throw new Error("Failed to get created session");
+        throw new Error('Failed to get created session');
       }
       return created;
     },
@@ -129,7 +118,7 @@ export function createSessionService(): SessionService {
     async get(id: string): Promise<Session | null> {
       const db = await getDatabase();
 
-      const result = await db.execute("SELECT * FROM sessions WHERE id = ?", [id]);
+      const result = await db.execute('SELECT * FROM sessions WHERE id = ?', [id]);
 
       if (result.rows.length === 0) return null;
       const row = result.rows[0];
@@ -141,23 +130,17 @@ export function createSessionService(): SessionService {
       const db = await getDatabase();
       const now = Date.now();
 
-      log.info("session", "Ending session", { id, hasSummary: !!summary });
+      log.info('session', 'Ending session', { id, hasSummary: !!summary });
 
       if (summary) {
-        await db.execute(
-          `UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?`,
-          [now, summary, id]
-        );
+        await db.execute(`UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?`, [now, summary, id]);
       } else {
-        await db.execute(
-          `UPDATE sessions SET ended_at = ? WHERE id = ?`,
-          [now, id]
-        );
+        await db.execute(`UPDATE sessions SET ended_at = ? WHERE id = ?`, [now, id]);
       }
 
       const ended = await service.get(id);
       if (!ended) {
-        throw new Error("Failed to get ended session");
+        throw new Error('Failed to get ended session');
       }
       return ended;
     },
@@ -170,7 +153,7 @@ export function createSessionService(): SessionService {
          FROM session_memories
          WHERE session_id = ?
          GROUP BY usage_type`,
-        [id]
+        [id],
       );
 
       const stats: SessionStats = {
@@ -182,30 +165,27 @@ export function createSessionService(): SessionService {
       };
 
       for (const row of result.rows) {
-        const usageType = String(row["usage_type"]) as UsageType;
-        const count = Number(row["count"]);
+        const usageType = String(row['usage_type']) as UsageType;
+        const count = Number(row['count']);
 
         switch (usageType) {
-          case "created":
+          case 'created':
             stats.memoriesCreated = count;
             break;
-          case "recalled":
+          case 'recalled':
             stats.memoriesRecalled = count;
             break;
-          case "updated":
+          case 'updated':
             stats.memoriesUpdated = count;
             break;
-          case "reinforced":
+          case 'reinforced':
             stats.memoriesReinforced = count;
             break;
         }
       }
 
       stats.totalMemories =
-        stats.memoriesCreated +
-        stats.memoriesRecalled +
-        stats.memoriesUpdated +
-        stats.memoriesReinforced;
+        stats.memoriesCreated + stats.memoriesRecalled + stats.memoriesUpdated + stats.memoriesReinforced;
 
       return stats;
     },
@@ -218,7 +198,7 @@ export function createSessionService(): SessionService {
          JOIN session_memories sm ON sm.memory_id = m.id
          WHERE sm.session_id = ?
          ORDER BY sm.created_at DESC`,
-        [id]
+        [id],
       );
 
       return result.rows.map(rowToMemory);
@@ -228,7 +208,7 @@ export function createSessionService(): SessionService {
       const db = await getDatabase();
       const now = Date.now();
 
-      log.info("session", "Promoting session memories", { id, minUsageCount });
+      log.info('session', 'Promoting session memories', { id, minUsageCount });
 
       const result = await db.execute(
         `SELECT memory_id, COUNT(*) as usage_count
@@ -236,24 +216,24 @@ export function createSessionService(): SessionService {
          WHERE session_id = ?
          GROUP BY memory_id
          HAVING COUNT(*) >= ?`,
-        [id, minUsageCount]
+        [id, minUsageCount],
       );
 
-      const memoryIds = result.rows.map((row) => String(row["memory_id"]));
+      const memoryIds = result.rows.map(row => String(row['memory_id']));
 
       if (memoryIds.length === 0) {
         return 0;
       }
 
-      const placeholders = memoryIds.map(() => "?").join(", ");
+      const placeholders = memoryIds.map(() => '?').join(', ');
       await db.execute(
         `UPDATE memories
          SET tier = 'project', updated_at = ?
          WHERE id IN (${placeholders}) AND tier = 'session'`,
-        [now, ...memoryIds]
+        [now, ...memoryIds],
       );
 
-      log.info("session", "Promoted memories", { count: memoryIds.length });
+      log.info('session', 'Promoted memories', { count: memoryIds.length });
 
       return memoryIds.length;
     },
@@ -266,7 +246,7 @@ export function createSessionService(): SessionService {
          WHERE project_id = ? AND ended_at IS NULL
          ORDER BY started_at DESC
          LIMIT 1`,
-        [projectId]
+        [projectId],
       );
 
       if (result.rows.length === 0) return null;

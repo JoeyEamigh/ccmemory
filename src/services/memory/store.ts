@@ -1,14 +1,9 @@
-import { getDatabase } from "../../db/database.js";
-import { log } from "../../utils/log.js";
-import { computeSimhash, findSimilarMemory, computeMD5 } from "./dedup.js";
-import type {
-  Memory,
-  MemoryInput,
-  ListOptions,
-  UsageType,
-} from "./types.js";
-import { classifyMemorySector } from "./types.js";
-import { rowToMemory } from "./utils.js";
+import { getDatabase } from '../../db/database.js';
+import { log } from '../../utils/log.js';
+import { computeMD5, computeSimhash, findSimilarMemory } from './dedup.js';
+import type { ListOptions, Memory, MemoryInput, UsageType } from './types.js';
+import { classifyMemorySector } from './types.js';
+import { rowToMemory } from './utils.js';
 
 export type MemoryStore = {
   create(input: MemoryInput, projectId: string, sessionId?: string): Promise<Memory>;
@@ -50,23 +45,19 @@ function extractConcepts(content: string): string[] {
 
 export function createMemoryStore(): MemoryStore {
   const store: MemoryStore = {
-    async create(
-      input: MemoryInput,
-      projectId: string,
-      sessionId?: string
-    ): Promise<Memory> {
+    async create(input: MemoryInput, projectId: string, sessionId?: string): Promise<Memory> {
       const db = await getDatabase();
       const id = crypto.randomUUID();
       const now = Date.now();
 
       const sector = input.sector || classifyMemorySector(input.content);
-      const tier = input.tier || "project";
+      const tier = input.tier || 'project';
       const importance = input.importance ?? 0.5;
 
       const simhash = computeSimhash(input.content);
       const contentHash = await computeMD5(input.content);
 
-      log.debug("memory", "Creating memory", {
+      log.debug('memory', 'Creating memory', {
         sector,
         tier,
         projectId,
@@ -75,16 +66,16 @@ export function createMemoryStore(): MemoryStore {
 
       const existing = await findSimilarMemory(simhash, projectId);
       if (existing && !existing.isDeleted) {
-        log.info("memory", "Duplicate detected, reinforcing existing", {
+        log.info('memory', 'Duplicate detected, reinforcing existing', {
           existingId: existing.id,
         });
         await store.reinforce(existing.id, 0.1);
         if (sessionId) {
-          await store.linkToSession(existing.id, sessionId, "reinforced");
+          await store.linkToSession(existing.id, sessionId, 'reinforced');
         }
         const reinforced = await store.get(existing.id);
         if (!reinforced) {
-          throw new Error("Failed to get reinforced memory");
+          throw new Error('Failed to get reinforced memory');
         }
         return reinforced;
       }
@@ -118,14 +109,14 @@ export function createMemoryStore(): MemoryStore {
           JSON.stringify(concepts),
           JSON.stringify(input.files || []),
           JSON.stringify([]),
-        ]
+        ],
       );
 
       if (sessionId) {
-        await store.linkToSession(id, sessionId, "created");
+        await store.linkToSession(id, sessionId, 'created');
       }
 
-      log.info("memory", "Memory created", {
+      log.info('memory', 'Memory created', {
         id,
         sector,
         tier,
@@ -134,7 +125,7 @@ export function createMemoryStore(): MemoryStore {
 
       const created = await store.get(id);
       if (!created) {
-        throw new Error("Failed to get created memory");
+        throw new Error('Failed to get created memory');
       }
       return created;
     },
@@ -142,7 +133,7 @@ export function createMemoryStore(): MemoryStore {
     async get(id: string): Promise<Memory | null> {
       const db = await getDatabase();
 
-      const result = await db.execute("SELECT * FROM memories WHERE id = ?", [id]);
+      const result = await db.execute('SELECT * FROM memories WHERE id = ?', [id]);
 
       if (result.rows.length === 0) return null;
       const row = result.rows[0];
@@ -158,98 +149,93 @@ export function createMemoryStore(): MemoryStore {
       const args: (string | number | null)[] = [];
 
       if (updates.content !== undefined) {
-        setClauses.push("content = ?");
+        setClauses.push('content = ?');
         args.push(updates.content);
 
         const contentHash = await computeMD5(updates.content);
-        setClauses.push("content_hash = ?");
+        setClauses.push('content_hash = ?');
         args.push(contentHash);
 
         const simhash = computeSimhash(updates.content);
-        setClauses.push("simhash = ?");
+        setClauses.push('simhash = ?');
         args.push(simhash);
 
         const concepts = extractConcepts(updates.content);
-        setClauses.push("concepts_json = ?");
+        setClauses.push('concepts_json = ?');
         args.push(JSON.stringify(concepts));
       }
 
       if (updates.sector !== undefined) {
-        setClauses.push("sector = ?");
+        setClauses.push('sector = ?');
         args.push(updates.sector);
       }
 
       if (updates.tier !== undefined) {
-        setClauses.push("tier = ?");
+        setClauses.push('tier = ?');
         args.push(updates.tier);
       }
 
       if (updates.importance !== undefined) {
-        setClauses.push("importance = ?");
+        setClauses.push('importance = ?');
         args.push(updates.importance);
       }
 
       if (updates.tags !== undefined) {
-        setClauses.push("tags_json = ?");
+        setClauses.push('tags_json = ?');
         args.push(JSON.stringify(updates.tags));
       }
 
       if (updates.files !== undefined) {
-        setClauses.push("files_json = ?");
+        setClauses.push('files_json = ?');
         args.push(JSON.stringify(updates.files));
       }
 
       if (updates.validFrom !== undefined) {
-        setClauses.push("valid_from = ?");
+        setClauses.push('valid_from = ?');
         args.push(updates.validFrom);
       }
 
-      setClauses.push("updated_at = ?");
+      setClauses.push('updated_at = ?');
       args.push(now);
       args.push(id);
 
-      await db.execute(
-        `UPDATE memories SET ${setClauses.join(", ")} WHERE id = ?`,
-        args
-      );
+      await db.execute(`UPDATE memories SET ${setClauses.join(', ')} WHERE id = ?`, args);
 
-      log.info("memory", "Memory updated", { id });
+      log.info('memory', 'Memory updated', { id });
 
       const updated = await store.get(id);
       if (!updated) {
-        throw new Error("Failed to get updated memory");
+        throw new Error('Failed to get updated memory');
       }
       return updated;
     },
 
     async delete(id: string, hard = false): Promise<void> {
       const db = await getDatabase();
-      log.info("memory", "Deleting memory", { id, hard });
+      log.info('memory', 'Deleting memory', { id, hard });
 
       if (hard) {
-        await db.execute("DELETE FROM memories WHERE id = ?", [id]);
+        await db.execute('DELETE FROM memories WHERE id = ?', [id]);
       } else {
         const now = Date.now();
-        await db.execute(
-          `UPDATE memories SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?`,
-          [now, now, id]
-        );
+        await db.execute(`UPDATE memories SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?`, [
+          now,
+          now,
+          id,
+        ]);
       }
     },
 
     async restore(id: string): Promise<Memory> {
       const db = await getDatabase();
-      log.info("memory", "Restoring memory", { id });
+      log.info('memory', 'Restoring memory', { id });
 
       const now = Date.now();
-      await db.execute(
-        `UPDATE memories SET is_deleted = 0, deleted_at = NULL, updated_at = ? WHERE id = ?`,
-        [now, id]
-      );
+      await db.execute(`UPDATE memories SET is_deleted = 0, deleted_at = NULL, updated_at = ? WHERE id = ?`, [now, id]);
 
       const restored = await store.get(id);
       if (!restored) {
-        throw new Error("Failed to get restored memory");
+        throw new Error('Failed to get restored memory');
       }
       return restored;
     },
@@ -257,44 +243,44 @@ export function createMemoryStore(): MemoryStore {
     async list(options: ListOptions): Promise<Memory[]> {
       const db = await getDatabase();
 
-      let sql = "SELECT * FROM memories WHERE 1=1";
+      let sql = 'SELECT * FROM memories WHERE 1=1';
       const args: (string | number)[] = [];
 
       if (options.projectId) {
-        sql += " AND project_id = ?";
+        sql += ' AND project_id = ?';
         args.push(options.projectId);
       }
 
       if (!options.includeDeleted) {
-        sql += " AND is_deleted = 0";
+        sql += ' AND is_deleted = 0';
       }
 
       if (options.sector) {
-        sql += " AND sector = ?";
+        sql += ' AND sector = ?';
         args.push(options.sector);
       }
 
       if (options.tier) {
-        sql += " AND tier = ?";
+        sql += ' AND tier = ?';
         args.push(options.tier);
       }
 
       if (options.minSalience !== undefined) {
-        sql += " AND salience >= ?";
+        sql += ' AND salience >= ?';
         args.push(options.minSalience);
       }
 
-      const orderBy = options.orderBy || "created_at";
-      const order = options.order || "desc";
+      const orderBy = options.orderBy || 'created_at';
+      const order = options.order || 'desc';
       sql += ` ORDER BY ${orderBy} ${order.toUpperCase()}`;
 
       if (options.limit !== undefined) {
-        sql += " LIMIT ?";
+        sql += ' LIMIT ?';
         args.push(options.limit);
       }
 
       if (options.offset !== undefined) {
-        sql += " OFFSET ?";
+        sql += ' OFFSET ?';
         args.push(options.offset);
       }
 
@@ -308,17 +294,17 @@ export function createMemoryStore(): MemoryStore {
 
       await db.execute(
         `UPDATE memories SET last_accessed = ?, access_count = access_count + 1 WHERE id = ? AND is_deleted = 0`,
-        [now, id]
+        [now, id],
       );
 
-      log.debug("memory", "Touched memory", { id });
+      log.debug('memory', 'Touched memory', { id });
     },
 
     async reinforce(id: string, amount = 0.1): Promise<Memory> {
       const db = await getDatabase();
       const now = Date.now();
 
-      log.debug("memory", "Reinforcing memory", { id, amount });
+      log.debug('memory', 'Reinforcing memory', { id, amount });
 
       await db.execute(
         `UPDATE memories
@@ -327,12 +313,12 @@ export function createMemoryStore(): MemoryStore {
              access_count = access_count + 1,
              updated_at = ?
          WHERE id = ? AND is_deleted = 0`,
-        [amount, now, now, id]
+        [amount, now, now, id],
       );
 
       const reinforced = await store.get(id);
       if (!reinforced) {
-        throw new Error("Failed to get reinforced memory");
+        throw new Error('Failed to get reinforced memory');
       }
       return reinforced;
     },
@@ -341,30 +327,26 @@ export function createMemoryStore(): MemoryStore {
       const db = await getDatabase();
       const now = Date.now();
 
-      log.debug("memory", "De-emphasizing memory", { id, amount });
+      log.debug('memory', 'De-emphasizing memory', { id, amount });
 
       await db.execute(
         `UPDATE memories
          SET salience = MAX(0.05, salience - ?),
              updated_at = ?
          WHERE id = ? AND is_deleted = 0`,
-        [amount, now, id]
+        [amount, now, id],
       );
 
       const deemphasized = await store.get(id);
       if (!deemphasized) {
-        throw new Error("Failed to get de-emphasized memory");
+        throw new Error('Failed to get de-emphasized memory');
       }
       return deemphasized;
     },
 
-    async linkToSession(
-      memoryId: string,
-      sessionId: string,
-      usageType: UsageType
-    ): Promise<void> {
+    async linkToSession(memoryId: string, sessionId: string, usageType: UsageType): Promise<void> {
       const db = await getDatabase();
-      log.debug("memory", "Linking memory to session", {
+      log.debug('memory', 'Linking memory to session', {
         memoryId,
         sessionId,
         usageType,
@@ -374,7 +356,7 @@ export function createMemoryStore(): MemoryStore {
       await db.execute(
         `INSERT OR IGNORE INTO session_memories (session_id, memory_id, created_at, usage_type)
          VALUES (?, ?, ?, ?)`,
-        [sessionId, memoryId, now, usageType]
+        [sessionId, memoryId, now, usageType],
       );
     },
 
@@ -386,7 +368,7 @@ export function createMemoryStore(): MemoryStore {
          JOIN session_memories sm ON sm.memory_id = m.id
          WHERE sm.session_id = ?
          ORDER BY sm.created_at DESC`,
-        [sessionId]
+        [sessionId],
       );
 
       return result.rows.map(rowToMemory);

@@ -1,51 +1,45 @@
-import { join } from "node:path";
-import { log } from "../utils/log.js";
-import { getDatabase } from "../db/database.js";
-import { getPaths } from "../utils/paths.js";
+import { join } from 'node:path';
+import { getDatabase } from '../db/database.js';
+import { log } from '../utils/log.js';
+import { getPaths } from '../utils/paths.js';
 
-export type ToolMode = "full" | "recall" | "custom";
+export type ToolMode = 'full' | 'recall' | 'custom';
 
 export type ToolsConfig = {
   mode: ToolMode;
   enabledTools: string[];
 };
 
-const RECALL_TOOLS = ["memory_search", "memory_timeline", "docs_search"];
+const RECALL_TOOLS = ['memory_search', 'memory_timeline', 'docs_search'];
 
 const ALL_TOOLS = [
-  "memory_search",
-  "memory_timeline",
-  "memory_add",
-  "memory_reinforce",
-  "memory_deemphasize",
-  "memory_delete",
-  "memory_supersede",
-  "docs_search",
-  "docs_ingest",
+  'memory_search',
+  'memory_timeline',
+  'memory_add',
+  'memory_reinforce',
+  'memory_deemphasize',
+  'memory_delete',
+  'memory_supersede',
+  'docs_search',
+  'docs_ingest',
 ];
 
 async function getConfigFromDb(): Promise<ToolsConfig | null> {
   try {
     const db = await getDatabase();
-    const result = await db.execute(
-      "SELECT value FROM config WHERE key = ?",
-      ["toolMode"]
-    );
+    const result = await db.execute('SELECT value FROM config WHERE key = ?', ['toolMode']);
 
     const row = result.rows[0];
     if (!row) {
       return null;
     }
 
-    const mode = String(row["value"]) as ToolMode;
+    const mode = String(row['value']) as ToolMode;
 
-    if (mode === "custom") {
-      const customResult = await db.execute(
-        "SELECT value FROM config WHERE key = ?",
-        ["enabledTools"]
-      );
+    if (mode === 'custom') {
+      const customResult = await db.execute('SELECT value FROM config WHERE key = ?', ['enabledTools']);
       const enabledTools = customResult.rows[0]
-        ? String(customResult.rows[0]["value"]).split(",").filter(Boolean)
+        ? String(customResult.rows[0]['value']).split(',').filter(Boolean)
         : ALL_TOOLS;
       return { mode, enabledTools };
     }
@@ -57,7 +51,7 @@ async function getConfigFromDb(): Promise<ToolsConfig | null> {
 }
 
 async function getConfigFromProjectFile(projectDir: string): Promise<ToolsConfig | null> {
-  const configPath = join(projectDir, ".claude", "ccmemory.local.md");
+  const configPath = join(projectDir, '.claude', 'ccmemory.local.md');
 
   try {
     const file = Bun.file(configPath);
@@ -72,13 +66,13 @@ async function getConfigFromProjectFile(projectDir: string): Promise<ToolsConfig
       return null;
     }
 
-    const mode = config["toolMode"] as ToolMode | undefined;
-    if (!mode || !["full", "recall", "custom"].includes(mode)) {
+    const mode = config['toolMode'] as ToolMode | undefined;
+    if (!mode || !['full', 'recall', 'custom'].includes(mode)) {
       return null;
     }
 
-    if (mode === "custom") {
-      const enabledTools = config["enabledTools"] as string[] | undefined;
+    if (mode === 'custom') {
+      const enabledTools = config['enabledTools'] as string[] | undefined;
       return {
         mode,
         enabledTools: enabledTools ?? ALL_TOOLS,
@@ -102,19 +96,19 @@ function parseYamlFrontmatter(content: string): Record<string, unknown> | null {
 
   const result: Record<string, unknown> = {};
 
-  for (const line of yamlContent.split("\n")) {
-    const colonIndex = line.indexOf(":");
+  for (const line of yamlContent.split('\n')) {
+    const colonIndex = line.indexOf(':');
     if (colonIndex === -1) continue;
 
     const key = line.slice(0, colonIndex).trim();
     let value: unknown = line.slice(colonIndex + 1).trim();
 
     // Handle arrays (simple inline format: [a, b, c])
-    if (typeof value === "string" && value.startsWith("[") && value.endsWith("]")) {
+    if (typeof value === 'string' && value.startsWith('[') && value.endsWith(']')) {
       value = value
         .slice(1, -1)
-        .split(",")
-        .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+        .split(',')
+        .map(s => s.trim().replace(/^["']|["']$/g, ''))
         .filter(Boolean);
     }
 
@@ -132,15 +126,15 @@ export async function getToolsConfig(projectDir?: string): Promise<ToolsConfig> 
   // 4. Default (full)
 
   // Check environment variable
-  const envMode = process.env["CCMEMORY_TOOL_MODE"] as ToolMode | undefined;
-  if (envMode && ["full", "recall", "custom"].includes(envMode)) {
-    log.debug("mcp", "Using tool mode from environment", { mode: envMode });
+  const envMode = process.env['CCMEMORY_TOOL_MODE'] as ToolMode | undefined;
+  if (envMode && ['full', 'recall', 'custom'].includes(envMode)) {
+    log.debug('mcp', 'Using tool mode from environment', { mode: envMode });
 
-    if (envMode === "custom") {
-      const envTools = process.env["CCMEMORY_ENABLED_TOOLS"];
+    if (envMode === 'custom') {
+      const envTools = process.env['CCMEMORY_ENABLED_TOOLS'];
       return {
         mode: envMode,
-        enabledTools: envTools ? envTools.split(",").filter(Boolean) : ALL_TOOLS,
+        enabledTools: envTools ? envTools.split(',').filter(Boolean) : ALL_TOOLS,
       };
     }
 
@@ -151,7 +145,7 @@ export async function getToolsConfig(projectDir?: string): Promise<ToolsConfig> 
   if (projectDir) {
     const projectConfig = await getConfigFromProjectFile(projectDir);
     if (projectConfig) {
-      log.debug("mcp", "Using tool mode from project config", {
+      log.debug('mcp', 'Using tool mode from project config', {
         mode: projectConfig.mode,
         projectDir,
       });
@@ -162,25 +156,25 @@ export async function getToolsConfig(projectDir?: string): Promise<ToolsConfig> 
   // Check global config from file
   const fileConfig = await getConfigFromFile();
   if (fileConfig) {
-    log.debug("mcp", "Using tool mode from config file", { mode: fileConfig.mode });
+    log.debug('mcp', 'Using tool mode from config file', { mode: fileConfig.mode });
     return fileConfig;
   }
 
   // Check global config from database
   const dbConfig = await getConfigFromDb();
   if (dbConfig) {
-    log.debug("mcp", "Using tool mode from database", { mode: dbConfig.mode });
+    log.debug('mcp', 'Using tool mode from database', { mode: dbConfig.mode });
     return dbConfig;
   }
 
   // Default: full
-  return { mode: "full", enabledTools: [] };
+  return { mode: 'full', enabledTools: [] };
 }
 
 async function getConfigFromFile(): Promise<ToolsConfig | null> {
   try {
     const paths = getPaths();
-    const configPath = join(paths.config, "config.json");
+    const configPath = join(paths.config, 'config.json');
 
     const file = Bun.file(configPath);
     if (!(await file.exists())) {
@@ -188,19 +182,19 @@ async function getConfigFromFile(): Promise<ToolsConfig | null> {
     }
 
     const config = (await file.json()) as Record<string, unknown>;
-    const tools = config["tools"] as Record<string, unknown> | undefined;
+    const tools = config['tools'] as Record<string, unknown> | undefined;
 
-    if (!tools || typeof tools !== "object") {
+    if (!tools || typeof tools !== 'object') {
       return null;
     }
 
-    const mode = tools["mode"] as ToolMode | undefined;
-    if (!mode || !["full", "recall", "custom"].includes(mode)) {
+    const mode = tools['mode'] as ToolMode | undefined;
+    if (!mode || !['full', 'recall', 'custom'].includes(mode)) {
       return null;
     }
 
-    if (mode === "custom") {
-      const enabledTools = tools["enabledTools"] as string[] | undefined;
+    if (mode === 'custom') {
+      const enabledTools = tools['enabledTools'] as string[] | undefined;
       return {
         mode,
         enabledTools: enabledTools ?? ALL_TOOLS,
@@ -213,19 +207,16 @@ async function getConfigFromFile(): Promise<ToolsConfig | null> {
   }
 }
 
-export function filterTools<T extends { name: string }>(
-  tools: T[],
-  config: ToolsConfig
-): T[] {
+export function filterTools<T extends { name: string }>(tools: T[], config: ToolsConfig): T[] {
   switch (config.mode) {
-    case "full":
+    case 'full':
       return tools;
 
-    case "recall":
-      return tools.filter((t) => RECALL_TOOLS.includes(t.name));
+    case 'recall':
+      return tools.filter(t => RECALL_TOOLS.includes(t.name));
 
-    case "custom":
-      return tools.filter((t) => config.enabledTools.includes(t.name));
+    case 'custom':
+      return tools.filter(t => config.enabledTools.includes(t.name));
 
     default:
       return tools;
@@ -240,17 +231,17 @@ export async function setToolMode(mode: ToolMode, enabledTools?: string[]): Prom
     `INSERT INTO config (key, value, updated_at)
      VALUES (?, ?, ?)
      ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    ["toolMode", mode, now]
+    ['toolMode', mode, now],
   );
 
-  if (mode === "custom" && enabledTools) {
+  if (mode === 'custom' && enabledTools) {
     await db.execute(
       `INSERT INTO config (key, value, updated_at)
        VALUES (?, ?, ?)
        ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      ["enabledTools", enabledTools.join(","), now]
+      ['enabledTools', enabledTools.join(','), now],
     );
   }
 
-  log.info("mcp", "Tool mode updated", { mode, enabledTools });
+  log.info('mcp', 'Tool mode updated', { mode, enabledTools });
 }

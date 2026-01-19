@@ -200,4 +200,3 @@ export const INDEX_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_document_chunks_doc ON document_chunks(document_id)`,
 ];
-

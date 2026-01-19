@@ -9,7 +9,7 @@ export type OpenRouterConfig = {
 };
 
 export type EmbeddingConfig = {
-  provider: "ollama" | "openrouter";
+  provider: 'ollama' | 'openrouter';
   ollama: OllamaConfig;
   openrouter: OpenRouterConfig;
 };
@@ -36,16 +36,16 @@ export type EmbeddingService = {
   embed(text: string): Promise<EmbeddingResult>;
   embedBatch(texts: string[]): Promise<EmbeddingResult[]>;
   getActiveModelId(): string;
-  switchProvider(provider: "ollama" | "openrouter"): Promise<void>;
+  switchProvider(provider: 'ollama' | 'openrouter'): Promise<void>;
 };
 
 export const DEFAULT_CONFIG: EmbeddingConfig = {
-  provider: "ollama",
+  provider: 'ollama',
   ollama: {
-    baseUrl: "http://localhost:11434",
-    model: "qwen3-embedding",
+    baseUrl: 'http://localhost:11434',
+    model: 'qwen3-embedding',
   },
   openrouter: {
-    model: "openai/text-embedding-3-small",
+    model: 'openai/text-embedding-3-small',
   },
 };

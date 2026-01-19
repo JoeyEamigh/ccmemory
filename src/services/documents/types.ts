@@ -1,4 +1,4 @@
-export type DocumentSourceType = "txt" | "md" | "url";
+export type DocumentSourceType = 'txt' | 'md' | 'url';
 
 export type Document = {
   id: string;

@@ -1,24 +1,24 @@
-import { parseArgs } from "util";
-import { createMemoryStore } from "../../services/memory/store.js";
-import { log } from "../../utils/log.js";
+import { parseArgs } from 'util';
+import { createMemoryStore } from '../../services/memory/store.js';
+import { log } from '../../utils/log.js';
 
 export async function deleteCommand(args: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
     options: {
-      force: { type: "boolean", short: "f" },
-      hard: { type: "boolean" },
+      force: { type: 'boolean', short: 'f' },
+      hard: { type: 'boolean' },
     },
     allowPositionals: true,
   });
 
   const id = positionals[0];
   if (!id) {
-    console.error("Usage: ccmemory delete <id> [--force] [--hard]");
+    console.error('Usage: ccmemory delete <id> [--force] [--hard]');
     process.exit(1);
   }
 
-  log.debug("cli", "Delete command", {
+  log.debug('cli', 'Delete command', {
     id,
     force: values.force,
     hard: values.hard,
@@ -28,7 +28,7 @@ export async function deleteCommand(args: string[]): Promise<void> {
   const memory = await store.get(id);
 
   if (!memory) {
-    log.warn("cli", "Memory not found", { id });
+    log.warn('cli', 'Memory not found', { id });
     console.error(`Memory not found: ${id}`);
     process.exit(1);
   }
@@ -40,62 +40,52 @@ export async function deleteCommand(args: string[]): Promise<void> {
     console.log(`  Content: ${memory.content.slice(0, 100)}...`);
     console.log();
     console.log(
-      values.hard
-        ? "This will PERMANENTLY delete the memory."
-        : "This will soft-delete the memory (can be restored)."
+      values.hard ? 'This will PERMANENTLY delete the memory.' : 'This will soft-delete the memory (can be restored).',
     );
-    console.log("Run with --force to confirm.");
+    console.log('Run with --force to confirm.');
     return;
   }
 
   await store.delete(id, values.hard ?? false);
 
-  log.info("cli", "Memory deleted", { id, hard: values.hard });
-  console.log(
-    values.hard
-      ? `Memory permanently deleted: ${id}`
-      : `Memory soft-deleted: ${id}`
-  );
+  log.info('cli', 'Memory deleted', { id, hard: values.hard });
+  console.log(values.hard ? `Memory permanently deleted: ${id}` : `Memory soft-deleted: ${id}`);
 }
 
 export async function archiveCommand(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
     options: {
-      before: { type: "string" },
-      "dry-run": { type: "boolean" },
-      threshold: { type: "string", default: "0.2" },
+      before: { type: 'string' },
+      'dry-run': { type: 'boolean' },
+      threshold: { type: 'string', default: '0.2' },
     },
   });
 
-  log.debug("cli", "Archive command", {
+  log.debug('cli', 'Archive command', {
     before: values.before,
-    dryRun: values["dry-run"],
+    dryRun: values['dry-run'],
     threshold: values.threshold,
   });
 
   const store = createMemoryStore();
   const threshold = parseFloat(values.threshold as string);
 
-  const beforeDate = values.before
-    ? new Date(values.before).getTime()
-    : Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const beforeDate = values.before ? new Date(values.before).getTime() : Date.now() - 30 * 24 * 60 * 60 * 1000;
 
   const memories = await store.list({
-    orderBy: "salience",
-    order: "asc",
+    orderBy: 'salience',
+    order: 'asc',
     limit: 1000,
   });
 
-  const toArchive = memories.filter(
-    (m) => m.salience < threshold && m.createdAt < beforeDate
-  );
+  const toArchive = memories.filter(m => m.salience < threshold && m.createdAt < beforeDate);
 
-  if (values["dry-run"]) {
+  if (values['dry-run']) {
     console.log(`Would archive ${toArchive.length} memories:`);
     for (const mem of toArchive.slice(0, 10)) {
       console.log(
-        `  ${mem.id} (salience: ${mem.salience.toFixed(2)}, created: ${new Date(mem.createdAt).toLocaleDateString()})`
+        `  ${mem.id} (salience: ${mem.salience.toFixed(2)}, created: ${new Date(mem.createdAt).toLocaleDateString()})`,
       );
     }
     if (toArchive.length > 10) {
@@ -110,6 +100,6 @@ export async function archiveCommand(args: string[]): Promise<void> {
     archived++;
   }
 
-  log.info("cli", "Memories archived", { count: archived });
+  log.info('cli', 'Memories archived', { count: archived });
   console.log(`Archived ${archived} memories`);
 }

@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 type Message = { type: string; [key: string]: unknown };
 
-type ConnectionState = "connecting" | "connected" | "disconnected" | "reconnecting";
+type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
 
 type UseWebSocketResult = {
   state: ConnectionState;
@@ -18,7 +18,7 @@ const MAX_RECONNECT_DELAY = 30000;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
 export function useWebSocket(projectId?: string): UseWebSocketResult {
-  const [state, setState] = useState<ConnectionState>("disconnected");
+  const [state, setState] = useState<ConnectionState>('disconnected');
   const [messages, setMessages] = useState<Message[]>([]);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
@@ -36,26 +36,23 @@ export function useWebSocket(projectId?: string): UseWebSocketResult {
   const scheduleReconnect = useCallback(() => {
     if (isUnmountedRef.current) return;
     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      setState("disconnected");
+      setState('disconnected');
       return;
     }
 
-    setState("reconnecting");
-    const delay = Math.min(
-      reconnectDelayRef.current * Math.pow(1.5, reconnectAttempts),
-      MAX_RECONNECT_DELAY
-    );
+    setState('reconnecting');
+    const delay = Math.min(reconnectDelayRef.current * Math.pow(1.5, reconnectAttempts), MAX_RECONNECT_DELAY);
 
     reconnectTimeoutRef.current = setTimeout(() => {
       if (!isUnmountedRef.current) {
-        setReconnectAttempts((prev) => prev + 1);
+        setReconnectAttempts(prev => prev + 1);
         connect();
       }
     }, delay);
   }, [reconnectAttempts]);
 
   const connect = useCallback(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === 'undefined') return;
     if (isUnmountedRef.current) return;
 
     clearReconnectTimeout();
@@ -65,10 +62,10 @@ export function useWebSocket(projectId?: string): UseWebSocketResult {
       wsRef.current = null;
     }
 
-    setState("connecting");
+    setState('connecting');
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws${projectId ? `?project=${projectId}` : ""}`;
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws${projectId ? `?project=${projectId}` : ''}`;
 
     try {
       const ws = new WebSocket(wsUrl);
@@ -79,28 +76,28 @@ export function useWebSocket(projectId?: string): UseWebSocketResult {
           ws.close();
           return;
         }
-        setState("connected");
+        setState('connected');
         setReconnectAttempts(0);
         reconnectDelayRef.current = INITIAL_RECONNECT_DELAY;
       };
 
-      ws.onmessage = (event) => {
+      ws.onmessage = event => {
         if (isUnmountedRef.current) return;
         try {
           const data = JSON.parse(event.data as string) as Message;
-          setMessages((prev) => [...prev, data]);
+          setMessages(prev => [...prev, data]);
         } catch {
           // Ignore malformed messages
         }
       };
 
-      ws.onclose = (event) => {
+      ws.onclose = event => {
         if (isUnmountedRef.current) return;
 
         wsRef.current = null;
 
         if (event.code === 1000 || event.code === 1001) {
-          setState("disconnected");
+          setState('disconnected');
         } else {
           scheduleReconnect();
         }
@@ -130,7 +127,7 @@ export function useWebSocket(projectId?: string): UseWebSocketResult {
       isUnmountedRef.current = true;
       clearReconnectTimeout();
       if (wsRef.current) {
-        wsRef.current.close(1000, "Component unmounted");
+        wsRef.current.close(1000, 'Component unmounted');
         wsRef.current = null;
       }
     };
@@ -146,13 +143,13 @@ export function useWebSocket(projectId?: string): UseWebSocketResult {
 
   useEffect(() => {
     if (messages.length > 100) {
-      setMessages((prev) => prev.slice(-50));
+      setMessages(prev => prev.slice(-50));
     }
   }, [messages.length]);
 
   return {
     state,
-    connected: state === "connected",
+    connected: state === 'connected',
     messages,
     send,
     reconnect,

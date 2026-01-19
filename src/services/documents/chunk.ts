@@ -13,12 +13,7 @@ export type Chunk = {
 
 const CHARS_PER_TOKEN = 4;
 
-function splitLongSegment(
-  segment: string,
-  targetChars: number,
-  overlapChars: number,
-  baseOffset: number
-): Chunk[] {
+function splitLongSegment(segment: string, targetChars: number, overlapChars: number, baseOffset: number): Chunk[] {
   const chunks: Chunk[] = [];
   let pos = 0;
 
@@ -66,7 +61,7 @@ export function chunkText(text: string, options: ChunkOptions = {}): Chunk[] {
   const paragraphs = text.split(/\n\n+/);
   const chunks: Chunk[] = [];
 
-  let currentChunk = "";
+  let currentChunk = '';
   let chunkStart = 0;
   let currentPos = 0;
 
@@ -85,28 +80,20 @@ export function chunkText(text: string, options: ChunkOptions = {}): Chunk[] {
             endOffset: chunkStart + currentChunk.length,
             tokensEstimate: Math.ceil(currentChunk.length / CHARS_PER_TOKEN),
           });
-          currentChunk = "";
+          currentChunk = '';
         }
 
-        const longChunks = splitLongSegment(
-          sentence,
-          targetChars,
-          overlapChars,
-          currentPos
-        );
+        const longChunks = splitLongSegment(sentence, targetChars, overlapChars, currentPos);
         chunks.push(...longChunks);
         currentPos += sentence.length + 1;
         chunkStart = currentPos;
         continue;
       }
 
-      const separator = currentChunk ? " " : "";
+      const separator = currentChunk ? ' ' : '';
       const potentialChunk = currentChunk + separator + sentence;
 
-      if (
-        potentialChunk.length > targetChars &&
-        currentChunk.length >= minChunkSize
-      ) {
+      if (potentialChunk.length > targetChars && currentChunk.length >= minChunkSize) {
         chunks.push({
           content: currentChunk,
           startOffset: chunkStart,
@@ -115,7 +102,7 @@ export function chunkText(text: string, options: ChunkOptions = {}): Chunk[] {
         });
 
         const overlapText = currentChunk.slice(-overlapChars);
-        currentChunk = overlapText + " " + sentence;
+        currentChunk = overlapText + ' ' + sentence;
         chunkStart = currentPos - overlapChars;
       } else {
         currentChunk = potentialChunk;

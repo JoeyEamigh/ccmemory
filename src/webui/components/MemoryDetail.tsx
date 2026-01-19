@@ -1,23 +1,8 @@
-import {
-  Plus,
-  Minus,
-  Clock,
-  Eye,
-  History,
-  Archive,
-  Trash2,
-} from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "./ui/dialog.js";
-import { Badge } from "./ui/badge.js";
-import { Button } from "./ui/button.js";
-import type { Memory, MemorySector } from "../../services/memory/types.js";
+import { Archive, Clock, Eye, History, Minus, Plus, Trash2 } from 'lucide-react';
+import type { Memory, MemorySector } from '../../services/memory/types.js';
+import { Badge } from './ui/badge.js';
+import { Button } from './ui/button.js';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog.js';
 
 type MemoryDetailProps = {
   memory: Memory;
@@ -28,15 +13,12 @@ type MemoryDetailProps = {
   onViewTimeline: (id: string) => void;
 };
 
-const sectorVariant: Record<
-  MemorySector,
-  "episodic" | "semantic" | "procedural" | "emotional" | "reflective"
-> = {
-  episodic: "episodic",
-  semantic: "semantic",
-  procedural: "procedural",
-  emotional: "emotional",
-  reflective: "reflective",
+const sectorVariant: Record<MemorySector, 'episodic' | 'semantic' | 'procedural' | 'emotional' | 'reflective'> = {
+  episodic: 'episodic',
+  semantic: 'semantic',
+  procedural: 'procedural',
+  emotional: 'emotional',
+  reflective: 'reflective',
 };
 
 export function MemoryDetail({
@@ -48,29 +30,25 @@ export function MemoryDetail({
   onViewTimeline,
 }: MemoryDetailProps): JSX.Element {
   const handleDelete = (hard: boolean): void => {
-    const msg = hard
-      ? "Permanently delete this memory? This cannot be undone."
-      : "Archive this memory?";
-    if (typeof window !== "undefined" && window.confirm(msg)) {
+    const msg = hard ? 'Permanently delete this memory? This cannot be undone.' : 'Archive this memory?';
+    if (typeof window !== 'undefined' && window.confirm(msg)) {
       onDelete(memory.id, hard);
       onClose();
     }
   };
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+    <Dialog open onOpenChange={open => !open && onClose()}>
+      <DialogContent className="max-h-[80vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex flex-wrap items-center gap-2">
             <Badge variant={sectorVariant[memory.sector]}>{memory.sector}</Badge>
             <Badge variant="outline">{memory.tier}</Badge>
             {memory.isDeleted && <Badge variant="destructive">DELETED</Badge>}
             {memory.validUntil && <Badge variant="destructive">SUPERSEDED</Badge>}
           </div>
           <DialogTitle className="sr-only">Memory Details</DialogTitle>
-          <DialogDescription className="sr-only">
-            View and manage memory details
-          </DialogDescription>
+          <DialogDescription className="sr-only">View and manage memory details</DialogDescription>
         </DialogHeader>
 
         <div className="prose prose-sm dark:prose-invert max-w-none py-4">
@@ -81,23 +59,11 @@ export function MemoryDetail({
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground">Salience</span>
             <div className="flex items-center gap-2">
-              <span className="font-medium">
-                {(memory.salience * 100).toFixed(0)}%
-              </span>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-7 w-7"
-                onClick={() => onReinforce(memory.id)}
-              >
+              <span className="font-medium">{(memory.salience * 100).toFixed(0)}%</span>
+              <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => onReinforce(memory.id)}>
                 <Plus className="h-3 w-3" />
               </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-7 w-7"
-                onClick={() => onDeemphasize(memory.id)}
-              >
+              <Button variant="outline" size="icon" className="h-7 w-7" onClick={() => onDeemphasize(memory.id)}>
                 <Minus className="h-3 w-3" />
               </Button>
             </div>
@@ -112,19 +78,19 @@ export function MemoryDetail({
               <Eye className="h-4 w-4" />
               <span>Accessed: {memory.accessCount} times</span>
             </div>
-            <div className="flex items-center gap-2 text-muted-foreground col-span-2">
+            <div className="col-span-2 flex items-center gap-2 text-muted-foreground">
               <History className="h-4 w-4" />
               <span>Last accessed: {formatDate(memory.lastAccessed)}</span>
             </div>
           </div>
         </div>
 
-        <DialogFooter className="flex-col sm:flex-row gap-2">
+        <DialogFooter className="flex-col gap-2 sm:flex-row">
           <Button variant="outline" onClick={() => onViewTimeline(memory.id)}>
             <History className="mr-2 h-4 w-4" />
             View Timeline
           </Button>
-          <div className="flex gap-2 ml-auto">
+          <div className="ml-auto flex gap-2">
             <Button variant="secondary" onClick={() => handleDelete(false)}>
               <Archive className="mr-2 h-4 w-4" />
               Archive
@@ -141,8 +107,8 @@ export function MemoryDetail({
 }
 
 function formatDate(ts: number): string {
-  if (!ts || !Number.isFinite(ts)) return "";
+  if (!ts || !Number.isFinite(ts)) return '';
   const t = ts < 1e12 ? ts * 1000 : ts;
   const date = new Date(t);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
 }

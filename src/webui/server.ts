@@ -1,20 +1,20 @@
-import { renderToString } from "react-dom/server";
-import { createElement } from "react";
-import { App } from "./components/App.js";
-import { handleAPI } from "./api/routes.js";
-import { handleWebSocket, setServer, broadcastToRoom } from "./ws/handler.js";
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
+import type { Session } from '../services/memory/sessions.js';
+import type { Memory } from '../services/memory/types.js';
+import { log } from '../utils/log.js';
+import { handleAPI } from './api/routes.js';
+import { buildAssets, type BuildOutput } from './build.js';
+import { App } from './components/App.js';
 import {
-  registerClient,
-  unregisterClient,
-  tryAcquireLock,
-  releaseLock,
-  isServerRunning,
   getActiveClients,
-} from "./coordination.js";
-import { buildAssets, type BuildOutput } from "./build.js";
-import { log } from "../utils/log.js";
-import type { Memory } from "../services/memory/types.js";
-import type { Session } from "../services/memory/sessions.js";
+  isServerRunning,
+  registerClient,
+  releaseLock,
+  tryAcquireLock,
+  unregisterClient,
+} from './coordination.js';
+import { broadcastToRoom, handleWebSocket, setServer } from './ws/handler.js';
 
 const DEFAULT_PORT = 37778;
 
@@ -36,36 +36,34 @@ export type ServerResult = {
   checkInterval?: ReturnType<typeof setInterval>;
 };
 
-export async function startServer(
-  options: StartServerOptions
-): Promise<ServerResult> {
+export async function startServer(options: StartServerOptions): Promise<ServerResult> {
   const port = options.port ?? DEFAULT_PORT;
 
-  log.info("webui", "Starting WebUI server", {
+  log.info('webui', 'Starting WebUI server', {
     port,
     sessionId: options.sessionId,
   });
 
   if (await isServerRunning(port)) {
     await registerClient(options.sessionId);
-    log.debug("webui", "Server already running, registering as client");
+    log.debug('webui', 'Server already running, registering as client');
     console.log(`CCMemory WebUI already running at http://localhost:${port}`);
     return { alreadyRunning: true };
   }
 
   const acquired = await tryAcquireLock();
   if (!acquired) {
-    log.debug("webui", "Lock not acquired, another server is starting");
+    log.debug('webui', 'Lock not acquired, another server is starting');
     await registerClient(options.sessionId);
     return { alreadyRunning: true };
   }
 
-  log.info("webui", "Lock acquired, starting server");
+  log.info('webui', 'Lock acquired, starting server');
   await registerClient(options.sessionId);
 
-  log.debug("webui", "Building client assets");
+  log.debug('webui', 'Building client assets');
   buildOutput = await buildAssets();
-  log.debug("webui", "Client assets built", {
+  log.debug('webui', 'Client assets built', {
     jsSize: buildOutput.clientJs.length,
     cssSize: buildOutput.css.length,
   });
@@ -77,27 +75,27 @@ export async function startServer(
       const url = new URL(req.url);
       const path = url.pathname;
 
-      if (path === "/ws") {
+      if (path === '/ws') {
         const upgraded = server.upgrade(req, {
-          data: { projectId: url.searchParams.get("project") ?? undefined },
+          data: { projectId: url.searchParams.get('project') ?? undefined },
         });
         if (upgraded) return undefined;
-        return new Response("WebSocket upgrade failed", { status: 400 });
+        return new Response('WebSocket upgrade failed', { status: 400 });
       }
 
-      if (path.startsWith("/api/")) {
+      if (path.startsWith('/api/')) {
         return handleAPI(req, path);
       }
 
-      if (path === "/client.js" && buildOutput) {
+      if (path === '/client.js' && buildOutput) {
         return new Response(buildOutput.clientJs, {
-          headers: { "Content-Type": "application/javascript" },
+          headers: { 'Content-Type': 'application/javascript' },
         });
       }
 
-      if (path === "/styles.css" && buildOutput) {
+      if (path === '/styles.css' && buildOutput) {
         return new Response(buildOutput.css, {
-          headers: { "Content-Type": "text/css" },
+          headers: { 'Content-Type': 'text/css' },
         });
       }
 
@@ -107,9 +105,9 @@ export async function startServer(
     websocket: {
       open(ws) {
         const { projectId } = ws.data;
-        const room = projectId ?? "global";
+        const room = projectId ?? 'global';
         ws.subscribe(room);
-        log.debug("webui", "WebSocket connected", { room });
+        log.debug('webui', 'WebSocket connected', { room });
       },
 
       message(ws, message) {
@@ -118,9 +116,9 @@ export async function startServer(
 
       close(ws) {
         const { projectId } = ws.data;
-        const room = projectId ?? "global";
+        const room = projectId ?? 'global';
         ws.unsubscribe(room);
-        log.debug("webui", "WebSocket disconnected", { room });
+        log.debug('webui', 'WebSocket disconnected', { room });
       },
     },
   });
@@ -128,7 +126,7 @@ export async function startServer(
   setServer(server);
   serverInstance = server;
 
-  log.info("webui", "WebUI server started", { port });
+  log.info('webui', 'WebUI server started', { port });
   console.log(`CCMemory WebUI running at http://localhost:${port}`);
 
   if (options.open) {
@@ -138,7 +136,7 @@ export async function startServer(
   checkIntervalId = setInterval(async () => {
     const clients = await getActiveClients();
     if (clients.length === 0) {
-      log.info("webui", "No active clients, shutting down server");
+      log.info('webui', 'No active clients, shutting down server');
       await shutdownServer();
     }
   }, 5000);
@@ -147,7 +145,7 @@ export async function startServer(
 }
 
 export async function shutdownServer(): Promise<void> {
-  log.info("webui", "Shutting down WebUI server");
+  log.info('webui', 'Shutting down WebUI server');
   if (checkIntervalId) {
     clearInterval(checkIntervalId);
     checkIntervalId = null;
@@ -184,47 +182,42 @@ async function renderPage(url: URL): Promise<Response> {
 </body>
 </html>`,
     {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-    }
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    },
   );
 }
 
 async function fetchInitialData(url: URL): Promise<unknown> {
   const path = url.pathname;
 
-  if (path === "/" || path === "/search") {
-    return { type: "search", results: [] };
+  if (path === '/' || path === '/search') {
+    return { type: 'search', results: [] };
   }
 
-  if (path === "/agents") {
-    return { type: "agents", sessions: [] };
+  if (path === '/agents') {
+    return { type: 'agents', sessions: [] };
   }
 
-  if (path === "/timeline") {
-    return { type: "timeline", data: null };
+  if (path === '/timeline') {
+    return { type: 'timeline', data: null };
   }
 
-  return { type: "home" };
+  return { type: 'home' };
 }
 
 function openBrowser(url: string): void {
-  const cmd =
-    process.platform === "darwin"
-      ? "open"
-      : process.platform === "win32"
-        ? "start"
-        : "xdg-open";
+  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
   Bun.spawn([cmd, url]);
 }
 
 export function notifyMemoryChange(projectId: string, memory: Memory): void {
-  broadcastToRoom(projectId, { type: "memory:created", memory });
-  broadcastToRoom("global", { type: "memory:created", memory, projectId });
+  broadcastToRoom(projectId, { type: 'memory:created', memory });
+  broadcastToRoom('global', { type: 'memory:created', memory, projectId });
 }
 
 export function notifySessionChange(projectId: string, session: Session): void {
-  broadcastToRoom(projectId, { type: "session:updated", session });
-  broadcastToRoom("global", { type: "session:updated", session, projectId });
+  broadcastToRoom(projectId, { type: 'session:updated', session });
+  broadcastToRoom('global', { type: 'session:updated', session, projectId });
 }
 
 export async function stopServer(sessionId: string): Promise<void> {

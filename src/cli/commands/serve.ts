@@ -1,20 +1,20 @@
-import { parseArgs } from "util";
-import { startServer } from "../../webui/server.js";
-import { log } from "../../utils/log.js";
+import { parseArgs } from 'util';
+import { log } from '../../utils/log.js';
+import { startServer } from '../../webui/server.js';
 
 export async function serveCommand(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
     options: {
-      port: { type: "string", short: "p", default: "37778" },
-      open: { type: "boolean" },
+      port: { type: 'string', short: 'p', default: '37778' },
+      open: { type: 'boolean' },
     },
   });
 
   const port = parseInt(values.port as string, 10);
   const sessionId = `cli-${Date.now()}`;
 
-  log.info("cli", "Starting WebUI server", { port });
+  log.info('cli', 'Starting WebUI server', { port });
 
   const result = await startServer({
     port,
@@ -26,10 +26,10 @@ export async function serveCommand(args: string[]): Promise<void> {
     return;
   }
 
-  console.log("\nPress Ctrl+C to stop the server.\n");
+  console.log('\nPress Ctrl+C to stop the server.\n');
 
-  process.on("SIGINT", async () => {
-    log.info("cli", "Shutting down WebUI server");
+  process.on('SIGINT', async () => {
+    log.info('cli', 'Shutting down WebUI server');
     if (result.server) {
       result.server.stop();
     }

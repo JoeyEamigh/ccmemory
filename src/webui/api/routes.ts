@@ -1,20 +1,20 @@
-import { createSearchService } from "../../services/search/hybrid.js";
-import { createMemoryStore } from "../../services/memory/store.js";
-import { createEmbeddingService } from "../../services/embedding/index.js";
-import { getDatabase } from "../../db/database.js";
-import { broadcastToRoom } from "../ws/handler.js";
-import { shutdownServer } from "../server.js";
-import { log } from "../../utils/log.js";
-import type { MemorySector } from "../../services/memory/types.js";
-import type { EmbeddingService } from "../../services/embedding/types.js";
-import type { InValue } from "@libsql/client";
+import type { InValue } from '@libsql/client';
+import { getDatabase } from '../../db/database.js';
+import { createEmbeddingService } from '../../services/embedding/index.js';
+import type { EmbeddingService } from '../../services/embedding/types.js';
+import { createMemoryStore } from '../../services/memory/store.js';
+import type { MemorySector } from '../../services/memory/types.js';
+import { createSearchService } from '../../services/search/hybrid.js';
+import { log } from '../../utils/log.js';
+import { shutdownServer } from '../server.js';
+import { broadcastToRoom } from '../ws/handler.js';
 
 type JsonResponse = { [key: string]: unknown };
 
 function json(data: JsonResponse, status = 200): Response {
   return Response.json(data, {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
@@ -29,22 +29,21 @@ async function getEmbeddingService(): Promise<EmbeddingService> {
 
 export async function handleAPI(req: Request, path: string): Promise<Response> {
   const start = Date.now();
-  log.debug("webui", "API request", { method: req.method, path });
+  log.debug('webui', 'API request', { method: req.method, path });
   const url = new URL(req.url);
 
   try {
-    if (path === "/api/health") {
+    if (path === '/api/health') {
       return json({ ok: true });
     }
 
-    if (path === "/api/search" && req.method === "GET") {
-      const query = url.searchParams.get("q") ?? "";
-      const sector = url.searchParams.get("sector") as MemorySector | null;
-      const sessionId = url.searchParams.get("session");
-      const projectId = url.searchParams.get("project");
-      const includeSuperseded =
-        url.searchParams.get("include_superseded") === "true";
-      const limit = parseInt(url.searchParams.get("limit") ?? "20");
+    if (path === '/api/search' && req.method === 'GET') {
+      const query = url.searchParams.get('q') ?? '';
+      const sector = url.searchParams.get('sector') as MemorySector | null;
+      const sessionId = url.searchParams.get('session');
+      const projectId = url.searchParams.get('project');
+      const includeSuperseded = url.searchParams.get('include_superseded') === 'true';
+      const limit = parseInt(url.searchParams.get('limit') ?? '20');
 
       const embedding = await getEmbeddingService();
       const search = createSearchService(embedding);
@@ -55,10 +54,10 @@ export async function handleAPI(req: Request, path: string): Promise<Response> {
         projectId: projectId ?? undefined,
         includeSuperseded,
         limit,
-        mode: "hybrid",
+        mode: 'hybrid',
       });
 
-      log.debug("webui", "API search complete", {
+      log.debug('webui', 'API search complete', {
         query: query.slice(0, 30),
         results: results.length,
         ms: Date.now() - start,
@@ -67,20 +66,20 @@ export async function handleAPI(req: Request, path: string): Promise<Response> {
       return json({ results });
     }
 
-    if (path.startsWith("/api/memory/") && req.method === "GET") {
-      const id = path.replace("/api/memory/", "");
+    if (path.startsWith('/api/memory/') && req.method === 'GET') {
+      const id = path.replace('/api/memory/', '');
       const store = createMemoryStore();
       const memory = await store.get(id);
       if (!memory) {
-        return json({ error: "Memory not found" }, 404);
+        return json({ error: 'Memory not found' }, 404);
       }
       return json({ memory });
     }
 
-    if (path === "/api/timeline" && req.method === "GET") {
-      const anchorId = url.searchParams.get("anchor");
+    if (path === '/api/timeline' && req.method === 'GET') {
+      const anchorId = url.searchParams.get('anchor');
       if (!anchorId) {
-        return json({ error: "Missing anchor parameter" }, 400);
+        return json({ error: 'Missing anchor parameter' }, 400);
       }
       const embedding = await getEmbeddingService();
       const search = createSearchService(embedding);
@@ -88,12 +87,12 @@ export async function handleAPI(req: Request, path: string): Promise<Response> {
       return json({ data });
     }
 
-    if (path === "/api/timeline/browse" && req.method === "GET") {
-      const projectId = url.searchParams.get("project");
-      const dateStr = url.searchParams.get("date");
-      const sector = url.searchParams.get("sector") as MemorySector | null;
-      const limit = parseInt(url.searchParams.get("limit") ?? "50");
-      const offset = parseInt(url.searchParams.get("offset") ?? "0");
+    if (path === '/api/timeline/browse' && req.method === 'GET') {
+      const projectId = url.searchParams.get('project');
+      const dateStr = url.searchParams.get('date');
+      const sector = url.searchParams.get('sector') as MemorySector | null;
+      const limit = parseInt(url.searchParams.get('limit') ?? '50');
+      const offset = parseInt(url.searchParams.get('offset') ?? '0');
 
       const data = await browseTimeline({
         projectId,
@@ -105,60 +104,60 @@ export async function handleAPI(req: Request, path: string): Promise<Response> {
       return json(data);
     }
 
-    if (path === "/api/sessions" && req.method === "GET") {
-      const projectId = url.searchParams.get("project");
+    if (path === '/api/sessions' && req.method === 'GET') {
+      const projectId = url.searchParams.get('project');
       const sessions = await getRecentSessions(projectId);
       return json({ sessions });
     }
 
-    if (path.startsWith("/api/sessions/") && path.endsWith("/memories") && req.method === "GET") {
-      const sessionId = path.replace("/api/sessions/", "").replace("/memories", "");
-      const limit = parseInt(url.searchParams.get("limit") ?? "10");
+    if (path.startsWith('/api/sessions/') && path.endsWith('/memories') && req.method === 'GET') {
+      const sessionId = path.replace('/api/sessions/', '').replace('/memories', '');
+      const limit = parseInt(url.searchParams.get('limit') ?? '10');
       const memories = await getSessionMemories(sessionId, limit);
       return json({ memories });
     }
 
-    if (path === "/api/stats" && req.method === "GET") {
+    if (path === '/api/stats' && req.method === 'GET') {
       const stats = await getStats();
       return json(stats);
     }
 
-    if (path === "/api/projects" && req.method === "GET") {
+    if (path === '/api/projects' && req.method === 'GET') {
       const projects = await getProjects();
       return json({ projects });
     }
 
-    if (path === "/api/page-data" && req.method === "GET") {
-      const pagePath = url.searchParams.get("path") ?? "/";
+    if (path === '/api/page-data' && req.method === 'GET') {
+      const pagePath = url.searchParams.get('path') ?? '/';
       const data = await fetchPageData(new URL(pagePath, req.url));
       return json(data);
     }
 
-    if (path === "/api/config" && req.method === "GET") {
+    if (path === '/api/config' && req.method === 'GET') {
       const config = await getConfig();
       return json({ config });
     }
 
-    if (path === "/api/config" && req.method === "PUT") {
+    if (path === '/api/config' && req.method === 'PUT') {
       const body = (await req.json()) as { key: string; value: string };
       await setConfig(body.key, body.value);
       return json({ ok: true });
     }
 
-    if (path === "/api/memories/clear" && req.method === "POST") {
+    if (path === '/api/memories/clear' && req.method === 'POST') {
       const body = (await req.json()) as { projectId?: string };
       const deleted = await clearMemories(body.projectId);
       return json({ ok: true, deleted });
     }
 
-    if (path === "/api/shutdown" && req.method === "POST") {
-      log.info("webui", "Shutdown requested via API");
+    if (path === '/api/shutdown' && req.method === 'POST') {
+      log.info('webui', 'Shutdown requested via API');
       // Respond before shutting down
       setTimeout(() => shutdownServer(), 100);
-      return json({ ok: true, message: "Server shutting down" });
+      return json({ ok: true, message: 'Server shutting down' });
     }
 
-    if (path === "/api/hooks/memory-created" && req.method === "POST") {
+    if (path === '/api/hooks/memory-created' && req.method === 'POST') {
       const body = (await req.json()) as {
         memoryId?: string;
         projectId?: string;
@@ -166,31 +165,31 @@ export async function handleAPI(req: Request, path: string): Promise<Response> {
       };
 
       if (!body.memoryId) {
-        return json({ error: "memoryId is required" }, 400);
+        return json({ error: 'memoryId is required' }, 400);
       }
 
       const store = createMemoryStore();
       const memory = await store.get(body.memoryId);
 
       if (!memory) {
-        return json({ error: "Memory not found" }, 404);
+        return json({ error: 'Memory not found' }, 404);
       }
 
       const projectId = body.projectId ?? memory.projectId;
 
       broadcastToRoom(projectId, {
-        type: "memory:created",
+        type: 'memory:created',
         memory,
         sessionId: body.sessionId,
       });
-      broadcastToRoom("global", {
-        type: "memory:created",
+      broadcastToRoom('global', {
+        type: 'memory:created',
         memory,
         projectId,
         sessionId: body.sessionId,
       });
 
-      log.debug("webui", "Memory creation broadcast", {
+      log.debug('webui', 'Memory creation broadcast', {
         memoryId: body.memoryId,
         projectId,
         sessionId: body.sessionId,
@@ -199,24 +198,19 @@ export async function handleAPI(req: Request, path: string): Promise<Response> {
       return json({ ok: true });
     }
 
-    log.warn("webui", "API route not found", { path });
-    return json({ error: "Not found" }, 404);
+    log.warn('webui', 'API route not found', { path });
+    return json({ error: 'Not found' }, 404);
   } catch (err) {
-    log.error("webui", "API error", {
+    log.error('webui', 'API error', {
       path,
       error: err instanceof Error ? err.message : String(err),
       ms: Date.now() - start,
     });
-    return json(
-      { error: err instanceof Error ? err.message : String(err) },
-      500
-    );
+    return json({ error: err instanceof Error ? err.message : String(err) }, 500);
   }
 }
 
-async function getRecentSessions(
-  projectId?: string | null
-): Promise<unknown[]> {
+async function getRecentSessions(projectId?: string | null): Promise<unknown[]> {
   const db = await getDatabase();
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   const args: InValue[] = [cutoff];
@@ -231,15 +225,15 @@ async function getRecentSessions(
     FROM sessions s
     LEFT JOIN session_memories sm ON s.id = sm.session_id
     LEFT JOIN memories m ON sm.memory_id = m.id
-    WHERE s.started_at > ? ${projectId ? "AND s.project_id = ?" : ""}
+    WHERE s.started_at > ? ${projectId ? 'AND s.project_id = ?' : ''}
     GROUP BY s.id
     ORDER BY s.started_at DESC
     LIMIT 50
     `,
-    args
+    args,
   );
 
-  return result.rows.map((row) => ({
+  return result.rows.map(row => ({
     id: row.id,
     projectId: row.project_id,
     startedAt: row.started_at,
@@ -271,14 +265,12 @@ async function getStats(): Promise<JsonResponse> {
   const totalsRow = counts.rows[0];
   return {
     totals: {
-      memories: totalsRow?.["total_memories"] ?? 0,
-      projectMemories: totalsRow?.["project_memories"] ?? 0,
-      documents: totalsRow?.["total_documents"] ?? 0,
-      sessions: totalsRow?.["total_sessions"] ?? 0,
+      memories: totalsRow?.['total_memories'] ?? 0,
+      projectMemories: totalsRow?.['project_memories'] ?? 0,
+      documents: totalsRow?.['total_documents'] ?? 0,
+      sessions: totalsRow?.['total_sessions'] ?? 0,
     },
-    bySector: Object.fromEntries(
-      bySector.rows.map((r) => [String(r["sector"]), Number(r["count"])])
-    ),
+    bySector: Object.fromEntries(bySector.rows.map(r => [String(r['sector']), Number(r['count'])])),
   };
 }
 
@@ -327,14 +319,14 @@ async function browseTimeline(options: BrowseOptions): Promise<JsonResponse> {
   }
 
   const args: InValue[] = [startTime, endTime];
-  let whereClause = "m.created_at >= ? AND m.created_at <= ? AND m.is_deleted = 0";
+  let whereClause = 'm.created_at >= ? AND m.created_at <= ? AND m.is_deleted = 0';
 
   if (options.projectId) {
-    whereClause += " AND m.project_id = ?";
+    whereClause += ' AND m.project_id = ?';
     args.push(options.projectId);
   }
   if (options.sector) {
-    whereClause += " AND m.sector = ?";
+    whereClause += ' AND m.sector = ?';
     args.push(options.sector);
   }
 
@@ -350,17 +342,17 @@ async function browseTimeline(options: BrowseOptions): Promise<JsonResponse> {
     ORDER BY m.created_at DESC
     LIMIT ? OFFSET ?
     `,
-    [...args, options.limit, options.offset]
+    [...args, options.limit, options.offset],
   );
 
   const dateArgs: InValue[] = [startTime, endTime];
-  let dateWhere = "created_at >= ? AND created_at <= ? AND is_deleted = 0";
+  let dateWhere = 'created_at >= ? AND created_at <= ? AND is_deleted = 0';
   if (options.projectId) {
-    dateWhere += " AND project_id = ?";
+    dateWhere += ' AND project_id = ?';
     dateArgs.push(options.projectId);
   }
   if (options.sector) {
-    dateWhere += " AND sector = ?";
+    dateWhere += ' AND sector = ?';
     dateArgs.push(options.sector);
   }
 
@@ -375,7 +367,7 @@ async function browseTimeline(options: BrowseOptions): Promise<JsonResponse> {
     ORDER BY date DESC
     LIMIT 30
     `,
-    dateArgs
+    dateArgs,
   );
 
   return {
@@ -389,15 +381,15 @@ async function fetchPageData(url: URL): Promise<JsonResponse> {
   const path = url.pathname;
   const searchParams = url.searchParams;
 
-  if (path === "/projects") {
+  if (path === '/projects') {
     const projects = await getProjects();
-    return { type: "projects", projects };
+    return { type: 'projects', projects };
   }
 
-  if (path === "/" || path === "/search") {
-    const query = searchParams.get("q");
-    const projectId = searchParams.get("project");
-    const sessionId = searchParams.get("session");
+  if (path === '/' || path === '/search') {
+    const query = searchParams.get('q');
+    const projectId = searchParams.get('project');
+    const sessionId = searchParams.get('session');
     if (query) {
       const embedding = await getEmbeddingService();
       const search = createSearchService(embedding);
@@ -407,36 +399,36 @@ async function fetchPageData(url: URL): Promise<JsonResponse> {
         sessionId: sessionId ?? undefined,
         limit: 20,
       });
-      return { type: "search", results, projectId, sessionId };
+      return { type: 'search', results, projectId, sessionId };
     }
     if (projectId) {
       const results = await getRecentProjectMemories(projectId, 20);
-      return { type: "search", results, projectId, sessionId };
+      return { type: 'search', results, projectId, sessionId };
     }
     if (sessionId) {
       const results = await getRecentSessionMemories(sessionId, 20);
-      return { type: "search", results, projectId, sessionId };
+      return { type: 'search', results, projectId, sessionId };
     }
-    return { type: "search", results: [], projectId, sessionId };
+    return { type: 'search', results: [], projectId, sessionId };
   }
 
-  if (path === "/agents") {
-    const sessions = await getRecentSessions(searchParams.get("project"));
+  if (path === '/agents') {
+    const sessions = await getRecentSessions(searchParams.get('project'));
     const recentActivity = await getRecentActivity(15);
-    return { type: "agents", sessions, recentActivity };
+    return { type: 'agents', sessions, recentActivity };
   }
 
-  if (path === "/timeline") {
-    const anchorId = searchParams.get("anchor");
+  if (path === '/timeline') {
+    const anchorId = searchParams.get('anchor');
     if (anchorId) {
       const embedding = await getEmbeddingService();
       const search = createSearchService(embedding);
       const data = await search.timeline(anchorId, 10, 10);
-      return { type: "timeline", data, browseMode: false };
+      return { type: 'timeline', data, browseMode: false };
     }
-    const projectId = searchParams.get("project");
-    const dateStr = searchParams.get("date");
-    const sector = searchParams.get("sector") as MemorySector | null;
+    const projectId = searchParams.get('project');
+    const dateStr = searchParams.get('date');
+    const sector = searchParams.get('sector') as MemorySector | null;
     const browseData = await browseTimeline({
       projectId,
       dateStr,
@@ -445,10 +437,10 @@ async function fetchPageData(url: URL): Promise<JsonResponse> {
       offset: 0,
     });
     const projects = await getProjects();
-    return { type: "timeline", browseMode: true, ...browseData, projects };
+    return { type: 'timeline', browseMode: true, ...browseData, projects };
   }
 
-  return { type: "home" };
+  return { type: 'home' };
 }
 
 type ConfigMap = {
@@ -459,21 +451,22 @@ type ConfigMap = {
 
 async function getConfig(): Promise<ConfigMap> {
   const db = await getDatabase();
-  const result = await db.execute(
-    "SELECT key, value FROM config WHERE key IN (?, ?, ?)",
-    ["embeddingProvider", "captureEnabled", "captureThreshold"]
-  );
+  const result = await db.execute('SELECT key, value FROM config WHERE key IN (?, ?, ?)', [
+    'embeddingProvider',
+    'captureEnabled',
+    'captureThreshold',
+  ]);
 
   const config: ConfigMap = {
-    embeddingProvider: "ollama",
-    captureEnabled: "true",
-    captureThreshold: "0.3",
+    embeddingProvider: 'ollama',
+    captureEnabled: 'true',
+    captureThreshold: '0.3',
   };
 
   for (const row of result.rows) {
-    const key = String(row["key"]) as keyof ConfigMap;
+    const key = String(row['key']) as keyof ConfigMap;
     if (key in config) {
-      config[key] = String(row["value"]);
+      config[key] = String(row['value']);
     }
   }
 
@@ -486,7 +479,7 @@ async function setConfig(key: string, value: string): Promise<void> {
     `INSERT INTO config (key, value, updated_at)
      VALUES (?, ?, ?)
      ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    [key, value, Date.now()]
+    [key, value, Date.now()],
   );
 }
 
@@ -497,23 +490,17 @@ async function clearMemories(projectId?: string): Promise<number> {
   let result;
   if (projectId) {
     result = await db.execute(
-      "UPDATE memories SET is_deleted = 1, deleted_at = ? WHERE project_id = ? AND is_deleted = 0",
-      [now, projectId]
+      'UPDATE memories SET is_deleted = 1, deleted_at = ? WHERE project_id = ? AND is_deleted = 0',
+      [now, projectId],
     );
   } else {
-    result = await db.execute(
-      "UPDATE memories SET is_deleted = 1, deleted_at = ? WHERE is_deleted = 0",
-      [now]
-    );
+    result = await db.execute('UPDATE memories SET is_deleted = 1, deleted_at = ? WHERE is_deleted = 0', [now]);
   }
 
   return result.rowsAffected;
 }
 
-async function getSessionMemories(
-  sessionId: string,
-  limit: number
-): Promise<unknown[]> {
+async function getSessionMemories(sessionId: string, limit: number): Promise<unknown[]> {
   const db = await getDatabase();
   const result = await db.execute(
     `SELECT m.id, m.content, m.summary, m.sector, m.salience, m.created_at
@@ -522,16 +509,16 @@ async function getSessionMemories(
      WHERE sm.session_id = ? AND sm.usage_type = 'created' AND m.is_deleted = 0
      ORDER BY m.created_at DESC
      LIMIT ?`,
-    [sessionId, limit]
+    [sessionId, limit],
   );
 
-  return result.rows.map((row) => ({
-    id: row["id"],
-    content: row["content"],
-    summary: row["summary"],
-    sector: row["sector"],
-    salience: row["salience"],
-    createdAt: row["created_at"],
+  return result.rows.map(row => ({
+    id: row['id'],
+    content: row['content'],
+    summary: row['summary'],
+    sector: row['sector'],
+    salience: row['salience'],
+    createdAt: row['created_at'],
   }));
 }
 
@@ -545,28 +532,25 @@ async function getRecentActivity(limit: number = 20): Promise<unknown[]> {
      WHERE m.is_deleted = 0 AND m.created_at > ?
      ORDER BY m.created_at DESC
      LIMIT ?`,
-    [cutoff, limit]
+    [cutoff, limit],
   );
 
-  return result.rows.map((row) => ({
-    id: `${row["id"]}-${row["created_at"]}`,
-    type: "created",
+  return result.rows.map(row => ({
+    id: `${row['id']}-${row['created_at']}`,
+    type: 'created',
     memory: {
-      id: row["id"],
-      content: row["content"],
-      sector: row["sector"],
-      salience: row["salience"],
-      summary: row["summary"],
+      id: row['id'],
+      content: row['content'],
+      sector: row['sector'],
+      salience: row['salience'],
+      summary: row['summary'],
     },
-    projectId: row["project_id"],
-    timestamp: Number(row["created_at"]),
+    projectId: row['project_id'],
+    timestamp: Number(row['created_at']),
   }));
 }
 
-async function getRecentProjectMemories(
-  projectId: string,
-  limit: number
-): Promise<unknown[]> {
+async function getRecentProjectMemories(projectId: string, limit: number): Promise<unknown[]> {
   const db = await getDatabase();
   const result = await db.execute(
     `SELECT m.*,
@@ -578,40 +562,37 @@ async function getRecentProjectMemories(
      WHERE m.project_id = ? AND m.is_deleted = 0
      ORDER BY m.created_at DESC
      LIMIT ?`,
-    [projectId, limit]
+    [projectId, limit],
   );
 
-  return result.rows.map((row) => ({
+  return result.rows.map(row => ({
     memory: {
-      id: row["id"],
-      content: row["content"],
-      summary: row["summary"],
-      sector: row["sector"],
-      tier: row["tier"],
-      salience: row["salience"],
-      projectId: row["project_id"],
-      createdAt: row["created_at"],
-      updatedAt: row["updated_at"],
-      validUntil: row["valid_until"],
-      isDeleted: row["is_deleted"],
+      id: row['id'],
+      content: row['content'],
+      summary: row['summary'],
+      sector: row['sector'],
+      tier: row['tier'],
+      salience: row['salience'],
+      projectId: row['project_id'],
+      createdAt: row['created_at'],
+      updatedAt: row['updated_at'],
+      validUntil: row['valid_until'],
+      isDeleted: row['is_deleted'],
     },
-    score: Number(row["salience"]),
-    matchType: "keyword" as const,
-    isSuperseded: !!row["valid_until"],
+    score: Number(row['salience']),
+    matchType: 'keyword' as const,
+    isSuperseded: !!row['valid_until'],
     relatedMemoryCount: 0,
-    sourceSession: row["source_session_id"]
+    sourceSession: row['source_session_id']
       ? {
-          id: row["source_session_id"],
-          summary: row["source_session_summary"],
+          id: row['source_session_id'],
+          summary: row['source_session_summary'],
         }
       : undefined,
   }));
 }
 
-async function getRecentSessionMemories(
-  sessionId: string,
-  limit: number
-): Promise<unknown[]> {
+async function getRecentSessionMemories(sessionId: string, limit: number): Promise<unknown[]> {
   const db = await getDatabase();
   const result = await db.execute(
     `SELECT m.*,
@@ -623,31 +604,31 @@ async function getRecentSessionMemories(
      WHERE sm.session_id = ? AND sm.usage_type = 'created' AND m.is_deleted = 0
      ORDER BY m.created_at DESC
      LIMIT ?`,
-    [sessionId, limit]
+    [sessionId, limit],
   );
 
-  return result.rows.map((row) => ({
+  return result.rows.map(row => ({
     memory: {
-      id: row["id"],
-      content: row["content"],
-      summary: row["summary"],
-      sector: row["sector"],
-      tier: row["tier"],
-      salience: row["salience"],
-      projectId: row["project_id"],
-      createdAt: row["created_at"],
-      updatedAt: row["updated_at"],
-      validUntil: row["valid_until"],
-      isDeleted: row["is_deleted"],
+      id: row['id'],
+      content: row['content'],
+      summary: row['summary'],
+      sector: row['sector'],
+      tier: row['tier'],
+      salience: row['salience'],
+      projectId: row['project_id'],
+      createdAt: row['created_at'],
+      updatedAt: row['updated_at'],
+      validUntil: row['valid_until'],
+      isDeleted: row['is_deleted'],
     },
-    score: Number(row["salience"]),
-    matchType: "keyword" as const,
-    isSuperseded: !!row["valid_until"],
+    score: Number(row['salience']),
+    matchType: 'keyword' as const,
+    isSuperseded: !!row['valid_until'],
     relatedMemoryCount: 0,
-    sourceSession: row["source_session_id"]
+    sourceSession: row['source_session_id']
       ? {
-          id: row["source_session_id"],
-          summary: row["source_session_summary"],
+          id: row['source_session_id'],
+          summary: row['source_session_summary'],
         }
       : undefined,
   }));

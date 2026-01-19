@@ -1,72 +1,72 @@
-import { parseArgs } from "util";
-import { getDatabase } from "../../db/database.js";
-import { createEmbeddingService } from "../../services/embedding/index.js";
-import { log } from "../../utils/log.js";
+import { parseArgs } from 'util';
+import { getDatabase } from '../../db/database.js';
+import { createEmbeddingService } from '../../services/embedding/index.js';
+import { log } from '../../utils/log.js';
 
 type CheckResult = {
   name: string;
-  status: "ok" | "warn" | "fail";
+  status: 'ok' | 'warn' | 'fail';
   message: string;
 };
 
 export async function healthCommand(args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
-    options: { verbose: { type: "boolean", short: "v" } },
+    options: { verbose: { type: 'boolean', short: 'v' } },
   });
 
-  log.debug("cli", "Health check starting");
+  log.debug('cli', 'Health check starting');
 
   const checks: CheckResult[] = [];
 
   try {
     const db = await getDatabase();
-    await db.execute("SELECT 1");
-    checks.push({ name: "Database", status: "ok", message: "Connected" });
+    await db.execute('SELECT 1');
+    checks.push({ name: 'Database', status: 'ok', message: 'Connected' });
 
-    const journal = await db.execute("PRAGMA journal_mode");
-    const journalMode = journal.rows[0]?.["journal_mode"];
-    if (journalMode === "wal") {
-      checks.push({ name: "WAL Mode", status: "ok", message: "Enabled" });
+    const journal = await db.execute('PRAGMA journal_mode');
+    const journalMode = journal.rows[0]?.['journal_mode'];
+    if (journalMode === 'wal') {
+      checks.push({ name: 'WAL Mode', status: 'ok', message: 'Enabled' });
     } else {
       checks.push({
-        name: "WAL Mode",
-        status: "warn",
+        name: 'WAL Mode',
+        status: 'warn',
         message: `Mode: ${String(journalMode)}`,
       });
     }
   } catch (err) {
     checks.push({
-      name: "Database",
-      status: "fail",
+      name: 'Database',
+      status: 'fail',
       message: err instanceof Error ? err.message : String(err),
     });
   }
 
   try {
-    const response = await fetch("http://localhost:11434/api/tags", {
+    const response = await fetch('http://localhost:11434/api/tags', {
       signal: AbortSignal.timeout(5000),
     });
     if (response.ok) {
       const data = (await response.json()) as { models?: unknown[] };
       const models = data.models ?? [];
       checks.push({
-        name: "Ollama",
-        status: "ok",
+        name: 'Ollama',
+        status: 'ok',
         message: `${models.length} models available`,
       });
     } else {
       checks.push({
-        name: "Ollama",
-        status: "fail",
-        message: "Not responding",
+        name: 'Ollama',
+        status: 'fail',
+        message: 'Not responding',
       });
     }
   } catch {
     checks.push({
-      name: "Ollama",
-      status: "warn",
-      message: "Not running (OpenRouter fallback available)",
+      name: 'Ollama',
+      status: 'warn',
+      message: 'Not running (OpenRouter fallback available)',
     });
   }
 
@@ -74,23 +74,23 @@ export async function healthCommand(args: string[]): Promise<void> {
     const embedding = await createEmbeddingService();
     const provider = embedding.getProvider();
     checks.push({
-      name: "Embedding",
-      status: "ok",
+      name: 'Embedding',
+      status: 'ok',
       message: `Provider: ${provider.name}, Model: ${provider.model}`,
     });
   } catch (err) {
     checks.push({
-      name: "Embedding",
-      status: "fail",
+      name: 'Embedding',
+      status: 'fail',
       message: err instanceof Error ? err.message : String(err),
     });
   }
 
-  const icons = { ok: "✓", warn: "⚠", fail: "✗" };
-  const colors = { ok: "\x1b[32m", warn: "\x1b[33m", fail: "\x1b[31m" };
-  const reset = "\x1b[0m";
+  const icons = { ok: '✓', warn: '⚠', fail: '✗' };
+  const colors = { ok: '\x1b[32m', warn: '\x1b[33m', fail: '\x1b[31m' };
+  const reset = '\x1b[0m';
 
-  console.log("\nCCMemory Health Check\n");
+  console.log('\nCCMemory Health Check\n');
 
   for (const check of checks) {
     const icon = icons[check.status];
@@ -98,10 +98,10 @@ export async function healthCommand(args: string[]): Promise<void> {
     console.log(`${color}${icon}${reset} ${check.name}: ${check.message}`);
   }
 
-  const failed = checks.filter((c) => c.status === "fail").length;
-  const warned = checks.filter((c) => c.status === "warn").length;
+  const failed = checks.filter(c => c.status === 'fail').length;
+  const warned = checks.filter(c => c.status === 'warn').length;
 
-  log.info("cli", "Health check complete", {
+  log.info('cli', 'Health check complete', {
     passed: checks.length - failed - warned,
     warned,
     failed,

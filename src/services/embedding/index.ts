@@ -1,14 +1,9 @@
-import { getDatabase } from "../../db/database.js";
-import { log } from "../../utils/log.js";
-import { OllamaProvider } from "./ollama.js";
-import { OpenRouterProvider } from "./openrouter.js";
-import type {
-  EmbeddingConfig,
-  EmbeddingProvider,
-  EmbeddingResult,
-  EmbeddingService,
-} from "./types.js";
-import { DEFAULT_CONFIG as defaultConfig } from "./types.js";
+import { getDatabase } from '../../db/database.js';
+import { log } from '../../utils/log.js';
+import { OllamaProvider } from './ollama.js';
+import { OpenRouterProvider } from './openrouter.js';
+import type { EmbeddingConfig, EmbeddingProvider, EmbeddingResult, EmbeddingService } from './types.js';
+import { DEFAULT_CONFIG as defaultConfig } from './types.js';
 
 async function registerModel(provider: EmbeddingProvider): Promise<void> {
   const db = await getDatabase();
@@ -33,7 +28,7 @@ async function registerModel(provider: EmbeddingProvider): Promise<void> {
 
 function createService(
   active: EmbeddingProvider,
-  providers: Record<"ollama" | "openrouter", EmbeddingProvider>
+  providers: Record<'ollama' | 'openrouter', EmbeddingProvider>,
 ): EmbeddingService {
   return {
     getProvider(): EmbeddingProvider {
@@ -51,7 +46,7 @@ function createService(
 
     async embedBatch(texts: string[]): Promise<EmbeddingResult[]> {
       const vectors = await active.embedBatch(texts);
-      return vectors.map((v) => ({
+      return vectors.map(v => ({
         vector: v,
         model: active.model,
         dimensions: active.dimensions,
@@ -63,7 +58,7 @@ function createService(
       return `${active.name}:${active.model}`;
     },
 
-    async switchProvider(provider: "ollama" | "openrouter"): Promise<void> {
+    async switchProvider(provider: 'ollama' | 'openrouter'): Promise<void> {
       const newProvider = providers[provider];
 
       if (!(await newProvider.isAvailable())) {
@@ -72,29 +67,29 @@ function createService(
 
       active = newProvider;
       await registerModel(active);
-      log.info("embedding", "Switched provider", { provider: active.name, model: active.model });
+      log.info('embedding', 'Switched provider', { provider: active.name, model: active.model });
     },
   };
 }
 
 async function initializeProvider(
-  config: EmbeddingConfig
-): Promise<{ active: EmbeddingProvider; providers: Record<"ollama" | "openrouter", EmbeddingProvider> } | null> {
+  config: EmbeddingConfig,
+): Promise<{ active: EmbeddingProvider; providers: Record<'ollama' | 'openrouter', EmbeddingProvider> } | null> {
   const ollamaProvider = new OllamaProvider(config.ollama);
   const openrouterProvider = new OpenRouterProvider(config.openrouter);
 
-  const providers: Record<"ollama" | "openrouter", EmbeddingProvider> = {
+  const providers: Record<'ollama' | 'openrouter', EmbeddingProvider> = {
     ollama: ollamaProvider,
     openrouter: openrouterProvider,
   };
 
-  log.debug("embedding", "Checking provider availability", { provider: config.provider });
+  log.debug('embedding', 'Checking provider availability', { provider: config.provider });
 
   let active: EmbeddingProvider = providers[config.provider];
 
   if (!(await active.isAvailable())) {
-    const fallback = config.provider === "ollama" ? "openrouter" : "ollama";
-    log.warn("embedding", "Primary provider unavailable, trying fallback", {
+    const fallback = config.provider === 'ollama' ? 'openrouter' : 'ollama';
+    log.warn('embedding', 'Primary provider unavailable, trying fallback', {
       primary: config.provider,
       fallback,
     });
@@ -102,7 +97,7 @@ async function initializeProvider(
     const fallbackProvider = providers[fallback];
     if (await fallbackProvider.isAvailable()) {
       active = fallbackProvider;
-      log.info("embedding", "Using fallback provider", { provider: fallback });
+      log.info('embedding', 'Using fallback provider', { provider: fallback });
     } else {
       return null;
     }
@@ -111,20 +106,18 @@ async function initializeProvider(
   return { active, providers };
 }
 
-export async function createEmbeddingService(
-  config: EmbeddingConfig = defaultConfig
-): Promise<EmbeddingService> {
+export async function createEmbeddingService(config: EmbeddingConfig = defaultConfig): Promise<EmbeddingService> {
   const result = await initializeProvider(config);
 
   if (!result) {
-    log.error("embedding", "No embedding provider available");
-    throw new Error("No embedding provider available");
+    log.error('embedding', 'No embedding provider available');
+    throw new Error('No embedding provider available');
   }
 
   const { active, providers } = result;
 
   await registerModel(active);
-  log.info("embedding", "Embedding service initialized", {
+  log.info('embedding', 'Embedding service initialized', {
     provider: active.name,
     model: active.model,
     dimensions: active.dimensions,
@@ -134,19 +127,19 @@ export async function createEmbeddingService(
 }
 
 export async function createEmbeddingServiceOptional(
-  config: EmbeddingConfig = defaultConfig
+  config: EmbeddingConfig = defaultConfig,
 ): Promise<EmbeddingService | null> {
   const result = await initializeProvider(config);
 
   if (!result) {
-    log.warn("embedding", "No embedding provider available, running in degraded mode");
+    log.warn('embedding', 'No embedding provider available, running in degraded mode');
     return null;
   }
 
   const { active, providers } = result;
 
   await registerModel(active);
-  log.info("embedding", "Embedding service initialized", {
+  log.info('embedding', 'Embedding service initialized', {
     provider: active.name,
     model: active.model,
     dimensions: active.dimensions,
@@ -155,8 +148,9 @@ export async function createEmbeddingServiceOptional(
   return createService(active, providers);
 }
 
-export { OllamaProvider } from "./ollama.js";
-export { OpenRouterProvider } from "./openrouter.js";
+export { OllamaProvider } from './ollama.js';
+export { OpenRouterProvider } from './openrouter.js';
+export { DEFAULT_CONFIG } from './types.js';
 export type {
   EmbeddingConfig,
   EmbeddingProvider,
@@ -164,5 +158,4 @@ export type {
   EmbeddingService,
   OllamaConfig,
   OpenRouterConfig,
-} from "./types.js";
-export { DEFAULT_CONFIG } from "./types.js";
+} from './types.js';

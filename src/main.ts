@@ -1,18 +1,18 @@
 #!/usr/bin/env bun
 
-import { searchCommand } from "./cli/commands/search.js";
-import { showCommand } from "./cli/commands/show.js";
-import { deleteCommand, archiveCommand } from "./cli/commands/delete.js";
-import { importCommand, exportCommand } from "./cli/commands/import.js";
-import { configCommand } from "./cli/commands/config.js";
-import { healthCommand } from "./cli/commands/health.js";
-import { statsCommand } from "./cli/commands/stats.js";
-import { serveCommand } from "./cli/commands/serve.js";
-import { shutdownCommand } from "./cli/commands/shutdown.js";
-import { updateCommand } from "./cli/commands/update.js";
-import { log } from "./utils/log.js";
+import { configCommand } from './cli/commands/config.js';
+import { archiveCommand, deleteCommand } from './cli/commands/delete.js';
+import { healthCommand } from './cli/commands/health.js';
+import { exportCommand, importCommand } from './cli/commands/import.js';
+import { searchCommand } from './cli/commands/search.js';
+import { serveCommand } from './cli/commands/serve.js';
+import { showCommand } from './cli/commands/show.js';
+import { shutdownCommand } from './cli/commands/shutdown.js';
+import { statsCommand } from './cli/commands/stats.js';
+import { updateCommand } from './cli/commands/update.js';
+import { log } from './utils/log.js';
 
-const VERSION = "0.1.0";
+const VERSION = '0.1.0';
 
 const cliCommands: Record<string, (args: string[]) => Promise<void>> = {
   search: searchCommand,
@@ -30,30 +30,30 @@ const cliCommands: Record<string, (args: string[]) => Promise<void>> = {
 };
 
 async function runMcpServer(): Promise<void> {
-  const { runMcpServer: mcpMain } = await import("./mcp/index.js");
+  const { runMcpServer: mcpMain } = await import('./mcp/index.js');
   await mcpMain();
 }
 
 async function runHook(hookName: string): Promise<void> {
   switch (hookName) {
-    case "capture": {
-      const { captureHook } = await import("./hooks/capture.js");
+    case 'capture': {
+      const { captureHook } = await import('./hooks/capture.js');
       await captureHook();
       break;
     }
-    case "summarize": {
-      const { summarizeHook } = await import("./hooks/summarize.js");
+    case 'summarize': {
+      const { summarizeHook } = await import('./hooks/summarize.js');
       await summarizeHook();
       break;
     }
-    case "cleanup": {
-      const { cleanupHook } = await import("./hooks/cleanup.js");
+    case 'cleanup': {
+      const { cleanupHook } = await import('./hooks/cleanup.js');
       await cleanupHook();
       break;
     }
     default:
       console.error(`Unknown hook: ${hookName}`);
-      console.error("Available hooks: capture, summarize, cleanup");
+      console.error('Available hooks: capture, summarize, cleanup');
       process.exit(1);
   }
 }
@@ -124,26 +124,26 @@ Internal commands (used by Claude Code plugin):
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
 
-  if (!command || command === "help" || command === "--help") {
+  if (!command || command === 'help' || command === '--help') {
     printHelp();
     return;
   }
 
-  if (command === "--version" || command === "-v") {
+  if (command === '--version' || command === '-v') {
     console.log(`ccmemory ${VERSION}`);
     return;
   }
 
-  if (command === "mcp-server") {
-    log.debug("main", "Starting MCP server");
+  if (command === 'mcp-server') {
+    log.debug('main', 'Starting MCP server');
     await runMcpServer();
     return;
   }
 
-  if (command === "hook") {
+  if (command === 'hook') {
     const hookName = args[0];
     if (!hookName) {
-      console.error("Hook name required: ccmemory hook <capture|summarize|cleanup>");
+      console.error('Hook name required: ccmemory hook <capture|summarize|cleanup>');
       process.exit(1);
     }
     await runHook(hookName);
@@ -152,18 +152,18 @@ async function main(): Promise<void> {
 
   const handler = cliCommands[command];
   if (!handler) {
-    log.warn("main", "Unknown command", { command });
+    log.warn('main', 'Unknown command', { command });
     console.error(`Unknown command: ${command}`);
     console.error(`Run 'ccmemory help' for usage.`);
     process.exit(1);
   }
 
-  log.debug("main", "Executing command", { command, args: args.length });
+  log.debug('main', 'Executing command', { command, args: args.length });
   await handler(args);
 }
 
 main().catch((err: Error) => {
-  log.error("main", "Command failed", { error: err.message });
+  log.error('main', 'Command failed', { error: err.message });
   console.error(err);
   process.exit(1);
 });

@@ -1,6 +1,6 @@
-export type MemorySector = "episodic" | "semantic" | "procedural" | "emotional" | "reflective";
+export type MemorySector = 'episodic' | 'semantic' | 'procedural' | 'emotional' | 'reflective';
 
-export type MemoryTier = "session" | "project";
+export type MemoryTier = 'session' | 'project';
 
 export type Memory = {
   id: string;
@@ -52,11 +52,11 @@ export type ListOptions = {
   tier?: MemoryTier;
   minSalience?: number;
   includeDeleted?: boolean;
-  orderBy?: "created_at" | "salience" | "last_accessed";
-  order?: "asc" | "desc";
+  orderBy?: 'created_at' | 'salience' | 'last_accessed';
+  order?: 'asc' | 'desc';
 };
 
-export type UsageType = "created" | "recalled" | "updated" | "reinforced";
+export type UsageType = 'created' | 'recalled' | 'updated' | 'reinforced';
 
 export const SECTOR_PATTERNS: Record<MemorySector, RegExp[]> = {
   emotional: [
@@ -99,21 +99,9 @@ export const SECTOR_DECAY_RATES: Record<MemorySector, number> = {
   episodic: 0.02,
 };
 
-export const ALL_SECTORS: MemorySector[] = [
-  "episodic",
-  "semantic",
-  "procedural",
-  "emotional",
-  "reflective",
-];
+export const ALL_SECTORS: MemorySector[] = ['episodic', 'semantic', 'procedural', 'emotional', 'reflective'];
 
-const SECTOR_PRIORITY: MemorySector[] = [
-  "emotional",
-  "reflective",
-  "episodic",
-  "procedural",
-  "semantic",
-];
+const SECTOR_PRIORITY: MemorySector[] = ['emotional', 'reflective', 'episodic', 'procedural', 'semantic'];
 
 export function classifyMemorySector(content: string): MemorySector {
   const scores: Record<MemorySector, number> = {
@@ -127,14 +115,14 @@ export function classifyMemorySector(content: string): MemorySector {
   for (const sector of ALL_SECTORS) {
     const patterns = SECTOR_PATTERNS[sector];
     for (const pattern of patterns) {
-      const matches = content.match(new RegExp(pattern.source, "gi"));
+      const matches = content.match(new RegExp(pattern.source, 'gi'));
       if (matches) {
         scores[sector] += matches.length;
       }
     }
   }
 
-  let maxSector: MemorySector = "semantic";
+  let maxSector: MemorySector = 'semantic';
   let maxScore = 0;
 
   for (const sector of SECTOR_PRIORITY) {
@@ -152,5 +140,5 @@ export function isValidSector(sector: string): sector is MemorySector {
 }
 
 export function isValidTier(tier: string): tier is MemoryTier {
-  return tier === "session" || tier === "project";
+  return tier === 'session' || tier === 'project';
 }

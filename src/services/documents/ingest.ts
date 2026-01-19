@@ -1,20 +1,15 @@
-import { createHash } from "crypto";
-import { getDatabase } from "../../db/database.js";
-import { log } from "../../utils/log.js";
-import type { EmbeddingService } from "../embedding/types.js";
-import { chunkText } from "./chunk.js";
-import type {
-  Document,
-  DocumentChunk,
-  DocumentSourceType,
-  IngestOptions,
-} from "./types.js";
+import { createHash } from 'crypto';
+import { getDatabase } from '../../db/database.js';
+import { log } from '../../utils/log.js';
+import type { EmbeddingService } from '../embedding/types.js';
+import { chunkText } from './chunk.js';
+import type { Document, DocumentChunk, DocumentSourceType, IngestOptions } from './types.js';
 
 export type DocumentSearchResult = {
   document: Document;
   chunk: DocumentChunk;
   score: number;
-  matchType: "semantic" | "keyword" | "both";
+  matchType: 'semantic' | 'keyword' | 'both';
 };
 
 export type DocumentService = {
@@ -23,62 +18,56 @@ export type DocumentService = {
   getByPath(path: string, projectId: string): Promise<Document | null>;
   delete(id: string): Promise<void>;
   list(projectId: string): Promise<Document[]>;
-  search(
-    query: string,
-    projectId?: string,
-    limit?: number
-  ): Promise<DocumentSearchResult[]>;
+  search(query: string, projectId?: string, limit?: number): Promise<DocumentSearchResult[]>;
   checkForUpdates(projectId: string): Promise<string[]>;
   getChunks(documentId: string): Promise<DocumentChunk[]>;
 };
 
 function rowToDocument(row: Record<string, unknown>): Document {
   return {
-    id: String(row["id"]),
-    projectId: String(row["project_id"]),
-    sourcePath: row["source_path"] ? String(row["source_path"]) : undefined,
-    sourceUrl: row["source_url"] ? String(row["source_url"]) : undefined,
-    sourceType: String(row["source_type"]) as DocumentSourceType,
-    title: row["title"] ? String(row["title"]) : undefined,
-    fullContent: String(row["full_content"]),
-    checksum: String(row["checksum"]),
-    createdAt: Number(row["created_at"]),
-    updatedAt: Number(row["updated_at"]),
+    id: String(row['id']),
+    projectId: String(row['project_id']),
+    sourcePath: row['source_path'] ? String(row['source_path']) : undefined,
+    sourceUrl: row['source_url'] ? String(row['source_url']) : undefined,
+    sourceType: String(row['source_type']) as DocumentSourceType,
+    title: row['title'] ? String(row['title']) : undefined,
+    fullContent: String(row['full_content']),
+    checksum: String(row['checksum']),
+    createdAt: Number(row['created_at']),
+    updatedAt: Number(row['updated_at']),
   };
 }
 
 function rowToChunk(row: Record<string, unknown>): DocumentChunk {
   return {
-    id: String(row["id"]),
-    documentId: String(row["document_id"]),
-    chunkIndex: Number(row["chunk_index"]),
-    content: String(row["content"]),
-    startOffset: Number(row["start_offset"]),
-    endOffset: Number(row["end_offset"]),
-    tokensEstimate: Number(row["tokens_estimate"]),
+    id: String(row['id']),
+    documentId: String(row['document_id']),
+    chunkIndex: Number(row['chunk_index']),
+    content: String(row['content']),
+    startOffset: Number(row['start_offset']),
+    endOffset: Number(row['end_offset']),
+    tokensEstimate: Number(row['tokens_estimate']),
   };
 }
 
 function extractTitle(content: string, type: DocumentSourceType): string {
-  if (type === "md") {
+  if (type === 'md') {
     const h1Match = content.match(/^#\s+(.+)$/m);
     if (h1Match && h1Match[1]) return h1Match[1].trim();
   }
 
-  const firstLine = content.split("\n")[0]?.trim() ?? "";
+  const firstLine = content.split('\n')[0]?.trim() ?? '';
   return firstLine.slice(0, 100);
 }
 
-export function createDocumentService(
-  embeddingService: EmbeddingService
-): DocumentService {
+export function createDocumentService(embeddingService: EmbeddingService): DocumentService {
   const service: DocumentService = {
     async ingest(options: IngestOptions): Promise<Document> {
       const { projectId, path, url, content, title, sourceType } = options;
       const start = Date.now();
       const db = await getDatabase();
 
-      log.info("docs", "Ingesting document", {
+      log.info('docs', 'Ingesting document', {
         projectId,
         path,
         url: url?.slice(0, 50),
@@ -89,27 +78,27 @@ export function createDocumentService(
 
       if (content !== undefined) {
         fullContent = content;
-        finalSourceType = sourceType ?? "txt";
+        finalSourceType = sourceType ?? 'txt';
       } else if (path) {
         fullContent = await Bun.file(path).text();
-        finalSourceType = path.endsWith(".md") ? "md" : "txt";
-        log.debug("docs", "Read file", { path, bytes: fullContent.length });
+        finalSourceType = path.endsWith('.md') ? 'md' : 'txt';
+        log.debug('docs', 'Read file', { path, bytes: fullContent.length });
       } else if (url) {
         const response = await fetch(url);
         fullContent = await response.text();
-        finalSourceType = "url";
-        log.debug("docs", "Fetched URL", { url, bytes: fullContent.length });
+        finalSourceType = 'url';
+        log.debug('docs', 'Fetched URL', { url, bytes: fullContent.length });
       } else {
-        log.error("docs", "No content source provided");
-        throw new Error("Must provide path, url, or content");
+        log.error('docs', 'No content source provided');
+        throw new Error('Must provide path, url, or content');
       }
 
-      const checksum = createHash("sha256").update(fullContent).digest("hex");
+      const checksum = createHash('sha256').update(fullContent).digest('hex');
 
       const existing = path ? await service.getByPath(path, projectId) : null;
 
       if (existing?.checksum === checksum) {
-        log.debug("docs", "Document unchanged, skipping", { id: existing.id });
+        log.debug('docs', 'Document unchanged, skipping', { id: existing.id });
         return existing;
       }
 
@@ -118,12 +107,10 @@ export function createDocumentService(
 
       if (existing) {
         await db.execute(
-          "DELETE FROM document_vectors WHERE chunk_id IN (SELECT id FROM document_chunks WHERE document_id = ?)",
-          [id]
+          'DELETE FROM document_vectors WHERE chunk_id IN (SELECT id FROM document_chunks WHERE document_id = ?)',
+          [id],
         );
-        await db.execute("DELETE FROM document_chunks WHERE document_id = ?", [
-          id,
-        ]);
+        await db.execute('DELETE FROM document_chunks WHERE document_id = ?', [id]);
       }
 
       const docTitle = title ?? extractTitle(fullContent, finalSourceType);
@@ -142,16 +129,14 @@ export function createDocumentService(
           checksum,
           existing?.createdAt ?? now,
           now,
-        ]
+        ],
       );
 
       const chunks = chunkText(fullContent);
       const modelId = embeddingService.getActiveModelId();
 
       if (chunks.length > 0) {
-        const embeddings = await embeddingService.embedBatch(
-          chunks.map((c) => c.content)
-        );
+        const embeddings = await embeddingService.embedBatch(chunks.map(c => c.content));
 
         for (let i = 0; i < chunks.length; i++) {
           const chunkId = `${id}-${i}`;
@@ -163,48 +148,32 @@ export function createDocumentService(
           await db.execute(
             `INSERT INTO document_chunks (id, document_id, chunk_index, content, start_offset, end_offset, tokens_estimate)
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [
-              chunkId,
-              id,
-              i,
-              chunk.content,
-              chunk.startOffset,
-              chunk.endOffset,
-              chunk.tokensEstimate,
-            ]
+            [chunkId, id, i, chunk.content, chunk.startOffset, chunk.endOffset, chunk.tokensEstimate],
           );
 
           const vectorBuffer = new Float32Array(embedding.vector).buffer;
           await db.execute(
             `INSERT INTO document_vectors (chunk_id, model_id, vector, dim, created_at)
              VALUES (?, ?, ?, ?, ?)`,
-            [
-              chunkId,
-              modelId,
-              new Uint8Array(vectorBuffer),
-              embedding.dimensions,
-              now,
-            ]
+            [chunkId, modelId, new Uint8Array(vectorBuffer), embedding.dimensions, now],
           );
         }
       }
 
-      log.info("docs", "Document ingested", {
+      log.info('docs', 'Document ingested', {
         id,
         chunks: chunks.length,
         ms: Date.now() - start,
       });
 
       const result = await service.get(id);
-      if (!result) throw new Error("Failed to retrieve ingested document");
+      if (!result) throw new Error('Failed to retrieve ingested document');
       return result;
     },
 
     async get(id: string): Promise<Document | null> {
       const db = await getDatabase();
-      const result = await db.execute("SELECT * FROM documents WHERE id = ?", [
-        id,
-      ]);
+      const result = await db.execute('SELECT * FROM documents WHERE id = ?', [id]);
       if (result.rows.length === 0) return null;
       const row = result.rows[0];
       if (!row) return null;
@@ -213,10 +182,10 @@ export function createDocumentService(
 
     async getByPath(path: string, projectId: string): Promise<Document | null> {
       const db = await getDatabase();
-      const result = await db.execute(
-        "SELECT * FROM documents WHERE source_path = ? AND project_id = ?",
-        [path, projectId]
-      );
+      const result = await db.execute('SELECT * FROM documents WHERE source_path = ? AND project_id = ?', [
+        path,
+        projectId,
+      ]);
       if (result.rows.length === 0) return null;
       const row = result.rows[0];
       if (!row) return null;
@@ -226,33 +195,26 @@ export function createDocumentService(
     async delete(id: string): Promise<void> {
       const db = await getDatabase();
       await db.execute(
-        "DELETE FROM document_vectors WHERE chunk_id IN (SELECT id FROM document_chunks WHERE document_id = ?)",
-        [id]
+        'DELETE FROM document_vectors WHERE chunk_id IN (SELECT id FROM document_chunks WHERE document_id = ?)',
+        [id],
       );
-      await db.execute("DELETE FROM document_chunks WHERE document_id = ?", [
-        id,
-      ]);
-      await db.execute("DELETE FROM documents WHERE id = ?", [id]);
-      log.info("docs", "Document deleted", { id });
+      await db.execute('DELETE FROM document_chunks WHERE document_id = ?', [id]);
+      await db.execute('DELETE FROM documents WHERE id = ?', [id]);
+      log.info('docs', 'Document deleted', { id });
     },
 
     async list(projectId: string): Promise<Document[]> {
       const db = await getDatabase();
-      const result = await db.execute(
-        "SELECT * FROM documents WHERE project_id = ? ORDER BY created_at DESC",
-        [projectId]
-      );
+      const result = await db.execute('SELECT * FROM documents WHERE project_id = ? ORDER BY created_at DESC', [
+        projectId,
+      ]);
       return result.rows.map(rowToDocument);
     },
 
-    async search(
-      query: string,
-      projectId?: string,
-      limit = 10
-    ): Promise<DocumentSearchResult[]> {
+    async search(query: string, projectId?: string, limit = 10): Promise<DocumentSearchResult[]> {
       const start = Date.now();
       const db = await getDatabase();
-      log.debug("docs", "Document search starting", {
+      log.debug('docs', 'Document search starting', {
         query: query.slice(0, 50),
         projectId,
         limit,
@@ -304,41 +266,38 @@ export function createDocumentService(
       const results: DocumentSearchResult[] = [];
 
       for (const row of result.rows) {
-        const vectorData = row["vector"];
+        const vectorData = row['vector'];
         const storedVector = parseVector(vectorData);
 
         if (storedVector.length !== queryEmbedding.dimensions) {
           continue;
         }
 
-        const similarity = cosineSimilarity(
-          queryEmbedding.vector,
-          storedVector
-        );
+        const similarity = cosineSimilarity(queryEmbedding.vector, storedVector);
 
-        const doc = await service.get(String(row["document_id"]));
+        const doc = await service.get(String(row['document_id']));
         if (!doc) continue;
 
         results.push({
           document: doc,
           chunk: {
-            id: String(row["chunk_id"]),
-            documentId: String(row["document_id"]),
-            content: String(row["content"]),
-            chunkIndex: Number(row["chunk_index"]),
-            startOffset: Number(row["start_offset"]),
-            endOffset: Number(row["end_offset"]),
-            tokensEstimate: Number(row["tokens_estimate"]),
+            id: String(row['chunk_id']),
+            documentId: String(row['document_id']),
+            content: String(row['content']),
+            chunkIndex: Number(row['chunk_index']),
+            startOffset: Number(row['start_offset']),
+            endOffset: Number(row['end_offset']),
+            tokensEstimate: Number(row['tokens_estimate']),
           },
           score: similarity,
-          matchType: "semantic",
+          matchType: 'semantic',
         });
       }
 
       results.sort((a, b) => b.score - a.score);
       const topResults = results.slice(0, limit);
 
-      log.info("docs", "Document search complete", {
+      log.info('docs', 'Document search complete', {
         results: topResults.length,
         ms: Date.now() - start,
       });
@@ -347,7 +306,7 @@ export function createDocumentService(
     },
 
     async checkForUpdates(projectId: string): Promise<string[]> {
-      log.debug("docs", "Checking for document updates", { projectId });
+      log.debug('docs', 'Checking for document updates', { projectId });
       const docs = await service.list(projectId);
       const updated: string[] = [];
 
@@ -356,19 +315,17 @@ export function createDocumentService(
 
         try {
           const currentContent = await Bun.file(doc.sourcePath).text();
-          const currentChecksum = createHash("sha256")
-            .update(currentContent)
-            .digest("hex");
+          const currentChecksum = createHash('sha256').update(currentContent).digest('hex');
 
           if (currentChecksum !== doc.checksum) {
-            log.debug("docs", "Document changed", {
+            log.debug('docs', 'Document changed', {
               id: doc.id,
               path: doc.sourcePath,
             });
             updated.push(doc.id);
           }
         } catch {
-          log.warn("docs", "Document file missing", {
+          log.warn('docs', 'Document file missing', {
             id: doc.id,
             path: doc.sourcePath,
           });
@@ -376,7 +333,7 @@ export function createDocumentService(
         }
       }
 
-      log.info("docs", "Update check complete", {
+      log.info('docs', 'Update check complete', {
         projectId,
         checked: docs.length,
         updated: updated.length,
@@ -386,10 +343,9 @@ export function createDocumentService(
 
     async getChunks(documentId: string): Promise<DocumentChunk[]> {
       const db = await getDatabase();
-      const result = await db.execute(
-        "SELECT * FROM document_chunks WHERE document_id = ? ORDER BY chunk_index",
-        [documentId]
-      );
+      const result = await db.execute('SELECT * FROM document_chunks WHERE document_id = ? ORDER BY chunk_index', [
+        documentId,
+      ]);
       return result.rows.map(rowToChunk);
     },
   };
@@ -403,7 +359,7 @@ function parseVector(blob: unknown): number[] {
     return Array.from(new Float32Array(buffer));
   }
 
-  if (typeof blob === "string") {
+  if (typeof blob === 'string') {
     try {
       return JSON.parse(blob) as number[];
     } catch {

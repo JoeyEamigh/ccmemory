@@ -1,14 +1,13 @@
-import { getDatabase } from "../../db/database.js";
-import { log } from "../../utils/log.js";
-import type { Memory, MemorySector, MemoryTier, UsageType } from "../memory/types.js";
-import { rowToMemory } from "../memory/utils.js";
-import { getSupersedingMemory } from "../memory/relationships.js";
-import type { EmbeddingService } from "../embedding/types.js";
-import { searchFTS } from "./fts.js";
-import { searchVector } from "./vector.js";
-import { computeScore, type RankingWeights, DEFAULT_WEIGHTS } from "./ranking.js";
+import { getDatabase } from '../../db/database.js';
+import { log } from '../../utils/log.js';
+import type { EmbeddingService } from '../embedding/types.js';
+import type { Memory, MemorySector, MemoryTier, UsageType } from '../memory/types.js';
+import { rowToMemory } from '../memory/utils.js';
+import { searchFTS } from './fts.js';
+import { computeScore, DEFAULT_WEIGHTS, type RankingWeights } from './ranking.js';
+import { searchVector } from './vector.js';
 
-export type SearchMode = "hybrid" | "semantic" | "keyword";
+export type SearchMode = 'hybrid' | 'semantic' | 'keyword';
 
 export type SearchOptions = {
   query: string;
@@ -34,7 +33,7 @@ export type SessionSummary = {
 export type SearchResult = {
   memory: Memory;
   score: number;
-  matchType: "semantic" | "keyword" | "both";
+  matchType: 'semantic' | 'keyword' | 'both';
   highlights?: string[];
   sourceSession?: SessionSummary;
   isSuperseded: boolean;
@@ -73,7 +72,7 @@ export type SearchService = {
 
 async function getMemoryById(id: string): Promise<Memory | null> {
   const db = await getDatabase();
-  const result = await db.execute("SELECT * FROM memories WHERE id = ?", [id]);
+  const result = await db.execute('SELECT * FROM memories WHERE id = ?', [id]);
   if (result.rows.length === 0) return null;
   const row = result.rows[0];
   if (!row) return null;
@@ -88,7 +87,7 @@ async function getSourceSession(memoryId: string): Promise<SessionSummary | unde
      JOIN sessions s ON sm.session_id = s.id
      WHERE sm.memory_id = ? AND sm.usage_type = 'created'
      LIMIT 1`,
-    [memoryId]
+    [memoryId],
   );
 
   if (result.rows.length === 0) return undefined;
@@ -97,10 +96,10 @@ async function getSourceSession(memoryId: string): Promise<SessionSummary | unde
   if (!row) return undefined;
 
   return {
-    id: String(row["id"]),
-    startedAt: Number(row["started_at"]),
-    summary: row["summary"] ? String(row["summary"]) : undefined,
-    projectId: String(row["project_id"]),
+    id: String(row['id']),
+    startedAt: Number(row['started_at']),
+    summary: row['summary'] ? String(row['summary']) : undefined,
+    projectId: String(row['project_id']),
   };
 }
 
@@ -110,48 +109,46 @@ async function getRelatedMemoryCount(memoryId: string): Promise<number> {
     `SELECT COUNT(*) as count FROM memory_relationships
      WHERE (source_memory_id = ? OR target_memory_id = ?)
        AND valid_until IS NULL`,
-    [memoryId, memoryId]
+    [memoryId, memoryId],
   );
 
   const row = result.rows[0];
-  return row ? Number(row["count"]) : 0;
+  return row ? Number(row['count']) : 0;
 }
 
-async function batchGetSourceSessions(
-  memoryIds: string[]
-): Promise<Map<string, SessionSummary>> {
+async function batchGetSourceSessions(memoryIds: string[]): Promise<Map<string, SessionSummary>> {
   if (memoryIds.length === 0) return new Map();
 
   const db = await getDatabase();
-  const placeholders = memoryIds.map(() => "?").join(",");
+  const placeholders = memoryIds.map(() => '?').join(',');
   const result = await db.execute(
     `SELECT sm.memory_id, s.id, s.started_at, s.summary, s.project_id
      FROM session_memories sm
      JOIN sessions s ON sm.session_id = s.id
      WHERE sm.memory_id IN (${placeholders}) AND sm.usage_type = 'created'`,
-    memoryIds
+    memoryIds,
   );
 
   const map = new Map<string, SessionSummary>();
   for (const row of result.rows) {
-    const memoryId = String(row["memory_id"]);
+    const memoryId = String(row['memory_id']);
     map.set(memoryId, {
-      id: String(row["id"]),
-      startedAt: Number(row["started_at"]),
-      summary: row["summary"] ? String(row["summary"]) : undefined,
-      projectId: String(row["project_id"]),
+      id: String(row['id']),
+      startedAt: Number(row['started_at']),
+      summary: row['summary'] ? String(row['summary']) : undefined,
+      projectId: String(row['project_id']),
     });
   }
   return map;
 }
 
 async function batchGetSupersedingMemories(
-  memoryIds: string[]
+  memoryIds: string[],
 ): Promise<Map<string, { id: string; content: string; createdAt: number }>> {
   if (memoryIds.length === 0) return new Map();
 
   const db = await getDatabase();
-  const placeholders = memoryIds.map(() => "?").join(",");
+  const placeholders = memoryIds.map(() => '?').join(',');
   const result = await db.execute(
     `SELECT mr.target_memory_id, m.id, m.content, m.created_at
      FROM memory_relationships mr
@@ -160,28 +157,26 @@ async function batchGetSupersedingMemories(
        AND mr.relationship_type = 'SUPERSEDES'
        AND mr.valid_until IS NULL
        AND m.is_deleted = 0`,
-    memoryIds
+    memoryIds,
   );
 
   const map = new Map<string, { id: string; content: string; createdAt: number }>();
   for (const row of result.rows) {
-    const targetId = String(row["target_memory_id"]);
+    const targetId = String(row['target_memory_id']);
     map.set(targetId, {
-      id: String(row["id"]),
-      content: String(row["content"]).slice(0, 200),
-      createdAt: Number(row["created_at"]),
+      id: String(row['id']),
+      content: String(row['content']).slice(0, 200),
+      createdAt: Number(row['created_at']),
     });
   }
   return map;
 }
 
-async function batchGetRelatedCounts(
-  memoryIds: string[]
-): Promise<Map<string, number>> {
+async function batchGetRelatedCounts(memoryIds: string[]): Promise<Map<string, number>> {
   if (memoryIds.length === 0) return new Map();
 
   const db = await getDatabase();
-  const placeholders = memoryIds.map(() => "?").join(",");
+  const placeholders = memoryIds.map(() => '?').join(',');
   const allIds = [...memoryIds, ...memoryIds];
 
   const result = await db.execute(
@@ -192,12 +187,12 @@ async function batchGetRelatedCounts(
        SELECT target_memory_id as memory_id FROM memory_relationships
        WHERE target_memory_id IN (${placeholders}) AND valid_until IS NULL
      ) GROUP BY memory_id`,
-    allIds
+    allIds,
   );
 
   const map = new Map<string, number>();
   for (const row of result.rows) {
-    map.set(String(row["memory_id"]), Number(row["count"]));
+    map.set(String(row['memory_id']), Number(row['count']));
   }
   return map;
 }
@@ -208,7 +203,7 @@ async function checkSessionLink(memoryId: string, sessionId: string): Promise<bo
     `SELECT 1 FROM session_memories
      WHERE memory_id = ? AND session_id = ?
      LIMIT 1`,
-    [memoryId, sessionId]
+    [memoryId, sessionId],
   );
   return result.rows.length > 0;
 }
@@ -223,31 +218,25 @@ async function reinforceMemory(id: string, amount: number): Promise<void> {
          access_count = access_count + 1,
          updated_at = ?
      WHERE id = ? AND is_deleted = 0`,
-    [amount, now, now, id]
+    [amount, now, now, id],
   );
 }
 
-async function linkToSession(
-  memoryId: string,
-  sessionId: string,
-  usageType: UsageType
-): Promise<void> {
+async function linkToSession(memoryId: string, sessionId: string, usageType: UsageType): Promise<void> {
   const db = await getDatabase();
   const now = Date.now();
   try {
     await db.execute(
       `INSERT INTO session_memories (session_id, memory_id, created_at, usage_type)
        VALUES (?, ?, ?, ?)`,
-      [sessionId, memoryId, now, usageType]
+      [sessionId, memoryId, now, usageType],
     );
   } catch {
     // Ignore duplicate key errors
   }
 }
 
-export function createSearchService(
-  embeddingService: EmbeddingService | null
-): SearchService {
+export function createSearchService(embeddingService: EmbeddingService | null): SearchService {
   const service: SearchService = {
     async search(options: SearchOptions): Promise<SearchResult[]> {
       const {
@@ -262,17 +251,17 @@ export function createSearchService(
         weights = DEFAULT_WEIGHTS,
       } = options;
 
-      let { mode = "hybrid" } = options;
+      let { mode = 'hybrid' } = options;
 
-      if (!embeddingService && mode !== "keyword") {
-        log.warn("search", "No embedding service available, falling back to keyword search", {
+      if (!embeddingService && mode !== 'keyword') {
+        log.warn('search', 'No embedding service available, falling back to keyword search', {
           requestedMode: mode,
         });
-        mode = "keyword";
+        mode = 'keyword';
       }
 
       const start = Date.now();
-      log.info("search", "Hybrid search starting", {
+      log.info('search', 'Hybrid search starting', {
         query: query.slice(0, 50),
         mode,
         projectId,
@@ -280,10 +269,8 @@ export function createSearchService(
       });
 
       const [ftsResults, vectorResults] = await Promise.all([
-        mode !== "semantic" ? searchFTS(query, projectId, limit * 2) : [],
-        mode !== "keyword" && embeddingService
-          ? searchVector(query, embeddingService, projectId, limit * 2)
-          : [],
+        mode !== 'semantic' ? searchFTS(query, projectId, limit * 2) : [],
+        mode !== 'keyword' && embeddingService ? searchVector(query, embeddingService, projectId, limit * 2) : [],
       ]);
 
       const resultMap = new Map<
@@ -322,7 +309,7 @@ export function createSearchService(
         memory: Memory;
         data: { ftsRank: number; similarity: number; snippet?: string };
         score: number;
-        matchType: "semantic" | "keyword" | "both";
+        matchType: 'semantic' | 'keyword' | 'both';
       };
       const candidates: CandidateResult[] = [];
 
@@ -344,31 +331,22 @@ export function createSearchService(
         const data = resultMap.get(memory.id);
         if (!data) continue;
 
-        const score = computeScore(
-          memory,
-          data.similarity,
-          data.ftsRank,
-          weights
-        );
+        const score = computeScore(memory, data.similarity, data.ftsRank, weights);
 
-        const matchType: "semantic" | "keyword" | "both" =
-          data.similarity > 0 && data.ftsRank !== 0
-            ? "both"
-            : data.similarity > 0
-              ? "semantic"
-              : "keyword";
+        const matchType: 'semantic' | 'keyword' | 'both' =
+          data.similarity > 0 && data.ftsRank !== 0 ? 'both' : data.similarity > 0 ? 'semantic' : 'keyword';
 
         candidates.push({ memory, data, score, matchType });
       }
 
-      const candidateIds = candidates.map((c) => c.memory.id);
+      const candidateIds = candidates.map(c => c.memory.id);
       const [sessionMap, supersededMap, relatedCountMap] = await Promise.all([
         batchGetSourceSessions(candidateIds),
         batchGetSupersedingMemories(candidateIds),
         batchGetRelatedCounts(candidateIds),
       ]);
 
-      const results: SearchResult[] = candidates.map((c) => {
+      const results: SearchResult[] = candidates.map(c => {
         const supersedingMemory = supersededMap.get(c.memory.id);
         return {
           memory: c.memory,
@@ -389,11 +367,11 @@ export function createSearchService(
       for (const result of topResults) {
         await reinforceMemory(result.memory.id, 0.02);
         if (sessionId) {
-          await linkToSession(result.memory.id, sessionId, "recalled");
+          await linkToSession(result.memory.id, sessionId, 'recalled');
         }
       }
 
-      log.info("search", "Hybrid search complete", {
+      log.info('search', 'Hybrid search complete', {
         total: results.length,
         returned: topResults.length,
         mode,
@@ -403,19 +381,15 @@ export function createSearchService(
       return topResults;
     },
 
-    async timeline(
-      anchorId: string,
-      depthBefore = 5,
-      depthAfter = 5
-    ): Promise<TimelineResult> {
-      log.debug("search", "Timeline query", { anchorId, depthBefore, depthAfter });
+    async timeline(anchorId: string, depthBefore = 5, depthAfter = 5): Promise<TimelineResult> {
+      log.debug('search', 'Timeline query', { anchorId, depthBefore, depthAfter });
 
       const db = await getDatabase();
       const anchor = await getMemoryById(anchorId);
 
       if (!anchor) {
-        log.warn("search", "Timeline anchor not found", { anchorId });
-        throw new Error("Anchor memory not found");
+        log.warn('search', 'Timeline anchor not found', { anchorId });
+        throw new Error('Anchor memory not found');
       }
 
       const [beforeResult, afterResult] = await Promise.all([
@@ -424,14 +398,14 @@ export function createSearchService(
            WHERE project_id = ? AND created_at < ? AND is_deleted = 0
            ORDER BY created_at DESC
            LIMIT ?`,
-          [anchor.projectId, anchor.createdAt, depthBefore]
+          [anchor.projectId, anchor.createdAt, depthBefore],
         ),
         db.execute(
           `SELECT * FROM memories
            WHERE project_id = ? AND created_at > ? AND is_deleted = 0
            ORDER BY created_at ASC
            LIMIT ?`,
-          [anchor.projectId, anchor.createdAt, depthAfter]
+          [anchor.projectId, anchor.createdAt, depthAfter],
         ),
       ]);
 
@@ -466,7 +440,7 @@ export function createSearchService(
          WHERE sm.memory_id = ?
          ORDER BY sm.created_at DESC
          LIMIT 1`,
-        [memoryId]
+        [memoryId],
       );
 
       if (result.rows.length === 0) return null;
@@ -476,14 +450,14 @@ export function createSearchService(
 
       return {
         session: {
-          id: String(row["id"]),
-          startedAt: Number(row["started_at"]),
-          endedAt: row["ended_at"] ? Number(row["ended_at"]) : undefined,
-          summary: row["summary"] ? String(row["summary"]) : undefined,
-          projectId: String(row["project_id"]),
+          id: String(row['id']),
+          startedAt: Number(row['started_at']),
+          endedAt: row['ended_at'] ? Number(row['ended_at']) : undefined,
+          summary: row['summary'] ? String(row['summary']) : undefined,
+          projectId: String(row['project_id']),
         },
-        memoriesInSession: Number(row["memory_count"]),
-        usageType: String(row["usage_type"]) as UsageType,
+        memoriesInSession: Number(row['memory_count']),
+        usageType: String(row['usage_type']) as UsageType,
       };
     },
   };

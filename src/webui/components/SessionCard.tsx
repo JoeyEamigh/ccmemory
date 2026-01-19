@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
-import { Clock, Brain, Activity, ChevronDown, ChevronUp, Loader2, Zap } from "lucide-react";
-import { Card, CardContent, CardFooter, CardHeader } from "./ui/card.js";
-import { Badge } from "./ui/badge.js";
-import { Button } from "./ui/button.js";
-import { cn } from "../lib/utils.js";
-import { RelativeTime } from "./RelativeTime.js";
-import type { MemorySector, Memory } from "../../services/memory/types.js";
+import { Activity, Brain, ChevronDown, ChevronUp, Clock, Loader2, Zap } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import type { Memory, MemorySector } from '../../services/memory/types.js';
+import { cn } from '../lib/utils.js';
+import { RelativeTime } from './RelativeTime.js';
+import { Badge } from './ui/badge.js';
+import { Button } from './ui/button.js';
+import { Card, CardContent, CardFooter, CardHeader } from './ui/card.js';
 
 type SessionMemory = {
   id: string;
@@ -41,11 +41,11 @@ type SessionCardProps = {
 };
 
 const sectorColors: Record<MemorySector, string> = {
-  episodic: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
-  semantic: "bg-green-500/10 text-green-700 dark:text-green-400",
-  procedural: "bg-purple-500/10 text-purple-700 dark:text-purple-400",
-  emotional: "bg-red-500/10 text-red-700 dark:text-red-400",
-  reflective: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+  episodic: 'bg-blue-500/10 text-blue-700 dark:text-blue-400',
+  semantic: 'bg-green-500/10 text-green-700 dark:text-green-400',
+  procedural: 'bg-purple-500/10 text-purple-700 dark:text-purple-400',
+  emotional: 'bg-red-500/10 text-red-700 dark:text-red-400',
+  reflective: 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
 };
 
 export function SessionCard({
@@ -65,11 +65,11 @@ export function SessionCard({
   const isActive = !session.endedAt;
   const duration = session.endedAt
     ? formatDuration(session.endedAt - session.startedAt)
-    : formatDuration(Date.now() - session.startedAt) + " (active)";
+    : formatDuration(Date.now() - session.startedAt) + ' (active)';
 
   useEffect(() => {
     for (const msg of messages) {
-      if (msg.type === "memory:created" && msg.sessionId === session.id && msg.memory) {
+      if (msg.type === 'memory:created' && msg.sessionId === session.id && msg.memory) {
         const newMemory: SessionMemory = {
           id: msg.memory.id,
           content: msg.memory.content,
@@ -79,11 +79,11 @@ export function SessionCard({
           createdAt: msg.memory.createdAt,
         };
 
-        setMemories((prev) => {
-          if (prev.some((m) => m.id === newMemory.id)) return prev;
+        setMemories(prev => {
+          if (prev.some(m => m.id === newMemory.id)) return prev;
           return [newMemory, ...prev].slice(0, 5);
         });
-        setMemoryCount((prev) => prev + 1);
+        setMemoryCount(prev => prev + 1);
         setHasNewMemory(true);
 
         setTimeout(() => setHasNewMemory(false), 2000);
@@ -107,30 +107,24 @@ export function SessionCard({
   };
 
   return (
-    <Card className={cn(
-      isActive && "ring-2 ring-green-500/50",
-      hasNewMemory && "ring-2 ring-yellow-500/50 transition-all"
-    )}>
+    <Card
+      className={cn(
+        isActive && 'ring-2 ring-green-500/50',
+        hasNewMemory && 'ring-2 ring-yellow-500/50 transition-all',
+      )}>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
-          <span
-            className="font-mono text-sm text-muted-foreground"
-            title={session.id}
-          >
+          <span className="font-mono text-sm text-muted-foreground" title={session.id}>
             {session.id.slice(0, 8)}...
           </span>
           <div className="flex items-center gap-2">
             {hasNewMemory && (
-              <Badge className="bg-yellow-500 text-white animate-pulse flex items-center gap-1">
+              <Badge className="flex animate-pulse items-center gap-1 bg-yellow-500 text-white">
                 <Zap className="h-3 w-3" />
                 NEW
               </Badge>
             )}
-            {isActive && (
-              <Badge className="bg-green-500 text-white animate-pulse">
-                ACTIVE
-              </Badge>
-            )}
+            {isActive && <Badge className="animate-pulse bg-green-500 text-white">ACTIVE</Badge>}
           </div>
         </div>
       </CardHeader>
@@ -149,51 +143,39 @@ export function SessionCard({
         {session.lastActivity && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Activity className="h-4 w-4" />
-            <span>Last: <RelativeTime timestamp={session.lastActivity} /></span>
+            <span>
+              Last: <RelativeTime timestamp={session.lastActivity} />
+            </span>
           </div>
         )}
-        {session.summary && (
-          <p className="text-sm text-muted-foreground line-clamp-2">
-            {session.summary}
-          </p>
-        )}
+        {session.summary && <p className="line-clamp-2 text-sm text-muted-foreground">{session.summary}</p>}
 
         {expanded && (
-          <div className="mt-3 pt-3 border-t space-y-2">
+          <div className="mt-3 space-y-2 border-t pt-3">
             {loading ? (
               <div className="flex items-center justify-center py-4">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </div>
             ) : memories.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-2">
-                No memories created yet
-              </p>
+              <p className="py-2 text-center text-xs text-muted-foreground">No memories created yet</p>
             ) : (
               <>
-                <p className="text-xs font-medium text-muted-foreground">
-                  Recent Memories
-                </p>
-                {memories.map((memory) => (
+                <p className="text-xs font-medium text-muted-foreground">Recent Memories</p>
+                {memories.map(memory => (
                   <div
                     key={memory.id}
                     className={cn(
-                      "p-2 rounded-md text-xs cursor-pointer hover:bg-accent/50 transition-colors",
-                      sectorColors[memory.sector]
+                      'cursor-pointer rounded-md p-2 text-xs transition-colors hover:bg-accent/50',
+                      sectorColors[memory.sector],
                     )}
-                    onClick={() => onSelectMemory?.(memory as unknown as SessionMemory)}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <Badge variant="outline" className="text-[10px] px-1 py-0">
+                    onClick={() => onSelectMemory?.(memory as unknown as SessionMemory)}>
+                    <div className="mb-1 flex items-center justify-between">
+                      <Badge variant="outline" className="px-1 py-0 text-[10px]">
                         {memory.sector}
                       </Badge>
-                      <RelativeTime
-                        timestamp={memory.createdAt}
-                        className="text-[10px] opacity-70"
-                      />
+                      <RelativeTime timestamp={memory.createdAt} className="text-[10px] opacity-70" />
                     </div>
-                    <p className="line-clamp-2">
-                      {memory.summary ?? memory.content}
-                    </p>
+                    <p className="line-clamp-2">{memory.summary ?? memory.content}</p>
                   </div>
                 ))}
               </>
@@ -202,13 +184,8 @@ export function SessionCard({
         )}
       </CardContent>
 
-      <CardFooter className="gap-2 flex-wrap">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={toggleExpand}
-          className="gap-1"
-        >
+      <CardFooter className="flex-wrap gap-2">
+        <Button variant="ghost" size="sm" onClick={toggleExpand} className="gap-1">
           {loading ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : expanded ? (
@@ -216,7 +193,7 @@ export function SessionCard({
           ) : (
             <ChevronDown className="h-3 w-3" />
           )}
-          {expanded ? "Collapse" : "Expand"}
+          {expanded ? 'Collapse' : 'Expand'}
         </Button>
         <Button variant="outline" size="sm" onClick={onViewMemories}>
           All Memories

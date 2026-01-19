@@ -1313,7 +1313,7 @@ export function Search({ initialResults, onSelectMemory, wsConnected }: SearchPr
         </div>
 
         <Select value={sector} onValueChange={(v) => setSector(v as MemorySector | "all")}>
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="w-40">
             <SelectValue placeholder="All Sectors" />
           </SelectTrigger>
           <SelectContent>

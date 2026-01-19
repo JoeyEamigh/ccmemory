@@ -1,14 +1,14 @@
 #!/usr/bin/env bun
 
-import { searchCommand } from "./commands/search.js";
-import { showCommand } from "./commands/show.js";
-import { deleteCommand, archiveCommand } from "./commands/delete.js";
-import { importCommand, exportCommand } from "./commands/import.js";
-import { configCommand } from "./commands/config.js";
-import { healthCommand } from "./commands/health.js";
-import { statsCommand } from "./commands/stats.js";
-import { serveCommand } from "./commands/serve.js";
-import { log } from "../utils/log.js";
+import { log } from '../utils/log.js';
+import { configCommand } from './commands/config.js';
+import { archiveCommand, deleteCommand } from './commands/delete.js';
+import { healthCommand } from './commands/health.js';
+import { exportCommand, importCommand } from './commands/import.js';
+import { searchCommand } from './commands/search.js';
+import { serveCommand } from './commands/serve.js';
+import { showCommand } from './commands/show.js';
+import { statsCommand } from './commands/stats.js';
 
 const commands: Record<string, (args: string[]) => Promise<void>> = {
   search: searchCommand,
@@ -26,25 +26,25 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
 
-  if (!command || command === "help" || command === "--help") {
+  if (!command || command === 'help' || command === '--help') {
     printHelp();
     return;
   }
 
-  if (command === "--version" || command === "-v") {
-    console.log("ccmemory 0.1.0");
+  if (command === '--version' || command === '-v') {
+    console.log('ccmemory 0.1.0');
     return;
   }
 
   const handler = commands[command];
   if (!handler) {
-    log.warn("cli", "Unknown command", { command });
+    log.warn('cli', 'Unknown command', { command });
     console.error(`Unknown command: ${command}`);
     console.error(`Run 'ccmemory help' for usage.`);
     process.exit(1);
   }
 
-  log.debug("cli", "Executing command", { command, args: args.length });
+  log.debug('cli', 'Executing command', { command, args: args.length });
   await handler(args);
 }
 
@@ -101,7 +101,7 @@ Commands:
 }
 
 main().catch((err: Error) => {
-  log.error("cli", "Command failed", { error: err.message });
+  log.error('cli', 'Command failed', { error: err.message });
   console.error(err);
   process.exit(1);
 });

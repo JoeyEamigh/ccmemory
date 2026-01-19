@@ -1,6 +1,6 @@
-import { getDatabase } from "../../db/database.js";
-import type { Memory } from "./types.js";
-import { rowToMemory } from "./utils.js";
+import { getDatabase } from '../../db/database.js';
+import type { Memory } from './types.js';
+import { rowToMemory } from './utils.js';
 
 function fnv1a64(str: string): bigint {
   let hash = 14695981039346656037n;
@@ -15,12 +15,12 @@ function fnv1a64(str: string): bigint {
 export function computeSimhash(text: string): string {
   const tokens = text
     .toLowerCase()
-    .replace(/[^\w\s]/g, "")
+    .replace(/[^\w\s]/g, '')
     .split(/\s+/)
-    .filter((t) => t.length > 2);
+    .filter(t => t.length > 2);
 
   if (tokens.length === 0) {
-    return "0000000000000000";
+    return '0000000000000000';
   }
 
   const vector: number[] = [];
@@ -48,12 +48,12 @@ export function computeSimhash(text: string): string {
     }
   }
 
-  return result.toString(16).padStart(16, "0");
+  return result.toString(16).padStart(16, '0');
 }
 
 export function hammingDistance(hash1: string, hash2: string): number {
-  const h1 = BigInt("0x" + hash1);
-  const h2 = BigInt("0x" + hash2);
+  const h1 = BigInt('0x' + hash1);
+  const h2 = BigInt('0x' + hash2);
   const xor = h1 ^ h2;
 
   let count = 0;
@@ -65,19 +65,11 @@ export function hammingDistance(hash1: string, hash2: string): number {
   return count;
 }
 
-export function isDuplicate(
-  hash1: string,
-  hash2: string,
-  threshold = 3
-): boolean {
+export function isDuplicate(hash1: string, hash2: string, threshold = 3): boolean {
   return hammingDistance(hash1, hash2) <= threshold;
 }
 
-export async function findSimilarMemory(
-  simhash: string,
-  projectId: string,
-  threshold = 3
-): Promise<Memory | null> {
+export async function findSimilarMemory(simhash: string, projectId: string, threshold = 3): Promise<Memory | null> {
   const db = await getDatabase();
 
   const result = await db.execute(
@@ -86,12 +78,12 @@ export async function findSimilarMemory(
        AND is_deleted = 0
        AND simhash IS NOT NULL
      ORDER BY created_at DESC`,
-    [projectId]
+    [projectId],
   );
 
   for (const row of result.rows) {
-    const rowSimhash = row["simhash"];
-    if (typeof rowSimhash === "string" && isDuplicate(simhash, rowSimhash, threshold)) {
+    const rowSimhash = row['simhash'];
+    if (typeof rowSimhash === 'string' && isDuplicate(simhash, rowSimhash, threshold)) {
       return rowToMemory(row);
     }
   }
@@ -102,7 +94,7 @@ export async function findSimilarMemory(
 export async function computeMD5(text: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(text);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }

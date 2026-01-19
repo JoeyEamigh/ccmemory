@@ -1,28 +1,22 @@
-import { useState, useEffect } from "react";
 import {
-  Settings as SettingsIcon,
-  RefreshCw,
-  Brain,
-  FolderOpen,
-  FileText,
-  Clock,
-  Trash2,
   AlertTriangle,
-} from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./ui/card.js";
-import { Button } from "./ui/button.js";
-import { Badge } from "./ui/badge.js";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select.js";
-import { Checkbox } from "./ui/checkbox.js";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.js";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog.js";
-import { cn } from "../lib/utils.js";
+  Brain,
+  Clock,
+  FileText,
+  FolderOpen,
+  RefreshCw,
+  Settings as SettingsIcon,
+  Trash2,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { cn } from '../lib/utils.js';
+import { Badge } from './ui/badge.js';
+import { Button } from './ui/button.js';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card.js';
+import { Checkbox } from './ui/checkbox.js';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select.js';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs.js';
 
 type Stats = {
   totals: {
@@ -48,39 +42,36 @@ type Project = {
 };
 
 const sectorColors: Record<string, string> = {
-  episodic: "bg-sector-episodic",
-  semantic: "bg-sector-semantic",
-  procedural: "bg-sector-procedural",
-  emotional: "bg-sector-emotional",
-  reflective: "bg-sector-reflective",
+  episodic: 'bg-sector-episodic',
+  semantic: 'bg-sector-semantic',
+  procedural: 'bg-sector-procedural',
+  emotional: 'bg-sector-emotional',
+  reflective: 'bg-sector-reflective',
 };
 
-const sectorVariants: Record<
-  string,
-  "episodic" | "semantic" | "procedural" | "emotional" | "reflective"
-> = {
-  episodic: "episodic",
-  semantic: "semantic",
-  procedural: "procedural",
-  emotional: "emotional",
-  reflective: "reflective",
+const sectorVariants: Record<string, 'episodic' | 'semantic' | 'procedural' | 'emotional' | 'reflective'> = {
+  episodic: 'episodic',
+  semantic: 'semantic',
+  procedural: 'procedural',
+  emotional: 'emotional',
+  reflective: 'reflective',
 };
 
 export function Settings(): JSX.Element {
-  const [activeTab, setActiveTab] = useState("stats");
+  const [activeTab, setActiveTab] = useState('stats');
   const [stats, setStats] = useState<Stats | null>(null);
   const [config, setConfig] = useState<ConfigMap | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
-  const [selectedProjectForClear, setSelectedProjectForClear] = useState<string>("all");
+  const [selectedProjectForClear, setSelectedProjectForClear] = useState<string>('all');
   const [clearing, setClearing] = useState(false);
 
   const loadStats = async (): Promise<void> => {
     setLoading(true);
     try {
-      const res = await fetch("/api/stats");
+      const res = await fetch('/api/stats');
       const data = (await res.json()) as Stats;
       setStats(data);
     } finally {
@@ -90,21 +81,21 @@ export function Settings(): JSX.Element {
 
   const loadConfig = async (): Promise<void> => {
     try {
-      const res = await fetch("/api/config");
+      const res = await fetch('/api/config');
       const data = (await res.json()) as { config: ConfigMap };
       setConfig(data.config);
     } catch {
       setConfig({
-        embeddingProvider: "ollama",
-        captureEnabled: "true",
-        captureThreshold: "0.3",
+        embeddingProvider: 'ollama',
+        captureEnabled: 'true',
+        captureThreshold: '0.3',
       });
     }
   };
 
   const loadProjects = async (): Promise<void> => {
     try {
-      const res = await fetch("/api/projects");
+      const res = await fetch('/api/projects');
       const data = (await res.json()) as { projects: Project[] };
       setProjects(data.projects);
     } catch {
@@ -115,12 +106,12 @@ export function Settings(): JSX.Element {
   const updateConfig = async (key: keyof ConfigMap, value: string): Promise<void> => {
     setSaving(true);
     try {
-      await fetch("/api/config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
+      await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key, value }),
       });
-      setConfig((prev) => (prev ? { ...prev, [key]: value } : null));
+      setConfig(prev => (prev ? { ...prev, [key]: value } : null));
     } finally {
       setSaving(false);
     }
@@ -129,10 +120,10 @@ export function Settings(): JSX.Element {
   const clearMemories = async (): Promise<void> => {
     setClearing(true);
     try {
-      const body = selectedProjectForClear === "all" ? {} : { projectId: selectedProjectForClear };
-      await fetch("/api/memories/clear", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const body = selectedProjectForClear === 'all' ? {} : { projectId: selectedProjectForClear };
+      await fetch('/api/memories/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       setClearDialogOpen(false);
@@ -149,26 +140,27 @@ export function Settings(): JSX.Element {
     loadProjects();
   }, []);
 
-  const totalSectorCount = stats
-    ? Object.values(stats.bySector).reduce((a, b) => a + b, 0)
-    : 0;
+  const totalSectorCount = stats ? Object.values(stats.bySector).reduce((a, b) => a + b, 0) : 0;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+          <h2 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
             <SettingsIcon className="h-6 w-6" />
             Settings
           </h2>
-          <p className="text-muted-foreground">
-            System statistics and configuration
-          </p>
+          <p className="text-muted-foreground">System statistics and configuration</p>
         </div>
-        <Button variant="outline" onClick={() => { loadStats(); loadConfig(); loadProjects(); }} disabled={loading}>
-          <RefreshCw
-            className={cn("h-4 w-4 mr-2", loading && "animate-spin")}
-          />
+        <Button
+          variant="outline"
+          onClick={() => {
+            loadStats();
+            loadConfig();
+            loadProjects();
+          }}
+          disabled={loading}>
+          <RefreshCw className={cn('mr-2 h-4 w-4', loading && 'animate-spin')} />
           Refresh
         </Button>
       </div>
@@ -185,24 +177,22 @@ export function Settings(): JSX.Element {
             <div className="space-y-6">
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <Card className="relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-16 h-16 -mr-4 -mt-4 bg-primary/5 rounded-full" />
+                  <div className="absolute top-0 right-0 -mt-4 -mr-4 h-16 w-16 rounded-full bg-primary/5" />
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                       <Brain className="h-4 w-4" />
                       Total Memories
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-3xl font-bold tabular-nums">
-                      {stats.totals.memories.toLocaleString()}
-                    </div>
+                    <div className="text-3xl font-bold tabular-nums">{stats.totals.memories.toLocaleString()}</div>
                   </CardContent>
                 </Card>
 
                 <Card className="relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-16 h-16 -mr-4 -mt-4 bg-primary/5 rounded-full" />
+                  <div className="absolute top-0 right-0 -mt-4 -mr-4 h-16 w-16 rounded-full bg-primary/5" />
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                       <FolderOpen className="h-4 w-4" />
                       Project Memories
                     </CardTitle>
@@ -215,32 +205,28 @@ export function Settings(): JSX.Element {
                 </Card>
 
                 <Card className="relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-16 h-16 -mr-4 -mt-4 bg-primary/5 rounded-full" />
+                  <div className="absolute top-0 right-0 -mt-4 -mr-4 h-16 w-16 rounded-full bg-primary/5" />
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                       <FileText className="h-4 w-4" />
                       Documents
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-3xl font-bold tabular-nums">
-                      {stats.totals.documents.toLocaleString()}
-                    </div>
+                    <div className="text-3xl font-bold tabular-nums">{stats.totals.documents.toLocaleString()}</div>
                   </CardContent>
                 </Card>
 
                 <Card className="relative overflow-hidden">
-                  <div className="absolute top-0 right-0 w-16 h-16 -mr-4 -mt-4 bg-primary/5 rounded-full" />
+                  <div className="absolute top-0 right-0 -mt-4 -mr-4 h-16 w-16 rounded-full bg-primary/5" />
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                       <Clock className="h-4 w-4" />
                       Sessions
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-3xl font-bold tabular-nums">
-                      {stats.totals.sessions.toLocaleString()}
-                    </div>
+                    <div className="text-3xl font-bold tabular-nums">{stats.totals.sessions.toLocaleString()}</div>
                   </CardContent>
                 </Card>
               </div>
@@ -252,26 +238,21 @@ export function Settings(): JSX.Element {
                   </CardHeader>
                   <CardContent className="space-y-4">
                     {Object.entries(stats.bySector).map(([sector, count]) => {
-                      const percentage =
-                        totalSectorCount > 0 ? (count / totalSectorCount) * 100 : 0;
+                      const percentage = totalSectorCount > 0 ? (count / totalSectorCount) * 100 : 0;
                       return (
                         <div key={sector} className="space-y-1">
                           <div className="flex items-center justify-between">
-                            <Badge variant={sectorVariants[sector] ?? "default"}>
-                              {sector}
-                            </Badge>
+                            <Badge variant={sectorVariants[sector] ?? 'default'}>{sector}</Badge>
                             <span className="text-sm font-medium tabular-nums">
-                              {count.toLocaleString()}{" "}
-                              <span className="text-muted-foreground">
-                                ({percentage.toFixed(1)}%)
-                              </span>
+                              {count.toLocaleString()}{' '}
+                              <span className="text-muted-foreground">({percentage.toFixed(1)}%)</span>
                             </span>
                           </div>
-                          <div className="h-2 rounded-full bg-muted overflow-hidden">
+                          <div className="h-2 overflow-hidden rounded-full bg-muted">
                             <div
                               className={cn(
-                                "h-full rounded-full transition-all duration-500",
-                                sectorColors[sector] ?? "bg-primary"
+                                'h-full rounded-full transition-all duration-500',
+                                sectorColors[sector] ?? 'bg-primary',
                               )}
                               style={{ width: `${percentage}%` }}
                             />
@@ -292,16 +273,13 @@ export function Settings(): JSX.Element {
               <Card>
                 <CardHeader>
                   <CardTitle>Embedding Provider</CardTitle>
-                  <CardDescription>
-                    Choose how memories are embedded for semantic search
-                  </CardDescription>
+                  <CardDescription>Choose how memories are embedded for semantic search</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <Select
                     value={config.embeddingProvider}
-                    onValueChange={(v) => updateConfig("embeddingProvider", v)}
-                    disabled={saving}
-                  >
+                    onValueChange={v => updateConfig('embeddingProvider', v)}
+                    disabled={saving}>
                     <SelectTrigger className="w-[200px]">
                       <SelectValue />
                     </SelectTrigger>
@@ -316,24 +294,17 @@ export function Settings(): JSX.Element {
               <Card>
                 <CardHeader>
                   <CardTitle>Memory Capture</CardTitle>
-                  <CardDescription>
-                    Configure automatic memory capture from tool observations
-                  </CardDescription>
+                  <CardDescription>Configure automatic memory capture from tool observations</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="flex items-center space-x-2">
                     <Checkbox
                       id="captureEnabled"
-                      checked={config.captureEnabled === "true"}
-                      onCheckedChange={(checked) =>
-                        updateConfig("captureEnabled", checked ? "true" : "false")
-                      }
+                      checked={config.captureEnabled === 'true'}
+                      onCheckedChange={checked => updateConfig('captureEnabled', checked ? 'true' : 'false')}
                       disabled={saving}
                     />
-                    <label
-                      htmlFor="captureEnabled"
-                      className="text-sm font-medium leading-none cursor-pointer"
-                    >
+                    <label htmlFor="captureEnabled" className="cursor-pointer text-sm leading-none font-medium">
                       Enable automatic memory capture
                     </label>
                   </div>
@@ -342,9 +313,8 @@ export function Settings(): JSX.Element {
                     <label className="text-sm font-medium">Capture Threshold</label>
                     <Select
                       value={config.captureThreshold}
-                      onValueChange={(v) => updateConfig("captureThreshold", v)}
-                      disabled={saving || config.captureEnabled !== "true"}
-                    >
+                      onValueChange={v => updateConfig('captureThreshold', v)}
+                      disabled={saving || config.captureEnabled !== 'true'}>
                       <SelectTrigger className="w-[200px]">
                         <SelectValue />
                       </SelectTrigger>
@@ -372,36 +342,28 @@ export function Settings(): JSX.Element {
                 <Trash2 className="h-5 w-5" />
                 Clear Memories
               </CardTitle>
-              <CardDescription>
-                Permanently delete all memories for a project or all projects
-              </CardDescription>
+              <CardDescription>Permanently delete all memories for a project or all projects</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Select Project</label>
-                <Select
-                  value={selectedProjectForClear}
-                  onValueChange={setSelectedProjectForClear}
-                >
+                <Select value={selectedProjectForClear} onValueChange={setSelectedProjectForClear}>
                   <SelectTrigger className="w-[300px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Projects</SelectItem>
-                    {projects.map((p) => (
+                    {projects.map(p => (
                       <SelectItem key={p.id} value={p.id}>
-                        {p.name ?? p.path.split("/").pop()} ({p.memory_count} memories)
+                        {p.name ?? p.path.split('/').pop()} ({p.memory_count} memories)
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
 
-              <Button
-                variant="destructive"
-                onClick={() => setClearDialogOpen(true)}
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
+              <Button variant="destructive" onClick={() => setClearDialogOpen(true)}>
+                <Trash2 className="mr-2 h-4 w-4" />
                 Clear Memories
               </Button>
             </CardContent>
@@ -417,31 +379,23 @@ export function Settings(): JSX.Element {
               Confirm Memory Deletion
             </DialogTitle>
             <DialogDescription>
-              {selectedProjectForClear === "all"
-                ? "This will delete ALL memories across ALL projects. This action cannot be undone."
+              {selectedProjectForClear === 'all'
+                ? 'This will delete ALL memories across ALL projects. This action cannot be undone.'
                 : `This will delete all memories for the selected project. This action cannot be undone.`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setClearDialogOpen(false)}
-              disabled={clearing}
-            >
+            <Button variant="outline" onClick={() => setClearDialogOpen(false)} disabled={clearing}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              onClick={clearMemories}
-              disabled={clearing}
-            >
+            <Button variant="destructive" onClick={clearMemories} disabled={clearing}>
               {clearing ? (
                 <>
-                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
                   Deleting...
                 </>
               ) : (
-                "Delete All Memories"
+                'Delete All Memories'
               )}
             </Button>
           </DialogFooter>

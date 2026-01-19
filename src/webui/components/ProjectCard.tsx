@@ -1,8 +1,8 @@
-import { FolderGit2, Brain, Users, Activity, Search, Clock } from "lucide-react";
-import { Card, CardContent, CardHeader } from "./ui/card.js";
-import { Button } from "./ui/button.js";
-import { cn } from "../lib/utils.js";
-import { RelativeTime } from "./RelativeTime.js";
+import { Activity, Brain, Clock, FolderGit2, Search, Users } from 'lucide-react';
+import { cn } from '../lib/utils.js';
+import { RelativeTime } from './RelativeTime.js';
+import { Button } from './ui/button.js';
+import { Card, CardContent, CardHeader } from './ui/card.js';
 
 type Project = {
   id: string;
@@ -22,30 +22,26 @@ type ProjectCardProps = {
 };
 
 export function ProjectCard({ project, onClick, onViewMemories, onViewTimeline }: ProjectCardProps): JSX.Element {
-  const displayName = project.name ?? project.path.split("/").pop() ?? project.path;
+  const displayName = project.name ?? project.path.split('/').pop() ?? project.path;
   const hasActivity = project.memory_count > 0 || project.session_count > 0;
 
   return (
     <Card
       className={cn(
-        "cursor-pointer transition-all duration-200 hover:shadow-md hover:bg-accent/30",
-        !hasActivity && "opacity-60"
+        'cursor-pointer transition-all duration-200 hover:bg-accent/30 hover:shadow-md',
+        !hasActivity && 'opacity-60',
       )}
-      onClick={onClick}
-    >
+      onClick={onClick}>
       <CardHeader className="pb-2">
         <div className="flex items-start gap-3">
-          <div className="p-2 rounded-md bg-primary/10">
+          <div className="rounded-md bg-primary/10 p-2">
             <FolderGit2 className="h-5 w-5 text-primary" />
           </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="font-semibold truncate" title={displayName}>
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate font-semibold" title={displayName}>
               {displayName}
             </h3>
-            <p
-              className="text-xs text-muted-foreground truncate"
-              title={project.path}
-            >
+            <p className="truncate text-xs text-muted-foreground" title={project.path}>
               {project.path}
             </p>
           </div>
@@ -64,33 +60,33 @@ export function ProjectCard({ project, onClick, onViewMemories, onViewTimeline }
           </div>
         </div>
         {project.last_activity && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-3">
+          <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
             <Activity className="h-3 w-3" />
-            <span>Last activity: <RelativeTime timestamp={project.last_activity} /></span>
+            <span>
+              Last activity: <RelativeTime timestamp={project.last_activity} />
+            </span>
           </div>
         )}
-        <div className="flex gap-2 mt-3 pt-3 border-t">
+        <div className="mt-3 flex gap-2 border-t pt-3">
           <Button
             variant="ghost"
             size="sm"
             className="flex-1 text-xs"
-            onClick={(e) => {
+            onClick={e => {
               e.stopPropagation();
               onViewMemories();
-            }}
-          >
-            <Search className="h-3 w-3 mr-1" /> Memories
+            }}>
+            <Search className="mr-1 h-3 w-3" /> Memories
           </Button>
           <Button
             variant="ghost"
             size="sm"
             className="flex-1 text-xs"
-            onClick={(e) => {
+            onClick={e => {
               e.stopPropagation();
               onViewTimeline();
-            }}
-          >
-            <Clock className="h-3 w-3 mr-1" /> Timeline
+            }}>
+            <Clock className="mr-1 h-3 w-3" /> Timeline
           </Button>
         </div>
       </CardContent>
