@@ -90,3 +90,7 @@ export function closeDatabase(): void {
     singleton = null;
   }
 }
+
+export function setDatabase(db: Database): void {
+  singleton = db;
+}

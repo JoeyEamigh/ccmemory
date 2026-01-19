@@ -56,25 +56,25 @@ After completing a task:
 ## Phase 2: Embedding Service
 
 ### P2.1: Ollama Provider
-- [ ] **T020** Implement `src/services/embedding/ollama.ts`
-- [ ] **T021** Availability check (model detection)
-- [ ] **T022** Dimension detection
-- [ ] **T023** Batch embedding support
-- [ ] **T024** Write Ollama provider tests (`src/services/embedding/__test__/ollama.test.ts`)
+- [x] **T020** Implement `src/services/embedding/ollama.ts`
+- [x] **T021** Availability check (model detection)
+- [x] **T022** Dimension detection
+- [x] **T023** Batch embedding support
+- [x] **T024** Write Ollama provider tests (`src/services/embedding/__test__/ollama.test.ts`)
 
 ### P2.2: OpenRouter Provider
-- [ ] **T025** Implement `src/services/embedding/openrouter.ts`
-- [ ] **T026** API key management
-- [ ] **T027** Model dimension mapping
-- [ ] **T028** Batch embedding support
-- [ ] **T029** Write OpenRouter provider tests (`src/services/embedding/__test__/openrouter.test.ts`)
+- [x] **T025** Implement `src/services/embedding/openrouter.ts`
+- [x] **T026** API key management
+- [x] **T027** Model dimension mapping
+- [x] **T028** Batch embedding support
+- [x] **T029** Write OpenRouter provider tests (`src/services/embedding/__test__/openrouter.test.ts`)
 
 ### P2.3: Embedding Service
-- [ ] **T030** Implement `src/services/embedding/index.ts`
-- [ ] **T031** Provider fallback logic
-- [ ] **T032** Model registration in database
-- [ ] **T033** Provider switching
-- [ ] **T034** Write service integration tests (`src/services/embedding/__test__/service.test.ts`)
+- [x] **T030** Implement `src/services/embedding/index.ts`
+- [x] **T031** Provider fallback logic
+- [x] **T032** Model registration in database
+- [x] **T033** Provider switching
+- [x] **T034** Write service integration tests (`src/services/embedding/__test__/service.test.ts`)
 
 ---
 
