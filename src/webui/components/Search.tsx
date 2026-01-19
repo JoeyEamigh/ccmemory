@@ -1,12 +1,22 @@
 import { Loader2, Search as SearchIcon } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import type { Memory, MemorySector } from '../../services/memory/types.js';
+import type { Memory, MemorySector, MemoryType } from '../../services/memory/types.js';
 import type { SearchResult } from '../../services/search/hybrid.js';
 import { MemoryCard } from './MemoryCard.js';
 import { Button } from './ui/button.js';
 import { Checkbox } from './ui/checkbox.js';
 import { Input } from './ui/input.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select.js';
+
+const memoryTypeLabels: Record<MemoryType, string> = {
+  preference: 'Preference',
+  codebase: 'Codebase',
+  decision: 'Decision',
+  gotcha: 'Gotcha',
+  pattern: 'Pattern',
+  turn_summary: 'Turn Summary',
+  task_completion: 'Task Completion',
+};
 
 type SearchProps = {
   initialResults: SearchResult[];
@@ -17,6 +27,7 @@ type SearchProps = {
 export function Search({ initialResults, onSelectMemory, wsConnected }: SearchProps): React.JSX.Element {
   const [query, setQuery] = useState('');
   const [sector, setSector] = useState<MemorySector | 'all'>('all');
+  const [memoryType, setMemoryType] = useState<MemoryType | 'all'>('all');
   const [includeSuperseded, setIncludeSuperseded] = useState(false);
   const [results, setResults] = useState(initialResults);
   const [loading, setLoading] = useState(false);
@@ -36,12 +47,14 @@ export function Search({ initialResults, onSelectMemory, wsConnected }: SearchPr
   const handleSearch = useCallback(
     async (e?: React.FormEvent) => {
       e?.preventDefault();
-      if (!query.trim()) return;
+      if (!query.trim() && memoryType === 'all') return;
 
       setLoading(true);
       try {
-        const params = new URLSearchParams({ q: query });
+        const params = new URLSearchParams();
+        if (query.trim()) params.set('q', query);
         if (sector !== 'all') params.set('sector', sector);
+        if (memoryType !== 'all') params.set('memory_type', memoryType);
         if (includeSuperseded) params.set('include_superseded', 'true');
         if (projectId) params.set('project', projectId);
         if (sessionId) params.set('session', sessionId);
@@ -56,7 +69,7 @@ export function Search({ initialResults, onSelectMemory, wsConnected }: SearchPr
         setLoading(false);
       }
     },
-    [query, sector, includeSuperseded, projectId, sessionId],
+    [query, sector, memoryType, includeSuperseded, projectId, sessionId],
   );
 
   return (
@@ -75,7 +88,7 @@ export function Search({ initialResults, onSelectMemory, wsConnected }: SearchPr
         </div>
 
         <Select value={sector} onValueChange={v => setSector(v as MemorySector | 'all')}>
-          <SelectTrigger className="w-[160px]">
+          <SelectTrigger className="w-[140px]">
             <SelectValue placeholder="All Sectors" />
           </SelectTrigger>
           <SelectContent>
@@ -85,6 +98,20 @@ export function Search({ initialResults, onSelectMemory, wsConnected }: SearchPr
             <SelectItem value="procedural">Procedural</SelectItem>
             <SelectItem value="emotional">Emotional</SelectItem>
             <SelectItem value="reflective">Reflective</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={memoryType} onValueChange={v => setMemoryType(v as MemoryType | 'all')}>
+          <SelectTrigger className="w-[160px]">
+            <SelectValue placeholder="All Types" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            {Object.entries(memoryTypeLabels).map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
 

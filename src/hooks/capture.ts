@@ -2,8 +2,7 @@ import { getOrCreateSession } from '../services/memory/sessions.js';
 import { createMemoryStore } from '../services/memory/store.js';
 import { getOrCreateProject } from '../services/project.js';
 import { log } from '../utils/log.js';
-import { getPort } from '../utils/paths.js';
-import { isServerRunning, registerClient } from '../webui/coordination.js';
+import { registerClient } from '../webui/coordination.js';
 
 type HookInput = {
   session_id: string;
@@ -48,7 +47,7 @@ export async function captureHook(): Promise<void> {
   log.debug('capture', 'Processing tool observation', { session_id, tool_name });
 
   // Ensure server is running and register this session
-  await ensureServerAndRegister(session_id);
+  await registerSessionClient(session_id);
 
   const resultStr = JSON.stringify(tool_response);
   if (resultStr.length > 10000) {
@@ -141,49 +140,18 @@ function extractFilePaths(input: Record<string, unknown>, result: unknown): stri
   return [...new Set(paths)];
 }
 
-async function ensureServerAndRegister(sessionId: string): Promise<void> {
+async function registerSessionClient(sessionId: string): Promise<void> {
   try {
-    // Register this session as a client
     await registerClient(sessionId);
-
-    // Check if server is already running
-    if (await isServerRunning(getPort())) {
-      log.debug('capture', 'WebUI server already running');
-      return;
-    }
-
-    // Start server in background
-    log.info('capture', 'Starting WebUI server in background');
-    const binaryPath = process.argv[0] ?? 'ccmemory';
-    const proc = Bun.spawn([binaryPath, 'serve', '--port', String(getPort())], {
-      stdout: 'ignore',
-      stderr: 'ignore',
-      stdin: 'ignore',
-    });
-    proc.unref(); // Allow this process to exit without waiting for server
-
-    // Wait briefly for server to start
-    await new Promise(resolve => setTimeout(resolve, 500));
+    log.debug('capture', 'Session registered', { sessionId });
   } catch (err) {
-    log.warn('capture', 'Failed to ensure server running', {
+    log.debug('capture', 'Session registration skipped', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
 }
 
-async function notifyMemoryCreated(memoryId: string, projectId: string, sessionId: string): Promise<void> {
-  try {
-    const res = await fetch(`http://localhost:${getPort()}/api/hooks/memory-created`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ memoryId, projectId, sessionId }),
-    });
-    if (!res.ok) {
-      log.debug('capture', 'WebUI notification failed (server may not be running)', {
-        status: res.status,
-      });
-    }
-  } catch {
-    log.debug('capture', 'WebUI notification skipped (server not running)');
-  }
+async function notifyMemoryCreated(_memoryId: string, _projectId: string, _sessionId: string): Promise<void> {
+  // WebUI notifications are optional - silently skip if server not running
+  // This function is kept for potential future use with WebSocket notifications
 }

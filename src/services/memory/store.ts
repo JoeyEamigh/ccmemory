@@ -1,8 +1,9 @@
 import { getDatabase } from '../../db/database.js';
 import { log } from '../../utils/log.js';
+import { publishEvent } from '../events/pubsub.js';
 import { computeMD5, computeSimhash, findSimilarMemory } from './dedup.js';
 import type { ListOptions, Memory, MemoryInput, UsageType } from './types.js';
-import { classifyMemorySector } from './types.js';
+import { classifyMemorySector, MEMORY_TYPE_TO_SECTOR } from './types.js';
 import { rowToMemory } from './utils.js';
 
 export type MemoryStore = {
@@ -50,7 +51,9 @@ export function createMemoryStore(): MemoryStore {
       const id = crypto.randomUUID();
       const now = Date.now();
 
-      const sector = input.sector || classifyMemorySector(input.content);
+      const sector = input.memoryType
+        ? MEMORY_TYPE_TO_SECTOR[input.memoryType]
+        : input.sector || classifyMemorySector(input.content);
       const tier = input.tier || 'project';
       const importance = input.importance ?? 0.5;
 
@@ -80,19 +83,25 @@ export function createMemoryStore(): MemoryStore {
         return reinforced;
       }
 
-      const concepts = extractConcepts(input.content);
+      const concepts = input.concepts && input.concepts.length > 0
+        ? input.concepts
+        : extractConcepts(input.content);
+      const confidence = input.confidence ?? 0.5;
+      const summary = input.summary ?? null;
 
       await db.execute(
         `INSERT INTO memories (
-          id, project_id, content, content_hash, sector, tier, importance,
+          id, project_id, content, summary, content_hash, sector, tier, importance,
           simhash, salience, access_count, created_at, updated_at,
           last_accessed, valid_from, is_deleted,
-          tags_json, concepts_json, files_json, categories_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          tags_json, concepts_json, files_json, categories_json,
+          memory_type, context, confidence, segment_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           projectId,
           input.content,
+          summary,
           contentHash,
           sector,
           tier,
@@ -109,6 +118,10 @@ export function createMemoryStore(): MemoryStore {
           JSON.stringify(concepts),
           JSON.stringify(input.files || []),
           JSON.stringify([]),
+          input.memoryType ?? null,
+          input.context ?? null,
+          confidence,
+          input.segmentId ?? null,
         ],
       );
 
@@ -127,6 +140,14 @@ export function createMemoryStore(): MemoryStore {
       if (!created) {
         throw new Error('Failed to get created memory');
       }
+
+      publishEvent({
+        type: 'memory:created',
+        memoryId: id,
+        projectId,
+        timestamp: now,
+      }).catch(() => {});
+
       return created;
     },
 
@@ -214,6 +235,9 @@ export function createMemoryStore(): MemoryStore {
       const db = await getDatabase();
       log.info('memory', 'Deleting memory', { id, hard });
 
+      const memory = await store.get(id);
+      const projectId = memory?.projectId ?? '';
+
       if (hard) {
         await db.execute('DELETE FROM memories WHERE id = ?', [id]);
       } else {
@@ -223,6 +247,15 @@ export function createMemoryStore(): MemoryStore {
           now,
           id,
         ]);
+      }
+
+      if (projectId) {
+        publishEvent({
+          type: 'memory:deleted',
+          memoryId: id,
+          projectId,
+          timestamp: Date.now(),
+        }).catch(() => {});
       }
     },
 
@@ -263,6 +296,11 @@ export function createMemoryStore(): MemoryStore {
       if (options.tier) {
         sql += ' AND tier = ?';
         args.push(options.tier);
+      }
+
+      if (options.memoryType) {
+        sql += ' AND memory_type = ?';
+        args.push(options.memoryType);
       }
 
       if (options.minSalience !== undefined) {
@@ -320,6 +358,14 @@ export function createMemoryStore(): MemoryStore {
       if (!reinforced) {
         throw new Error('Failed to get reinforced memory');
       }
+
+      publishEvent({
+        type: 'memory:reinforced',
+        memoryId: id,
+        projectId: reinforced.projectId,
+        timestamp: now,
+      }).catch(() => {});
+
       return reinforced;
     },
 

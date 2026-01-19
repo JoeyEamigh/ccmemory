@@ -2,6 +2,7 @@
 
 import { configCommand } from './cli/commands/config.js';
 import { archiveCommand, deleteCommand } from './cli/commands/delete.js';
+import { extractBgCommand } from './cli/commands/extract-bg.js';
 import { healthCommand } from './cli/commands/health.js';
 import { exportCommand, importCommand } from './cli/commands/import.js';
 import { searchCommand } from './cli/commands/search.js';
@@ -10,6 +11,7 @@ import { showCommand } from './cli/commands/show.js';
 import { shutdownCommand } from './cli/commands/shutdown.js';
 import { statsCommand } from './cli/commands/stats.js';
 import { updateCommand } from './cli/commands/update.js';
+import { testSdkCommand } from './cli/commands/test-sdk.js';
 import { log } from './utils/log.js';
 
 const VERSION = '0.1.0';
@@ -27,6 +29,8 @@ const cliCommands: Record<string, (args: string[]) => Promise<void>> = {
   serve: serveCommand,
   shutdown: shutdownCommand,
   update: updateCommand,
+  'extract-bg': extractBgCommand,
+  'test-sdk': testSdkCommand,
 };
 
 async function runMcpServer(): Promise<void> {
@@ -51,9 +55,39 @@ async function runHook(hookName: string): Promise<void> {
       await cleanupHook();
       break;
     }
+    case 'user-prompt': {
+      const { userPromptHook } = await import('./hooks/extraction-hooks.js');
+      await userPromptHook();
+      break;
+    }
+    case 'post-tool': {
+      const { postToolHook } = await import('./hooks/extraction-hooks.js');
+      await postToolHook();
+      break;
+    }
+    case 'pre-compact': {
+      const { preCompactHook } = await import('./hooks/extraction-hooks.js');
+      await preCompactHook();
+      break;
+    }
+    case 'stop': {
+      const { stopHook } = await import('./hooks/extraction-hooks.js');
+      await stopHook();
+      break;
+    }
+    case 'session-start': {
+      const { sessionStartHook } = await import('./hooks/extraction-hooks.js');
+      await sessionStartHook();
+      break;
+    }
+    case 'session-end': {
+      const { sessionEndHook } = await import('./hooks/extraction-hooks.js');
+      await sessionEndHook();
+      break;
+    }
     default:
       console.error(`Unknown hook: ${hookName}`);
-      console.error('Available hooks: capture, summarize, cleanup');
+      console.error('Available hooks: capture, summarize, cleanup, user-prompt, post-tool, pre-compact, stop, session-start, session-end');
       process.exit(1);
   }
 }

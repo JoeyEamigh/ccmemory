@@ -23,6 +23,7 @@ type Session = {
   summary?: string;
   memoryCount?: number;
   lastActivity?: number;
+  hasActiveWork?: boolean;
 };
 
 type WebSocketMessage = {
@@ -62,8 +63,8 @@ export function SessionCard({
   const [memoryCount, setMemoryCount] = useState(session.memoryCount ?? 0);
   const [hasNewMemory, setHasNewMemory] = useState(false);
 
-  const isActive = !session.endedAt;
-  const duration = session.endedAt
+  const isActive = !session.endedAt || session.hasActiveWork;
+  const duration = session.endedAt && !session.hasActiveWork
     ? formatDuration(session.endedAt - session.startedAt)
     : formatDuration(Date.now() - session.startedAt) + ' (active)';
 

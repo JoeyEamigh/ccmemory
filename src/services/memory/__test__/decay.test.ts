@@ -22,6 +22,7 @@ function createMockMemory(overrides: Partial<Memory> = {}): Memory {
     importance: 0.5,
     categories: [],
     salience: 1.0,
+    confidence: 0.5,
     accessCount: 0,
     createdAt: Date.now(),
     updatedAt: Date.now(),

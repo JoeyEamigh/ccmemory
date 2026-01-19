@@ -40,10 +40,16 @@ export async function showCommand(args: string[]): Promise<void> {
     console.log(`ID: ${memory.id}`);
     console.log(`Sector: ${memory.sector}`);
     console.log(`Tier: ${memory.tier}`);
+    if (memory.memoryType) {
+      console.log(`Type: ${memory.memoryType}`);
+    }
     console.log(`Salience: ${memory.salience.toFixed(3)}`);
     console.log(`Access Count: ${memory.accessCount}`);
     console.log(`Created: ${new Date(memory.createdAt).toLocaleString()}`);
     console.log(`Last Accessed: ${new Date(memory.lastAccessed).toLocaleString()}`);
+    if (memory.summary) {
+      console.log(`\nSummary: ${memory.summary}`);
+    }
     console.log(`\nContent:\n${memory.content}`);
 
     if (memory.tags.length > 0) {

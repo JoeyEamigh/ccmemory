@@ -8,14 +8,36 @@
   "homepage": "https://github.com/JoeyEamigh/ccmemory",
   "repository": "https://github.com/JoeyEamigh/ccmemory",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook user-prompt",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook capture",
-            "timeout": 15
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook post-tool",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook pre-compact",
+            "timeout": 60
           }
         ]
       }
@@ -25,8 +47,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook summarize",
-            "timeout": 120
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook stop",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook session-start",
+            "timeout": 10
           }
         ]
       }
@@ -36,8 +69,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook cleanup",
-            "timeout": 15
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook session-end",
+            "timeout": 10
           }
         ]
       }

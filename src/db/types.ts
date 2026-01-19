@@ -2,6 +2,10 @@ export type MemorySector = 'episodic' | 'semantic' | 'procedural' | 'emotional' 
 
 export type MemoryTier = 'session' | 'project';
 
+export type MemoryType = 'preference' | 'codebase' | 'decision' | 'gotcha' | 'pattern';
+
+export type ExtractionTrigger = 'user_prompt' | 'pre_compact' | 'stop';
+
 export type RelationshipType =
   | 'SUPERSEDES'
   | 'CONTRADICTS'

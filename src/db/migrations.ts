@@ -1,5 +1,5 @@
 import type { Client } from '@libsql/client';
-import { FTS_STATEMENTS, INDEX_STATEMENTS, SCHEMA_STATEMENTS } from './schema.js';
+import { EXTRACTION_SCHEMA_STATEMENTS, FTS_STATEMENTS, INDEX_STATEMENTS, SCHEMA_STATEMENTS } from './schema.js';
 
 export type Migration = {
   version: number;
@@ -44,6 +44,27 @@ export const migrations: Migration[] = [
         ON memories(project_id, created_at DESC) WHERE is_deleted = 0`,
       `CREATE INDEX IF NOT EXISTS idx_memories_project_sector_created
         ON memories(project_id, sector, created_at DESC) WHERE is_deleted = 0`,
+    ],
+  },
+  {
+    version: 5,
+    name: 'conceptual_extraction',
+    statements: [
+      ...EXTRACTION_SCHEMA_STATEMENTS,
+      `ALTER TABLE memories ADD COLUMN memory_type TEXT`,
+      `ALTER TABLE memories ADD COLUMN context TEXT`,
+      `ALTER TABLE memories ADD COLUMN confidence REAL DEFAULT 0.5`,
+      `ALTER TABLE memories ADD COLUMN segment_id TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type) WHERE memory_type IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_extraction_segments_session ON extraction_segments(session_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_extraction_segments_project ON extraction_segments(project_id)`,
+    ],
+  },
+  {
+    version: 6,
+    name: 'task_completion_tracking',
+    statements: [
+      `ALTER TABLE segment_accumulators ADD COLUMN completed_tasks_json TEXT DEFAULT '[]'`,
     ],
   },
 ];

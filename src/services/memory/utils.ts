@@ -1,5 +1,5 @@
 import type { Row } from '@libsql/client';
-import type { Memory, MemorySector, MemoryTier } from './types.js';
+import type { Memory, MemorySector, MemoryTier, MemoryType } from './types.js';
 
 function parseJsonArray(value: unknown): string[] {
   if (typeof value === 'string') {
@@ -48,6 +48,10 @@ export function rowToMemory(row: Row): Memory {
     tier: asString(row['tier'], 'project') as MemoryTier,
     importance: asNumber(row['importance'], 0.5),
     categories: parseJsonArray(row['categories_json']),
+    memoryType: asOptionalString(row['memory_type']) as MemoryType | undefined,
+    context: asOptionalString(row['context']),
+    confidence: asNumber(row['confidence'], 0.5),
+    segmentId: asOptionalString(row['segment_id']),
     simhash: asOptionalString(row['simhash']),
     salience: asNumber(row['salience'], 1.0),
     accessCount: asNumber(row['access_count'], 0),

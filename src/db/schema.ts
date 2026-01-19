@@ -178,6 +178,44 @@ END`,
 END`,
 ];
 
+export const EXTRACTION_SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS extraction_segments (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    user_prompts_json TEXT,
+    files_read_json TEXT,
+    files_modified_json TEXT,
+    tool_call_count INTEGER DEFAULT 0,
+    memories_extracted INTEGER DEFAULT 0,
+    extraction_tokens INTEGER,
+    segment_start INTEGER,
+    segment_end INTEGER,
+    extraction_duration_ms INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS segment_accumulators (
+    session_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    segment_id TEXT NOT NULL,
+    segment_start INTEGER NOT NULL,
+    user_prompts_json TEXT DEFAULT '[]',
+    files_read_json TEXT DEFAULT '[]',
+    files_modified_json TEXT DEFAULT '[]',
+    commands_run_json TEXT DEFAULT '[]',
+    errors_encountered_json TEXT DEFAULT '[]',
+    searches_performed_json TEXT DEFAULT '[]',
+    last_assistant_message TEXT,
+    tool_call_count INTEGER DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+  )`,
+];
+
 export const INDEX_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id) WHERE is_deleted = 0`,
   `CREATE INDEX IF NOT EXISTS idx_memories_sector ON memories(sector)`,

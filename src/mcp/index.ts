@@ -5,6 +5,7 @@ import { createDocumentService, type DocumentSearchResult } from '../services/do
 import { createEmbeddingService } from '../services/embedding/index.js';
 import { supersede } from '../services/memory/relationships.js';
 import { createMemoryStore } from '../services/memory/store.js';
+import { isValidMemoryType, MEMORY_TYPE_TO_SECTOR, type MemoryType } from '../services/memory/types.js';
 import { getOrCreateProject } from '../services/project.js';
 import type { TimelineResult } from '../services/search/hybrid.js';
 import { createSearchService, type SearchResult } from '../services/search/hybrid.js';
@@ -28,6 +29,11 @@ const TOOLS = [
           type: 'string',
           enum: ['episodic', 'semantic', 'procedural', 'emotional', 'reflective'],
           description: 'Filter by memory sector',
+        },
+        memory_type: {
+          type: 'string',
+          enum: ['preference', 'codebase', 'decision', 'gotcha', 'pattern', 'turn_summary', 'task_completion'],
+          description: 'Filter by extracted memory type',
         },
         limit: { type: 'number', description: 'Max results (default: 10)' },
         mode: {
@@ -68,15 +74,24 @@ const TOOLS = [
   },
   {
     name: 'memory_add',
-    description: 'Manually add a memory. Use for explicit notes, decisions, or procedures.',
+    description: 'Manually add a memory. Use for explicit notes, decisions, preferences, or procedures.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         content: { type: 'string', description: 'Memory content' },
+        type: {
+          type: 'string',
+          enum: ['preference', 'codebase', 'decision', 'gotcha', 'pattern', 'turn_summary', 'task_completion'],
+          description: 'Memory type (determines sector automatically)',
+        },
         sector: {
           type: 'string',
           enum: ['episodic', 'semantic', 'procedural', 'emotional', 'reflective'],
           description: 'Memory sector (auto-classified if not provided)',
+        },
+        context: {
+          type: 'string',
+          description: 'Context of how this was discovered or why it matters',
         },
         tags: {
           type: 'array',
@@ -186,6 +201,7 @@ const TOOLS = [
 type ToolArgs = {
   query?: string;
   sector?: string;
+  memory_type?: string;
   limit?: number;
   mode?: string;
   include_superseded?: boolean;
@@ -193,6 +209,8 @@ type ToolArgs = {
   depth_before?: number;
   depth_after?: number;
   content?: string;
+  type?: string;
+  context?: string;
   tags?: string[];
   importance?: number;
   memory_id?: string;
@@ -218,10 +236,14 @@ async function handleToolCall(name: string, args: ToolArgs, cwd: string): Promis
   switch (name) {
     case 'memory_search': {
       if (!args.query) throw new Error('query is required');
+      const searchMemoryType = args.memory_type && isValidMemoryType(args.memory_type)
+        ? (args.memory_type as MemoryType)
+        : undefined;
       const results = await search.search({
         query: args.query,
         projectId: project.id,
         sector: args.sector as 'episodic' | 'semantic' | 'procedural' | 'emotional' | 'reflective' | undefined,
+        memoryType: searchMemoryType,
         limit: args.limit ?? 10,
         mode: (args.mode as 'hybrid' | 'semantic' | 'keyword') ?? 'hybrid',
         includeSuperseded: args.include_superseded ?? false,
@@ -239,18 +261,27 @@ async function handleToolCall(name: string, args: ToolArgs, cwd: string): Promis
 
     case 'memory_add': {
       if (!args.content) throw new Error('content is required');
+      const memoryType = args.type && isValidMemoryType(args.type) ? (args.type as MemoryType) : undefined;
+      const sector = memoryType
+        ? MEMORY_TYPE_TO_SECTOR[memoryType]
+        : (args.sector as 'episodic' | 'semantic' | 'procedural' | 'emotional' | 'reflective' | undefined);
+
       const memory = await store.create(
         {
           content: args.content,
-          sector: args.sector as 'episodic' | 'semantic' | 'procedural' | 'emotional' | 'reflective' | undefined,
+          sector,
+          memoryType,
+          context: args.context,
           tags: args.tags,
           importance: args.importance,
+          confidence: memoryType ? 1.0 : 0.5,
           tier: 'project',
         },
         project.id,
       );
       log.info('mcp', 'Tool call completed', { name, ms: Date.now() - start });
-      return `Memory created: ${memory.id} (sector: ${memory.sector}, salience: ${memory.salience})`;
+      const typeInfo = memory.memoryType ? `, type: ${memory.memoryType}` : '';
+      return `Memory created: ${memory.id} (sector: ${memory.sector}${typeInfo}, salience: ${memory.salience})`;
     }
 
     case 'memory_reinforce': {
@@ -315,8 +346,9 @@ function formatSearchResults(results: SearchResult[]): string {
   return results
     .map((r, i) => {
       const mem = r.memory;
+      const typeInfo = mem.memoryType ? `[${mem.memoryType}] ` : '';
       const lines = [
-        `[${i + 1}] (${mem.sector}, score: ${r.score.toFixed(2)}, salience: ${mem.salience.toFixed(2)})`,
+        `[${i + 1}] ${typeInfo}(${mem.sector}, score: ${r.score.toFixed(2)}, salience: ${mem.salience.toFixed(2)})`,
         `ID: ${mem.id}`,
       ];
 

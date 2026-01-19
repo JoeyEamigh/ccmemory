@@ -17,6 +17,7 @@ type Session = {
   summary?: string;
   memoryCount?: number;
   lastActivity?: number;
+  hasActiveWork?: boolean;
 };
 
 type WebSocketMessage = {
@@ -101,7 +102,7 @@ export function AgentView({
     }
   };
 
-  const activeSessions = sessions.filter(s => !s.endedAt);
+  const activeSessions = sessions.filter(s => !s.endedAt || s.hasActiveWork);
   const totalMemories = sessions.reduce((sum, s) => sum + (s.memoryCount ?? 0), 0);
 
   return (
@@ -183,7 +184,7 @@ export function AgentView({
                     {group.sessions.length} parallel agents
                   </Badge>
                 )}
-                {group.sessions.some(s => !s.endedAt) && (
+                {group.sessions.some(s => !s.endedAt || s.hasActiveWork) && (
                   <Badge className="animate-pulse bg-green-500 text-white">ACTIVE</Badge>
                 )}
               </div>

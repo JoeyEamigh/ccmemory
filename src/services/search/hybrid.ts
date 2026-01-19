@@ -1,7 +1,7 @@
 import { getDatabase } from '../../db/database.js';
 import { log } from '../../utils/log.js';
 import type { EmbeddingService } from '../embedding/types.js';
-import type { Memory, MemorySector, MemoryTier, UsageType } from '../memory/types.js';
+import type { Memory, MemorySector, MemoryTier, MemoryType, UsageType } from '../memory/types.js';
 import { rowToMemory } from '../memory/utils.js';
 import { searchFTS } from './fts.js';
 import { computeScore, DEFAULT_WEIGHTS, type RankingWeights } from './ranking.js';
@@ -14,6 +14,7 @@ export type SearchOptions = {
   projectId?: string;
   sector?: MemorySector;
   tier?: MemoryTier;
+  memoryType?: MemoryType;
   limit?: number;
   minSalience?: number;
   includeDocuments?: boolean;
@@ -244,6 +245,7 @@ export function createSearchService(embeddingService: EmbeddingService | null): 
         projectId,
         sector,
         tier,
+        memoryType,
         limit = 10,
         minSalience = 0,
         includeSuperseded = false,
@@ -320,6 +322,7 @@ export function createSearchService(embeddingService: EmbeddingService | null): 
 
         if (sector && memory.sector !== sector) continue;
         if (tier && memory.tier !== tier) continue;
+        if (memoryType && memory.memoryType !== memoryType) continue;
         if (memory.salience < minSalience) continue;
         if (!includeSuperseded && memory.validUntil) continue;
 

@@ -4,11 +4,11 @@
 
 set -e
 
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$(dirname "$(realpath "$0")")")}"
-BIN_DIR="$PLUGIN_ROOT/bin"
+BIN_DIR="$HOME/.local/bin"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ccmemory"
 BINARY="$BIN_DIR/ccmemory"
-VERSION_FILE="$BIN_DIR/.ccmemory-version"
-UPDATE_CHECK_FILE="$BIN_DIR/.last-update-check"
+VERSION_FILE="$DATA_DIR/.version"
+UPDATE_CHECK_FILE="$DATA_DIR/.update-check"
 REPO="JoeyEamigh/ccmemory"
 
 # Update check interval: 24 hours in seconds
@@ -82,6 +82,7 @@ download_binary() {
 
     mv "$BINARY.tmp" "$BINARY"
     chmod +x "$BINARY"
+    mkdir -p "$DATA_DIR"
     echo "$version" > "$VERSION_FILE"
     date +%s > "$UPDATE_CHECK_FILE"
 
@@ -96,6 +97,7 @@ check_for_updates_background() {
         installed_version=$(cat "$VERSION_FILE" 2>/dev/null || echo "")
 
         latest_version=$(get_latest_version)
+        mkdir -p "$DATA_DIR"
         date +%s > "$UPDATE_CHECK_FILE"
 
         if [ -n "$latest_version" ] && [ -n "$installed_version" ] && [ "$latest_version" != "$installed_version" ]; then

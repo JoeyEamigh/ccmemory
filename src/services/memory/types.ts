@@ -2,6 +2,8 @@ export type MemorySector = 'episodic' | 'semantic' | 'procedural' | 'emotional' 
 
 export type MemoryTier = 'session' | 'project';
 
+export type MemoryType = 'preference' | 'codebase' | 'decision' | 'gotcha' | 'pattern' | 'turn_summary' | 'task_completion';
+
 export type Memory = {
   id: string;
   projectId: string;
@@ -13,6 +15,11 @@ export type Memory = {
   tier: MemoryTier;
   importance: number;
   categories: string[];
+
+  memoryType?: MemoryType;
+  context?: string;
+  confidence: number;
+  segmentId?: string;
 
   simhash?: string;
 
@@ -36,12 +43,18 @@ export type Memory = {
 
 export type MemoryInput = {
   content: string;
+  summary?: string;
+  concepts?: string[];
   sector?: MemorySector;
   tier?: MemoryTier;
   importance?: number;
   tags?: string[];
   files?: string[];
   validFrom?: number;
+  memoryType?: MemoryType;
+  context?: string;
+  confidence?: number;
+  segmentId?: string;
 };
 
 export type ListOptions = {
@@ -50,6 +63,7 @@ export type ListOptions = {
   offset?: number;
   sector?: MemorySector;
   tier?: MemoryTier;
+  memoryType?: MemoryType;
   minSalience?: number;
   includeDeleted?: boolean;
   orderBy?: 'created_at' | 'salience' | 'last_accessed';
@@ -142,3 +156,19 @@ export function isValidSector(sector: string): sector is MemorySector {
 export function isValidTier(tier: string): tier is MemoryTier {
   return tier === 'session' || tier === 'project';
 }
+
+export const ALL_MEMORY_TYPES: MemoryType[] = ['preference', 'codebase', 'decision', 'gotcha', 'pattern', 'turn_summary', 'task_completion'];
+
+export function isValidMemoryType(type: unknown): type is MemoryType {
+  return typeof type === 'string' && ALL_MEMORY_TYPES.includes(type as MemoryType);
+}
+
+export const MEMORY_TYPE_TO_SECTOR: Record<MemoryType, MemorySector> = {
+  preference: 'emotional',
+  codebase: 'semantic',
+  decision: 'reflective',
+  gotcha: 'procedural',
+  pattern: 'procedural',
+  turn_summary: 'reflective',
+  task_completion: 'episodic',
+};

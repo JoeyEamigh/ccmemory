@@ -1,10 +1,20 @@
 import { Clock, Link2, Zap } from 'lucide-react';
-import type { MemorySector } from '../../services/memory/types.js';
+import type { MemorySector, MemoryType } from '../../services/memory/types.js';
 import type { SearchResult } from '../../services/search/hybrid.js';
 import { cn } from '../lib/utils.js';
 import { RelativeTime } from './RelativeTime.js';
 import { Badge } from './ui/badge.js';
 import { Card, CardContent, CardFooter, CardHeader } from './ui/card.js';
+
+const memoryTypeLabels: Record<MemoryType, string> = {
+  preference: 'Preference',
+  codebase: 'Codebase',
+  decision: 'Decision',
+  gotcha: 'Gotcha',
+  pattern: 'Pattern',
+  turn_summary: 'Turn Summary',
+  task_completion: 'Task Completion',
+};
 
 type MemoryCardProps = {
   result: SearchResult;
@@ -41,6 +51,12 @@ export function MemoryCard({ result, onClick }: MemoryCardProps): React.JSX.Elem
       <CardHeader className="pb-3">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={sectorVariant[memory.sector]}>{memory.sector}</Badge>
+
+          {memory.memoryType && (
+            <Badge variant="outline" className="text-[10px]">
+              {memoryTypeLabels[memory.memoryType] ?? memory.memoryType}
+            </Badge>
+          )}
 
           <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <Zap className="h-3 w-3" />
@@ -79,19 +95,33 @@ export function MemoryCard({ result, onClick }: MemoryCardProps): React.JSX.Elem
         <p className="line-clamp-3 text-sm leading-relaxed">{memory.summary ?? memory.content}</p>
       </CardContent>
 
-      <CardFooter className="pt-0 text-xs text-muted-foreground">
-        <div className="flex items-center gap-1">
-          <Clock className="h-3 w-3" />
-          <RelativeTime timestamp={memory.createdAt} />
+      <CardFooter className="flex-col items-start gap-2 pt-0 text-xs text-muted-foreground">
+        <div className="flex w-full items-center">
+          <div className="flex items-center gap-1">
+            <Clock className="h-3 w-3" />
+            <RelativeTime timestamp={memory.createdAt} />
+          </div>
+          {memory.tags && memory.tags.length > 0 && (
+            <div className="ml-auto flex flex-wrap gap-1">
+              {memory.tags.slice(0, 3).map(tag => (
+                <span key={tag} className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+                  {tag}
+                </span>
+              ))}
+              {memory.tags.length > 3 && <span className="text-[10px]">+{memory.tags.length - 3}</span>}
+            </div>
+          )}
         </div>
-        {memory.tags && memory.tags.length > 0 && (
-          <div className="ml-auto flex flex-wrap gap-1">
-            {memory.tags.slice(0, 3).map(tag => (
-              <span key={tag} className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
-                {tag}
+        {memory.concepts && memory.concepts.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {memory.concepts.slice(0, 5).map(concept => (
+              <span key={concept} className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                {concept}
               </span>
             ))}
-            {memory.tags.length > 3 && <span className="text-[10px]">+{memory.tags.length - 3}</span>}
+            {memory.concepts.length > 5 && (
+              <span className="text-[10px]">+{memory.concepts.length - 5}</span>
+            )}
           </div>
         )}
       </CardFooter>

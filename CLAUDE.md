@@ -7,7 +7,7 @@ Self-contained memory plugin for Claude Code. Provides persistent, searchable me
 ```bash
 bun install                    # Install dependencies
 bun run build                  # Build single executable (dist/ccmemory)
-bun run bin:install            # Build and copy to ~/.local/bin/ccmemory
+bun run plugin:install         # Build and copy to ~/.local/bin/ccmemory
 bun run test                   # Run all tests
 ```
 

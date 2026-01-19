@@ -32,6 +32,10 @@ type ConfigMap = {
   embeddingProvider: string;
   captureEnabled: string;
   captureThreshold: string;
+  extractionModel: string;
+  minToolCallsToExtract: string;
+  similarityThreshold: string;
+  confidenceThreshold: string;
 };
 
 type Project = {
@@ -89,6 +93,10 @@ export function Settings(): React.JSX.Element {
         embeddingProvider: 'ollama',
         captureEnabled: 'true',
         captureThreshold: '0.3',
+        extractionModel: 'sonnet',
+        minToolCallsToExtract: '3',
+        similarityThreshold: '0.7',
+        confidenceThreshold: '0.7',
       });
     }
   };
@@ -327,6 +335,107 @@ export function Settings(): React.JSX.Element {
                     </Select>
                     <p className="text-xs text-muted-foreground">
                       Only capture memories with importance above this threshold
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Memory Extraction</CardTitle>
+                  <CardDescription>Configure how memories are extracted from work sessions</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Extraction Model</label>
+                    <Select
+                      value={config.extractionModel}
+                      onValueChange={v => updateConfig('extractionModel', v)}
+                      disabled={saving}>
+                      <SelectTrigger className="w-[200px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="haiku">Haiku (Fast)</SelectItem>
+                        <SelectItem value="sonnet">Sonnet (Balanced)</SelectItem>
+                        <SelectItem value="opus">Opus (Best Quality)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Model used for extracting memories from work context
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Min Tool Calls to Extract</label>
+                    <Select
+                      value={config.minToolCallsToExtract}
+                      onValueChange={v => updateConfig('minToolCallsToExtract', v)}
+                      disabled={saving}>
+                      <SelectTrigger className="w-[200px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">1 (Extract frequently)</SelectItem>
+                        <SelectItem value="3">3 (Default)</SelectItem>
+                        <SelectItem value="5">5 (Less frequent)</SelectItem>
+                        <SelectItem value="10">10 (Rare)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Minimum number of tool calls before extraction is triggered
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Memory Superseding</CardTitle>
+                  <CardDescription>Configure when new memories replace outdated ones</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Similarity Threshold</label>
+                    <Select
+                      value={config.similarityThreshold}
+                      onValueChange={v => updateConfig('similarityThreshold', v)}
+                      disabled={saving}>
+                      <SelectTrigger className="w-[200px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="0.5">50% (Loose)</SelectItem>
+                        <SelectItem value="0.6">60%</SelectItem>
+                        <SelectItem value="0.7">70% (Default)</SelectItem>
+                        <SelectItem value="0.8">80%</SelectItem>
+                        <SelectItem value="0.9">90% (Strict)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      How similar memories must be to be considered for superseding
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Confidence Threshold</label>
+                    <Select
+                      value={config.confidenceThreshold}
+                      onValueChange={v => updateConfig('confidenceThreshold', v)}
+                      disabled={saving}>
+                      <SelectTrigger className="w-[200px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="0.5">50% (Accept more)</SelectItem>
+                        <SelectItem value="0.6">60%</SelectItem>
+                        <SelectItem value="0.7">70% (Default)</SelectItem>
+                        <SelectItem value="0.8">80%</SelectItem>
+                        <SelectItem value="0.9">90% (High quality only)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Minimum confidence for a new memory to supersede an existing one
                     </p>
                   </div>
                 </CardContent>

@@ -53,17 +53,23 @@ export async function registerClient(sessionId: string): Promise<void> {
   if (!sessionId) return;
   try {
     await Bun.$`mkdir -p ${RUNTIME_DIR}`.quiet();
+
+    // Clean up stale entries - keep only last 10 clients
     const clients = await getActiveClients();
-    if (!clients.includes(sessionId)) {
-      clients.push(sessionId);
-      await Bun.write(CLIENTS_FILE, clients.join('\n'));
-      log.debug('webui', 'Client registered', {
-        sessionId,
-        totalClients: clients.length,
-      });
+    const recentClients = clients.slice(-9);
+
+    if (!recentClients.includes(sessionId)) {
+      recentClients.push(sessionId);
     }
+
+    await Bun.write(CLIENTS_FILE, recentClients.join('\n'));
+
+    log.debug('webui', 'Client registered', {
+      sessionId,
+      totalClients: recentClients.length,
+    });
   } catch (err) {
-    log.warn('webui', 'Failed to register client', {
+    log.debug('webui', 'Failed to register client', {
       error: err instanceof Error ? err.message : String(err),
     });
   }

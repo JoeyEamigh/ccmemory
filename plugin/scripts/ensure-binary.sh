@@ -5,11 +5,11 @@
 
 set -e
 
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$(dirname "$(realpath "$0")")")}"
-BIN_DIR="$PLUGIN_ROOT/bin"
+BIN_DIR="$HOME/.local/bin"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ccmemory"
 BINARY="$BIN_DIR/ccmemory"
-VERSION_FILE="$BIN_DIR/.version"
-REPO="your-username/ccmemory"  # Update this with actual repo
+VERSION_FILE="$DATA_DIR/.version"
+REPO="JoeyEamigh/ccmemory"
 
 # Detect platform
 detect_platform() {
@@ -82,6 +82,7 @@ download_binary() {
 
     mv "$BINARY.tmp" "$BINARY"
     chmod +x "$BINARY"
+    mkdir -p "$DATA_DIR"
     echo "$version" > "$VERSION_FILE"
 
     echo "Downloaded ccmemory ${version}" >&2

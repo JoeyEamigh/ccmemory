@@ -29,7 +29,7 @@ curl -fsSL https://ollama.ai/install.sh | sh
 brew install ollama
 
 # Start Ollama and pull the embedding model
-ollama serve &
+ollama serve
 ollama pull qwen3-embedding
 ```
 
@@ -40,10 +40,10 @@ Alternatively, set `OPENROUTER_API_KEY` for cloud-based embeddings.
 Install with a single command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/joeyguerra/ccmemory/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JoeyEamigh/ccmemory/main/scripts/install.sh | bash
 ```
 
-This installs to `~/.local/bin/ccmemory` (user-scoped, no sudo required). Make sure `~/.local/bin` is in your PATH.
+This installs to `~/.local/bin/ccmemory`. Make sure `~/.local/bin` is in your PATH.
 
 Verify installation:
 
@@ -58,7 +58,7 @@ Requires [Bun](https://bun.sh/) v1.0+ for building:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/ccmemory.git
+git clone https://github.com/JoeyEamigh/ccmemory.git
 cd ccmemory
 
 # Install dependencies and build
@@ -77,7 +77,7 @@ The easiest way to install CCMemory as a Claude Code plugin:
 
 ```bash
 # In Claude Code, add the marketplace
-/plugin marketplace add your-username/ccmemory
+/plugin marketplace add JoeyEamigh/ccmemory
 
 # Install the plugin
 /plugin install ccmemory@ccmemory-marketplace
@@ -91,7 +91,7 @@ Clone and copy the plugin directory:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/ccmemory.git
+git clone https://github.com/JoeyEamigh/ccmemory.git
 
 # Copy the plugin to Claude Code
 cp -r ccmemory/plugin ~/.claude/plugins/ccmemory
@@ -107,14 +107,13 @@ If you want to use a locally-built binary:
 
 ```bash
 # Clone and build
-git clone https://github.com/your-username/ccmemory.git
+git clone https://github.com/JoeyEamigh/ccmemory.git
 cd ccmemory
 bun install
 bun run build
 
 # Copy plugin and binary
-cp -r plugin ~/.claude/plugins/ccmemory
-cp dist/ccmemory ~/.claude/plugins/ccmemory/bin/
+bun run plugin:install
 
 # Restart Claude Code to activate
 ```
@@ -437,17 +436,6 @@ Error: Model qwen3-embedding not found
 1. Pull the model: `ollama pull qwen3-embedding`
 2. Check available models: `ollama list`
 
-### Permission Denied
-
-```
-Error: EACCES: permission denied
-```
-
-**Solutions:**
-
-1. Create directory manually: `mkdir -p ~/.local/share/ccmemory`
-2. Fix permissions: `chmod 755 ~/.local/share/ccmemory`
-
 ### Database Locked
 
 ```
@@ -497,27 +485,6 @@ git pull origin main
 bun install
 bun run build
 ```
-
-## Releasing (For Maintainers)
-
-To create a new release:
-
-```bash
-# Build binaries for all platforms
-bun run build:all-platforms
-
-# Tag the release
-git tag v1.0.0
-git push origin v1.0.0
-
-# Create GitHub release and upload binaries:
-# - dist/ccmemory-linux-x64
-# - dist/ccmemory-darwin-x64
-# - dist/ccmemory-darwin-arm64
-# - dist/ccmemory-windows-x64.exe
-```
-
-Users with the plugin installed will automatically receive the update within an hour.
 
 ## Uninstalling
 

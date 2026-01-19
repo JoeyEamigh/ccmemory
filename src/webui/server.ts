@@ -1,5 +1,6 @@
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
+import { consumeEvents } from '../services/events/pubsub.js';
 import type { Session } from '../services/memory/sessions.js';
 import type { Memory } from '../services/memory/types.js';
 import { log } from '../utils/log.js';
@@ -23,6 +24,7 @@ type WebSocketData = { projectId?: string };
 let buildOutput: BuildOutput | null = null;
 let serverInstance: ReturnType<typeof Bun.serve> | null = null;
 let checkIntervalId: ReturnType<typeof setInterval> | null = null;
+let eventPollIntervalId: ReturnType<typeof setInterval> | null = null;
 
 type StartServerOptions = {
   port?: number;
@@ -141,6 +143,24 @@ export async function startServer(options: StartServerOptions): Promise<ServerRe
     }
   }, 5000);
 
+  eventPollIntervalId = setInterval(async () => {
+    try {
+      const events = await consumeEvents();
+      for (const event of events) {
+        log.debug('webui', 'Broadcasting event', {
+          type: event.type,
+          memoryId: event.memoryId,
+        });
+        broadcastToRoom(event.projectId, event);
+        broadcastToRoom('global', event);
+      }
+    } catch (err) {
+      log.debug('webui', 'Event poll error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, 1000);
+
   return { server, checkInterval: checkIntervalId };
 }
 
@@ -149,6 +169,10 @@ export async function shutdownServer(): Promise<void> {
   if (checkIntervalId) {
     clearInterval(checkIntervalId);
     checkIntervalId = null;
+  }
+  if (eventPollIntervalId) {
+    clearInterval(eventPollIntervalId);
+    eventPollIntervalId = null;
   }
   if (serverInstance) {
     serverInstance.stop();

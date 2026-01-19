@@ -3,7 +3,7 @@ import { getDatabase } from '../../db/database.js';
 import { createEmbeddingService } from '../../services/embedding/index.js';
 import type { EmbeddingService } from '../../services/embedding/types.js';
 import { createMemoryStore } from '../../services/memory/store.js';
-import type { MemorySector } from '../../services/memory/types.js';
+import { isValidMemoryType, type MemorySector, type MemoryType } from '../../services/memory/types.js';
 import { createSearchService } from '../../services/search/hybrid.js';
 import { log } from '../../utils/log.js';
 import { shutdownServer } from '../server.js';
@@ -40,6 +40,10 @@ export async function handleAPI(req: Request, path: string): Promise<Response> {
     if (path === '/api/search' && req.method === 'GET') {
       const query = url.searchParams.get('q') ?? '';
       const sector = url.searchParams.get('sector') as MemorySector | null;
+      const memoryTypeParam = url.searchParams.get('memory_type');
+      const memoryType = memoryTypeParam && isValidMemoryType(memoryTypeParam)
+        ? memoryTypeParam as MemoryType
+        : undefined;
       const sessionId = url.searchParams.get('session');
       const projectId = url.searchParams.get('project');
       const includeSuperseded = url.searchParams.get('include_superseded') === 'true';
@@ -50,6 +54,7 @@ export async function handleAPI(req: Request, path: string): Promise<Response> {
       const results = await search.search({
         query,
         sector: sector ?? undefined,
+        memoryType,
         sessionId: sessionId ?? undefined,
         projectId: projectId ?? undefined,
         includeSuperseded,
@@ -213,6 +218,19 @@ export async function handleAPI(req: Request, path: string): Promise<Response> {
 async function getRecentSessions(projectId?: string | null): Promise<unknown[]> {
   const db = await getDatabase();
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const staleThreshold = Date.now() - 4 * 60 * 60 * 1000;
+
+  await db.execute(
+    `UPDATE sessions
+     SET ended_at = started_at + 1000
+     WHERE ended_at IS NULL
+       AND started_at < ?
+       AND id NOT IN (
+         SELECT DISTINCT session_id FROM segment_accumulators WHERE tool_call_count > 0
+       )`,
+    [staleThreshold],
+  );
+
   const args: InValue[] = [cutoff];
   if (projectId) args.push(projectId);
 
@@ -221,10 +239,12 @@ async function getRecentSessions(projectId?: string | null): Promise<unknown[]> 
     SELECT
       s.*,
       COUNT(DISTINCT sm.memory_id) as memory_count,
-      MAX(m.created_at) as last_activity
+      MAX(m.created_at) as last_activity,
+      sa.tool_call_count as accumulator_tool_count
     FROM sessions s
     LEFT JOIN session_memories sm ON s.id = sm.session_id
     LEFT JOIN memories m ON sm.memory_id = m.id
+    LEFT JOIN segment_accumulators sa ON s.id = sa.session_id
     WHERE s.started_at > ? ${projectId ? 'AND s.project_id = ?' : ''}
     GROUP BY s.id
     ORDER BY s.started_at DESC
@@ -241,6 +261,7 @@ async function getRecentSessions(projectId?: string | null): Promise<unknown[]> 
     summary: row.summary,
     memoryCount: row.memory_count ?? 0,
     lastActivity: row.last_activity,
+    hasActiveWork: Number(row.accumulator_tool_count ?? 0) > 0,
   }));
 }
 
@@ -447,21 +468,32 @@ type ConfigMap = {
   embeddingProvider: string;
   captureEnabled: string;
   captureThreshold: string;
+  extractionModel: string;
+  minToolCallsToExtract: string;
+  similarityThreshold: string;
+  confidenceThreshold: string;
+};
+
+const CONFIG_DEFAULTS: ConfigMap = {
+  embeddingProvider: 'ollama',
+  captureEnabled: 'true',
+  captureThreshold: '0.3',
+  extractionModel: 'sonnet',
+  minToolCallsToExtract: '3',
+  similarityThreshold: '0.7',
+  confidenceThreshold: '0.7',
 };
 
 async function getConfig(): Promise<ConfigMap> {
   const db = await getDatabase();
-  const result = await db.execute('SELECT key, value FROM config WHERE key IN (?, ?, ?)', [
-    'embeddingProvider',
-    'captureEnabled',
-    'captureThreshold',
-  ]);
+  const keys = Object.keys(CONFIG_DEFAULTS);
+  const placeholders = keys.map(() => '?').join(', ');
+  const result = await db.execute(
+    `SELECT key, value FROM config WHERE key IN (${placeholders})`,
+    keys,
+  );
 
-  const config: ConfigMap = {
-    embeddingProvider: 'ollama',
-    captureEnabled: 'true',
-    captureThreshold: '0.3',
-  };
+  const config: ConfigMap = { ...CONFIG_DEFAULTS };
 
   for (const row of result.rows) {
     const key = String(row['key']) as keyof ConfigMap;

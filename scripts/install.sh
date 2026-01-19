@@ -6,7 +6,8 @@ set -e
 
 REPO="JoeyEamigh/ccmemory"
 INSTALL_DIR="${CCMEMORY_INSTALL_DIR:-$HOME/.local/bin}"
-VERSION_FILE="$INSTALL_DIR/.ccmemory-version"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ccmemory"
+VERSION_FILE="$DATA_DIR/.version"
 
 # Colors for output
 RED='\033[0;31m'
@@ -93,6 +94,7 @@ download_binary() {
 
     mv "$INSTALL_DIR/$binary_name.tmp" "$INSTALL_DIR/$binary_name"
     chmod +x "$INSTALL_DIR/$binary_name"
+    mkdir -p "$DATA_DIR"
     echo "$version" > "$VERSION_FILE"
 
     info "Installed CCMemory ${version} to $INSTALL_DIR/$binary_name"

@@ -1,4 +1,4 @@
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { parseArgs } from 'util';
 import { log } from '../../utils/log.js';
 import { getPaths } from '../../utils/paths.js';
@@ -67,14 +67,11 @@ async function getLatestRelease(): Promise<ReleaseInfo | null> {
 }
 
 function getCurrentVersion(): string {
-  // In production, this would be replaced at build time
-  // For now, try to read from adjacent version file or return unknown
-  const binaryPath = process.argv[0] ?? '';
-  const versionFile = join(dirname(binaryPath), '.ccmemory-version');
+  const paths = getPaths();
+  const versionFile = join(paths.data, '.version');
 
   try {
     const version = Bun.file(versionFile);
-    // This is sync-ish in Bun
     return version.toString().trim() || 'unknown';
   } catch {
     return 'unknown';
@@ -190,7 +187,9 @@ export async function updateCommand(args: string[]): Promise<void> {
     await downloadBinary(asset.browser_download_url, binaryPath);
 
     // Update version file
-    const versionFile = join(dirname(binaryPath), '.ccmemory-version');
+    const paths = getPaths();
+    await Bun.$`mkdir -p ${paths.data}`.quiet();
+    const versionFile = join(paths.data, '.version');
     await Bun.write(versionFile, latestVersion);
 
     await setLastUpdateCheck();
