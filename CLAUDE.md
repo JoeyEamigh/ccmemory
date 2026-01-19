@@ -6,9 +6,10 @@ Self-contained memory plugin for Claude Code. Provides persistent, searchable me
 
 ```bash
 bun install                    # Install dependencies
-bun run build:all              # Build CLI and plugin
-bun run test                   # Run all tests (360+ tests)
-ccmemory serve                 # Start WebUI at localhost:37778
+bun run build                  # Build single executable (dist/ccmemory)
+bun run build:plugin           # Build and copy to plugin/bin/
+bun run test                   # Run all tests (396 tests)
+./dist/ccmemory serve          # Start WebUI at localhost:37778
 ```
 
 ## Architecture
@@ -26,6 +27,7 @@ Memories have tiers: `session` (temporary) → `project` (persistent).
 
 ```
 src/
+├── main.ts        → Unified entry point (CLI, MCP, hooks)
 ├── db/            → libSQL database, schema, migrations
 ├── services/
 │   ├── embedding/ → Ollama/OpenRouter vector providers
@@ -34,11 +36,12 @@ src/
 │   └── documents/ → Chunking, ingestion
 ├── mcp/           → MCP server for Claude Code integration
 ├── cli/           → CLI commands (search, show, serve, etc.)
+├── hooks/         → Hook handlers (capture, summarize, cleanup)
 ├── webui/         → React SSR + WebSocket browser UI
 └── utils/         → Paths, logging utilities
 
-scripts/           → Hook scripts (capture, summarize, cleanup)
-plugin/            → Claude Code plugin configuration
+scripts/           → Build scripts (prebuild-webui.ts)
+plugin/            → Claude Code plugin (bin/ccmemory + configs)
 tests/integration/ → Integration tests
 ```
 

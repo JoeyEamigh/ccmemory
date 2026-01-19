@@ -6,6 +6,15 @@ out
 dist
 *.tgz
 
+# generated files
+src/webui/assets.generated.ts
+
+# plugin binary (downloaded from releases, not stored in git)
+plugin/bin/ccmemory
+plugin/bin/ccmemory.exe
+plugin/bin/.version
+plugin/bin/.last-update-check
+
 # code coverage
 coverage
 *.lcov

@@ -11,7 +11,38 @@ export type BuildOutput = {
   css: string;
 };
 
+let prebuiltAssets: { clientJs: string; css: string } | null = null;
+
+async function loadPrebuiltAssets(): Promise<{ clientJs: string; css: string } | null> {
+  if (prebuiltAssets !== null) {
+    return prebuiltAssets;
+  }
+
+  try {
+    const { PREBUILT_ASSETS_AVAILABLE, PREBUILT_CLIENT_JS, PREBUILT_CSS } =
+      await import("./assets.generated.js");
+
+    if (PREBUILT_ASSETS_AVAILABLE) {
+      prebuiltAssets = {
+        clientJs: PREBUILT_CLIENT_JS,
+        css: PREBUILT_CSS,
+      };
+      return prebuiltAssets;
+    }
+  } catch {
+    log.debug("webui", "No pre-built assets found, will build at runtime");
+  }
+
+  return null;
+}
+
 export async function buildAssets(): Promise<BuildOutput> {
+  const prebuilt = await loadPrebuiltAssets();
+  if (prebuilt) {
+    log.info("webui", "Using pre-built assets");
+    return prebuilt;
+  }
+
   const start = Date.now();
 
   const [clientJs, css] = await Promise.all([

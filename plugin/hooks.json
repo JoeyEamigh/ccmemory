@@ -7,8 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/../scripts/capture.js\"",
-            "timeout": 10
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook capture",
+            "timeout": 15
           }
         ]
       }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/../scripts/summarize.js\"",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook summarize",
             "timeout": 120
           }
         ]
@@ -29,8 +29,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/../scripts/cleanup.js\"",
-            "timeout": 10
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/ccmemory-wrapper.sh hook cleanup",
+            "timeout": 15
           }
         ]
       }

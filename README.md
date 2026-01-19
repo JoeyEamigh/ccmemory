@@ -5,75 +5,178 @@ Self-contained memory plugin for Claude Code. Provides persistent, searchable me
 ## Features
 
 - **5-Sector Memory Model**: Episodic, semantic, procedural, emotional, and reflective memory types
-- **3-Tier System**: Session → Project → Global memory promotion
 - **Hybrid Search**: Combined FTS5 full-text and vector similarity search
 - **Automatic Capture**: PostToolUse hooks capture tool observations
-- **Session Summaries**: Stop hooks generate reflective summaries via Claude SDK
+- **Session Summaries**: Stop hooks generate reflective summaries
 - **Salience Decay**: Time-based memory decay with reinforcement on access
 - **Deduplication**: SimHash-based duplicate detection with automatic boosting
 - **Document Ingestion**: Chunk and vectorize files/URLs for RAG
 - **WebUI**: Real-time browser interface with WebSocket updates
 - **Multi-Agent Support**: Track memories across concurrent Claude Code instances
+- **Single Binary**: No runtime dependencies - just download and run
 
-## Requirements
+## Quick Start
 
-- [Bun](https://bun.sh/) v1.0+
-- [Ollama](https://ollama.ai/) with `qwen3-embedding` model (or OpenRouter API key)
+### Prerequisites
 
-## Installation
+CCMemory requires [Ollama](https://ollama.ai/) for local embeddings:
+
+```bash
+# Install Ollama (Linux)
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Install Ollama (macOS)
+brew install ollama
+
+# Start Ollama and pull the embedding model
+ollama serve &
+ollama pull qwen3-embedding
+```
+
+Alternatively, set `OPENROUTER_API_KEY` for cloud-based embeddings.
+
+### Option 1: Download Binary (Recommended)
+
+Download the pre-built executable for your platform from the [releases page](https://github.com/your-username/ccmemory/releases):
+
+```bash
+# Linux x64
+wget https://github.com/your-username/ccmemory/releases/latest/download/ccmemory-linux-x64
+chmod +x ccmemory-linux-x64
+sudo mv ccmemory-linux-x64 /usr/local/bin/ccmemory
+
+# macOS ARM (Apple Silicon)
+wget https://github.com/your-username/ccmemory/releases/latest/download/ccmemory-darwin-arm64
+chmod +x ccmemory-darwin-arm64
+sudo mv ccmemory-darwin-arm64 /usr/local/bin/ccmemory
+
+# macOS x64 (Intel)
+wget https://github.com/your-username/ccmemory/releases/latest/download/ccmemory-darwin-x64
+chmod +x ccmemory-darwin-x64
+sudo mv ccmemory-darwin-x64 /usr/local/bin/ccmemory
+
+# Verify installation
+ccmemory --version
+ccmemory health
+```
+
+### Option 2: Build from Source
+
+Requires [Bun](https://bun.sh/) v1.0+ for building:
 
 ```bash
 # Clone the repository
 git clone https://github.com/your-username/ccmemory.git
 cd ccmemory
 
-# Install dependencies
+# Install dependencies and build
 bun install
+bun run build
 
-# Pull the embedding model
-ollama pull qwen3-embedding
-
-# Build everything
-bun run build:all
+# The executable is at dist/ccmemory
+./dist/ccmemory --version
 ```
 
-## Quick Start
+## Claude Code Plugin Installation
 
-### As a Claude Code Plugin
+### Option 1: Marketplace Install (Recommended)
 
-1. Copy the plugin to your Claude Code plugins directory:
+The easiest way to install CCMemory as a Claude Code plugin:
 
 ```bash
-cp -r plugin ~/.claude/plugins/ccmemory
+# In Claude Code, add the marketplace
+/plugin marketplace add your-username/ccmemory
+
+# Install the plugin
+/plugin install ccmemory@ccmemory-marketplace
 ```
 
-2. The plugin auto-registers hooks and MCP server. Restart Claude Code to activate.
+The plugin will automatically download the correct binary for your platform from GitHub releases on first use.
 
-### CLI Usage
+### Option 2: Manual Installation
+
+Clone and copy the plugin directory:
+
+```bash
+# Clone the repository
+git clone https://github.com/your-username/ccmemory.git
+
+# Copy the plugin to Claude Code
+cp -r ccmemory/plugin ~/.claude/plugins/ccmemory
+
+# Restart Claude Code to activate
+```
+
+The binary will be downloaded automatically when the plugin is first used.
+
+### Option 3: Build from Source
+
+If you want to use a locally-built binary:
+
+```bash
+# Clone and build
+git clone https://github.com/your-username/ccmemory.git
+cd ccmemory
+bun install
+bun run build
+
+# Copy plugin and binary
+cp -r plugin ~/.claude/plugins/ccmemory
+cp dist/ccmemory ~/.claude/plugins/ccmemory/bin/
+
+# Restart Claude Code to activate
+```
+
+## CLI Usage
 
 ```bash
 # Search memories
 ccmemory search "authentication flow"
 
 # Search with filters
-ccmemory search "API design" --sector semantic --tier project
+ccmemory search "API design" --sector semantic --limit 5
 
 # Show memory details
 ccmemory show <memory-id>
 
+# Show related memories
+ccmemory show <memory-id> --related
+
 # View statistics
 ccmemory stats
 
+# Check system health
+ccmemory health
+
+# View/set configuration
+ccmemory config
+ccmemory config embedding.provider ollama
+
 # Start WebUI
-ccmemory serve --open
+ccmemory serve --port 37778 --open
+
+# Import a document
+ccmemory import document.md --title "Project Docs"
+
+# Export memories
+ccmemory export --output memories.json
 ```
 
-### MCP Server (Standalone)
+## MCP Tools
 
-```bash
-# Start the MCP server
-bun run src/mcp/server.ts
-```
+When used as a Claude Code plugin, these tools are available:
+
+| Tool | Description |
+|------|-------------|
+| `memory_search` | Hybrid search with sector filtering |
+| `memory_timeline` | Chronological view with session grouping |
+| `memory_add` | Create new memory with auto-classification |
+| `memory_reinforce` | Increase salience (mark as useful) |
+| `memory_deemphasize` | Decrease salience (mark as less relevant) |
+| `memory_delete` | Soft delete a memory |
+| `memory_supersede` | Replace old memory with new version |
+| `docs_search` | Search ingested documents |
+| `docs_ingest` | Ingest file, URL, or raw content |
 
 ## Architecture
 
@@ -126,93 +229,47 @@ bun run src/mcp/server.ts
 | **Emotional** | Preferences and reactions | Medium (0.05/day) |
 | **Reflective** | Session summaries and insights | Very slow (0.01/day) |
 
-## Memory Tiers
-
-| Tier | Scope | Promotion |
-|------|-------|-----------|
-| **Session** | Current session only | Auto-promoted on session end |
-| **Project** | Current project | Manual or high salience |
-| **Global** | All projects | High-value cross-project knowledge |
-
-## MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `memory_search` | Hybrid search with sector/tier filtering |
-| `memory_timeline` | Chronological view with session grouping |
-| `memory_add` | Create new memory with auto-classification |
-| `memory_reinforce` | Increase salience (mark as useful) |
-| `memory_deemphasize` | Decrease salience (mark as less relevant) |
-| `memory_delete` | Soft delete a memory |
-| `memory_supersede` | Replace old memory with new version |
-| `docs_search` | Search ingested documents |
-| `docs_ingest` | Ingest file, URL, or raw content |
-
 ## Configuration
 
-Environment variables:
+### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `CCMEMORY_DATA_DIR` | Database location | `~/.local/share/ccmemory` |
 | `CCMEMORY_CONFIG_DIR` | Config files | `~/.config/ccmemory` |
 | `CCMEMORY_CACHE_DIR` | Cache files | `~/.cache/ccmemory` |
-| `OPENROUTER_API_KEY` | OpenRouter API key | (none) |
-| `LOG_LEVEL` | Log verbosity | `info` |
+| `OPENROUTER_API_KEY` | OpenRouter API key (fallback) | (none) |
+| `LOG_LEVEL` | Log verbosity: debug, info, warn, error | `info` |
 
-## Development
+### Data Directories by Platform
 
+| Platform | Data | Config | Cache |
+|----------|------|--------|-------|
+| Linux | `~/.local/share/ccmemory` | `~/.config/ccmemory` | `~/.cache/ccmemory` |
+| macOS | `~/Library/Application Support/ccmemory` | `~/Library/Preferences/ccmemory` | `~/Library/Caches/ccmemory` |
+| Windows | `%LOCALAPPDATA%\ccmemory` | `%APPDATA%\ccmemory` | `%LOCALAPPDATA%\ccmemory\cache` |
+
+### Embedding Configuration
+
+Configure via CLI, WebUI, or config file:
+
+**CLI:**
 ```bash
-# Type check
-bun run typecheck
+# View current config
+ccmemory config
 
-# Run all tests
-bun run test
+# Use Ollama (default)
+ccmemory config embedding.provider ollama
 
-# Run specific test file
-bun test src/services/memory/__test__/store.test.ts
-
-# Build CLI
-bun run build:cli
-
-# Build MCP server
-bun run build:mcp
-
-# Check Ollama status
-bun run ollama:check
-
-# View database stats
-bun run db:counts
+# Use OpenRouter
+ccmemory config embedding.provider openrouter
 ```
 
-## Project Structure
-
-```
-src/
-├── cli/              # CLI commands
-├── db/               # libSQL connection, schema, migrations
-├── mcp/              # MCP server (stdio transport)
-├── services/
-│   ├── documents/    # Chunking, ingestion
-│   ├── embedding/    # Ollama/OpenRouter providers
-│   ├── memory/       # Store, sectors, decay, dedup
-│   └── search/       # FTS5, vector, hybrid ranking
-├── utils/            # Paths, logging
-└── webui/            # Bun server, React SSR, WebSocket
-
-scripts/              # Hook scripts (capture, summarize, cleanup)
-plugin/               # Claude Code plugin config
-spec/                 # Design specifications
-tests/                # Integration tests
-```
-
-## Hooks
-
-The plugin uses three hooks:
-
-1. **PostToolUse** (`capture.ts`): Captures tool observations as episodic memories
-2. **Stop** (`summarize.ts`): Generates session summary via Claude SDK agent
-3. **SessionEnd** (`cleanup.ts`): Promotes session memories, ends session
+**WebUI:**
+Navigate to Settings (gear icon) in the WebUI to configure:
+- Embedding provider and model
+- Capture settings (enable/disable, max result size)
+- Other runtime options
 
 ## WebUI
 
@@ -224,10 +281,192 @@ ccmemory serve --port 37778 --open
 
 Features:
 - Real-time memory updates via WebSocket
-- Search with sector/tier filters
+- Search with sector filters
 - Timeline view with session grouping
 - Memory reinforcement/de-emphasis
 - Multi-agent activity tracking
+- **Settings page** for configuration (embedding provider, capture settings, etc.)
+
+## Development
+
+Requires [Bun](https://bun.sh/) v1.0+ for development.
+
+```bash
+# Install dependencies
+bun install
+
+# Type check
+bun run typecheck
+
+# Run all tests (396 tests)
+bun run test
+
+# Run specific test file
+bun test src/services/memory/__test__/store.test.ts
+
+# Development mode (with hot reload)
+bun run dev:cli           # CLI
+bun run dev:mcp           # MCP server
+bun run dev:serve         # WebUI
+
+# Check Ollama status
+bun run ollama:check
+
+# View database stats
+bun run db:counts
+```
+
+### Building
+
+```bash
+# Build for current platform
+bun run build
+
+# Build for all platforms
+bun run build:all-platforms
+
+# Build and copy to plugin directory
+bun run build:plugin
+
+# Individual platform builds
+bun run build:linux       # Linux x64
+bun run build:macos       # macOS x64
+bun run build:macos-arm   # macOS ARM64
+bun run build:windows     # Windows x64
+```
+
+### Project Structure
+
+```
+src/
+├── cli/              # CLI commands
+├── db/               # libSQL connection, schema, migrations
+├── hooks/            # Hook handlers (capture, summarize, cleanup)
+├── mcp/              # MCP server (stdio transport)
+├── services/
+│   ├── documents/    # Chunking, ingestion
+│   ├── embedding/    # Ollama/OpenRouter providers
+│   ├── memory/       # Store, sectors, decay, dedup
+│   └── search/       # FTS5, vector, hybrid ranking
+├── utils/            # Paths, logging
+└── webui/            # Bun server, React SSR, WebSocket
+
+scripts/              # Build scripts
+plugin/               # Claude Code plugin (ready to copy)
+spec/                 # Design specifications
+tests/                # Integration tests
+```
+
+## Troubleshooting
+
+### Ollama Connection Failed
+
+```
+Error: Failed to connect to Ollama at http://localhost:11434
+```
+
+**Solutions:**
+1. Ensure Ollama is running: `ollama serve`
+2. Check if the port is blocked by firewall
+3. Verify Ollama URL: `curl http://localhost:11434/api/tags`
+
+### Model Not Found
+
+```
+Error: Model qwen3-embedding not found
+```
+
+**Solutions:**
+1. Pull the model: `ollama pull qwen3-embedding`
+2. Check available models: `ollama list`
+
+### Permission Denied
+
+```
+Error: EACCES: permission denied
+```
+
+**Solutions:**
+1. Create directory manually: `mkdir -p ~/.local/share/ccmemory`
+2. Fix permissions: `chmod 755 ~/.local/share/ccmemory`
+
+### Database Locked
+
+```
+Error: database is locked
+```
+
+**Solutions:**
+1. Only one write process should access the database at a time
+2. Check for zombie processes: `ps aux | grep ccmemory`
+3. Remove stale lock files if necessary
+
+## Updating
+
+### Plugin (Automatic)
+
+The plugin automatically checks for updates hourly and downloads new versions from GitHub releases in the background. No manual action required.
+
+To force an update, delete the cached binary:
+```bash
+rm ~/.claude/plugins/ccmemory/bin/ccmemory
+# The next hook/MCP call will download the latest version
+```
+
+### CLI Binary (Manual)
+
+Download and replace the binary:
+
+```bash
+wget https://github.com/your-username/ccmemory/releases/latest/download/ccmemory-linux-x64
+chmod +x ccmemory-linux-x64
+sudo mv ccmemory-linux-x64 /usr/local/bin/ccmemory
+```
+
+### From Source
+
+```bash
+cd ccmemory
+git pull origin main
+bun install
+bun run build
+```
+
+## Releasing (For Maintainers)
+
+To create a new release:
+
+```bash
+# Build binaries for all platforms
+bun run build:all-platforms
+
+# Tag the release
+git tag v1.0.0
+git push origin v1.0.0
+
+# Create GitHub release and upload binaries:
+# - dist/ccmemory-linux-x64
+# - dist/ccmemory-darwin-x64
+# - dist/ccmemory-darwin-arm64
+# - dist/ccmemory-windows-x64.exe
+```
+
+Users with the plugin installed will automatically receive the update within an hour.
+
+## Uninstalling
+
+```bash
+# Remove plugin
+rm -rf ~/.claude/plugins/ccmemory
+
+# Remove CLI
+sudo rm /usr/local/bin/ccmemory
+
+# Remove data (optional - this deletes all memories!)
+rm -rf ~/.local/share/ccmemory
+rm -rf ~/.config/ccmemory
+rm -rf ~/.cache/ccmemory
+```
 
 ## License
 
