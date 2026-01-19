@@ -226,22 +226,22 @@ After completing a task:
 ## Phase 7: CLI
 
 ### P7.1: Commands
-- [ ] **T134** Implement `src/cli/index.ts` (entry point)
-- [ ] **T135** search command (sector filtering)
-- [ ] **T136** show command (with relationships)
-- [ ] **T137** delete command (soft delete)
-- [ ] **T138** archive command
-- [ ] **T139** import command
-- [ ] **T140** export command (JSON, CSV)
-- [ ] **T141** config command
-- [ ] **T142** health command
-- [ ] **T143** stats command (per sector/tier)
-- [ ] **T144** serve command
-- [ ] **T145** Write CLI tests (`src/cli/commands/__test__/*.test.ts`)
+- [x] **T134** Implement `src/cli/index.ts` (entry point)
+- [x] **T135** search command (sector filtering)
+- [x] **T136** show command (with relationships)
+- [x] **T137** delete command (soft delete)
+- [x] **T138** archive command
+- [x] **T139** import command
+- [x] **T140** export command (JSON, CSV)
+- [x] **T141** config command
+- [x] **T142** health command
+- [x] **T143** stats command (per sector/tier)
+- [x] **T144** serve command
+- [x] **T145** Write CLI tests (`src/cli/commands/__test__/*.test.ts`)
 
 ### P7.2: Build
-- [ ] **T146** CLI build script
-- [ ] **T147** Executable configuration (bin)
+- [x] **T146** CLI build script
+- [x] **T147** Executable configuration (bin)
 
 ---
 

@@ -70,9 +70,10 @@ const APP_NAME = "ccmemory";
 
 export function getPaths(): Paths {
   const platform = getPlatform();
-  const config = join(getConfigDir(platform), APP_NAME);
-  const data = join(getDataDir(platform), APP_NAME);
-  const cache = join(getCacheDir(platform), APP_NAME);
+
+  const config = process.env["CCMEMORY_CONFIG_DIR"] ?? join(getConfigDir(platform), APP_NAME);
+  const data = process.env["CCMEMORY_DATA_DIR"] ?? join(getDataDir(platform), APP_NAME);
+  const cache = process.env["CCMEMORY_CACHE_DIR"] ?? join(getCacheDir(platform), APP_NAME);
   const db = join(data, "memories.db");
 
   return { config, data, cache, db };
