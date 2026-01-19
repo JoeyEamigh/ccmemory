@@ -5,7 +5,7 @@ type RelativeTimeProps = {
   className?: string;
 };
 
-export function RelativeTime({ timestamp, className }: RelativeTimeProps): JSX.Element {
+export function RelativeTime({ timestamp, className }: RelativeTimeProps): React.JSX.Element {
   const [, setTick] = useState(0);
 
   useEffect(() => {

@@ -36,7 +36,7 @@ type AppProps = {
   initialData: unknown;
 };
 
-export function App({ url, initialData }: AppProps): JSX.Element {
+export function App({ url, initialData }: AppProps): React.JSX.Element {
   const [currentPath, setCurrentPath] = useState(() => {
     if (typeof window !== 'undefined') {
       return window.location.pathname + window.location.search;
@@ -116,7 +116,7 @@ export function App({ url, initialData }: AppProps): JSX.Element {
     setCurrentPath(path);
   };
 
-  const renderPage = (): JSX.Element => {
+  const renderPage = (): React.JSX.Element => {
     const pathname = currentPath.split('?')[0] ?? currentPath;
 
     if (pathname === '/projects') {

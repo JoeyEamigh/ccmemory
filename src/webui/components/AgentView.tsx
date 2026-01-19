@@ -48,7 +48,7 @@ export function AgentView({
   messages = [],
   onSelectMemory,
   initialActivity = [],
-}: AgentViewProps): JSX.Element {
+}: AgentViewProps): React.JSX.Element {
   const [sessions, setSessions] = useState(initialSessions as Session[]);
   const [groups, setGroups] = useState<ParallelGroup[]>([]);
   const [loading, setLoading] = useState(false);

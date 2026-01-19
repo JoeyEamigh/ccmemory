@@ -1,7 +1,7 @@
+import tailwindcss from '@tailwindcss/postcss';
 import autoprefixer from 'autoprefixer';
 import { join } from 'node:path';
 import postcss from 'postcss';
-import tailwindcss from 'tailwindcss';
 import { log } from '../utils/log.js';
 
 const WEBUI_DIR = new URL('.', import.meta.url).pathname;
@@ -76,11 +76,10 @@ async function buildClientBundle(): Promise<string> {
 
 async function buildTailwindCSS(): Promise<string> {
   const globalsPath = join(WEBUI_DIR, 'globals.css');
-  const configPath = join(WEBUI_DIR, 'tailwind.config.ts');
 
   const globalsContent = await Bun.file(globalsPath).text();
 
-  const result = await postcss([tailwindcss({ config: configPath }), autoprefixer()]).process(globalsContent, {
+  const result = await postcss([tailwindcss(), autoprefixer()]).process(globalsContent, {
     from: globalsPath,
     to: 'styles.css',
   });

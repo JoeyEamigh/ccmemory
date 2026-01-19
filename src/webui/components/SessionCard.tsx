@@ -54,7 +54,7 @@ export function SessionCard({
   onViewTimeline,
   onSelectMemory,
   messages = [],
-}: SessionCardProps): JSX.Element {
+}: SessionCardProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const [memories, setMemories] = useState<SessionMemory[]>([]);
   const [loading, setLoading] = useState(false);

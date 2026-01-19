@@ -57,7 +57,7 @@ const sectorVariants: Record<string, 'episodic' | 'semantic' | 'procedural' | 'e
   reflective: 'reflective',
 };
 
-export function Settings(): JSX.Element {
+export function Settings(): React.JSX.Element {
   const [activeTab, setActiveTab] = useState('stats');
   const [stats, setStats] = useState<Stats | null>(null);
   const [config, setConfig] = useState<ConfigMap | null>(null);

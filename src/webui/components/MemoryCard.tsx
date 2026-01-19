@@ -27,7 +27,7 @@ const sectorBorderColor: Record<MemorySector, string> = {
   reflective: 'border-l-sector-reflective',
 };
 
-export function MemoryCard({ result, onClick }: MemoryCardProps): JSX.Element {
+export function MemoryCard({ result, onClick }: MemoryCardProps): React.JSX.Element {
   const { memory, score, sourceSession, isSuperseded, supersededBy, relatedMemoryCount } = result;
 
   return (

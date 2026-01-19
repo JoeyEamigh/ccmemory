@@ -31,6 +31,6 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
 
-    "types": ["@types/bun"]
+    "types": ["@types/bun", "@types/react", "@types/react-dom"]
   }
 }

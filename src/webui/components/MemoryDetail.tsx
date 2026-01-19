@@ -28,7 +28,7 @@ export function MemoryDetail({
   onDeemphasize,
   onDelete,
   onViewTimeline,
-}: MemoryDetailProps): JSX.Element {
+}: MemoryDetailProps): React.JSX.Element {
   const handleDelete = (hard: boolean): void => {
     const msg = hard ? 'Permanently delete this memory? This cannot be undone.' : 'Archive this memory?';
     if (typeof window !== 'undefined' && window.confirm(msg)) {

@@ -23,7 +23,7 @@ type TabsProps = {
   className?: string;
 };
 
-export function Tabs({ value, onValueChange, children, className }: TabsProps): JSX.Element {
+export function Tabs({ value, onValueChange, children, className }: TabsProps): React.JSX.Element {
   return (
     <TabsContext.Provider value={{ value, onValueChange }}>
       <div className={cn('', className)}>{children}</div>
@@ -36,7 +36,7 @@ type TabsListProps = {
   className?: string;
 };
 
-export function TabsList({ children, className }: TabsListProps): JSX.Element {
+export function TabsList({ children, className }: TabsListProps): React.JSX.Element {
   return (
     <div
       className={cn(
@@ -54,7 +54,7 @@ type TabsTriggerProps = {
   className?: string;
 };
 
-export function TabsTrigger({ value, children, className }: TabsTriggerProps): JSX.Element {
+export function TabsTrigger({ value, children, className }: TabsTriggerProps): React.JSX.Element {
   const { value: selectedValue, onValueChange } = useTabs();
   const isSelected = selectedValue === value;
 
@@ -80,7 +80,7 @@ type TabsContentProps = {
   className?: string;
 };
 
-export function TabsContent({ value, children, className }: TabsContentProps): JSX.Element {
+export function TabsContent({ value, children, className }: TabsContentProps): React.JSX.Element {
   const { value: selectedValue } = useTabs();
   if (selectedValue !== value) return <></>;
 

@@ -50,7 +50,7 @@ function MemoryTimelineCard({
   memory: Memory;
   onClick: () => void;
   isAnchor?: boolean;
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <Card
       className={cn('cursor-pointer transition-colors hover:bg-accent/50', isAnchor && 'ring-2 ring-primary')}
@@ -80,7 +80,7 @@ function BrowseMemoryCard({
   memory: BrowseMemory;
   onClick: () => void;
   onViewTimeline: () => void;
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <Card className="cursor-pointer transition-colors hover:bg-accent/50">
       <CardHeader className="pb-2">
@@ -116,7 +116,7 @@ function BrowseMemoryCard({
   );
 }
 
-export function Timeline({ initialData, onSelectMemory }: TimelineProps): JSX.Element {
+export function Timeline({ initialData, onSelectMemory }: TimelineProps): React.JSX.Element {
   const parsed = initialData as {
     browseMode?: boolean;
     data?: TimelineResult;
@@ -358,7 +358,7 @@ export function Timeline({ initialData, onSelectMemory }: TimelineProps): JSX.El
       <div className="flex flex-wrap gap-4">
         <div className="flex gap-2">
           <Button
-            variant={selectedDate === new Date().toISOString().split('T')[0] ? 'default' : 'outline-solid'}
+            variant={selectedDate === new Date().toISOString().split('T')[0] ? 'default' : 'outline'}
             size="sm"
             onClick={() => handleQuickDate(0)}>
             Today

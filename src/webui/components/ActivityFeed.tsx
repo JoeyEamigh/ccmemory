@@ -53,7 +53,7 @@ export function ActivityFeed({
   onSelectMemory,
   compact = false,
   initialEvents = [],
-}: ActivityFeedProps): JSX.Element {
+}: ActivityFeedProps): React.JSX.Element {
   const [events, setEvents] = useState<ActivityEvent[]>(initialEvents);
 
   useEffect(() => {

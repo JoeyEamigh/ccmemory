@@ -22,7 +22,7 @@ type ProjectsProps = {
   wsConnected: boolean;
 };
 
-export function Projects({ initialProjects, onSelectProject, onNavigate, wsConnected }: ProjectsProps): JSX.Element {
+export function Projects({ initialProjects, onSelectProject, onNavigate, wsConnected }: ProjectsProps): React.JSX.Element {
   const [projects, setProjects] = useState(initialProjects);
   const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(false);

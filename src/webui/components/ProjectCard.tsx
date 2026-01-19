@@ -21,7 +21,7 @@ type ProjectCardProps = {
   onViewTimeline: () => void;
 };
 
-export function ProjectCard({ project, onClick, onViewMemories, onViewTimeline }: ProjectCardProps): JSX.Element {
+export function ProjectCard({ project, onClick, onViewMemories, onViewTimeline }: ProjectCardProps): React.JSX.Element {
   const displayName = project.name ?? project.path.split('/').pop() ?? project.path;
   const hasActivity = project.memory_count > 0 || project.session_count > 0;
 

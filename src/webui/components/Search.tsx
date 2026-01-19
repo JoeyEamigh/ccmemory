@@ -14,7 +14,7 @@ type SearchProps = {
   wsConnected: boolean;
 };
 
-export function Search({ initialResults, onSelectMemory, wsConnected }: SearchProps): JSX.Element {
+export function Search({ initialResults, onSelectMemory, wsConnected }: SearchProps): React.JSX.Element {
   const [query, setQuery] = useState('');
   const [sector, setSector] = useState<MemorySector | 'all'>('all');
   const [includeSuperseded, setIncludeSuperseded] = useState(false);

@@ -18,7 +18,7 @@ const navItems = [
   { path: '/settings', label: 'Settings', icon: Settings },
 ];
 
-export function Layout({ children, currentPath, onNavigate, wsConnected }: LayoutProps): JSX.Element {
+export function Layout({ children, currentPath, onNavigate, wsConnected }: LayoutProps): React.JSX.Element {
   const toggleTheme = (): void => {
     if (typeof document !== 'undefined') {
       const isDark = document.documentElement.classList.toggle('dark');
