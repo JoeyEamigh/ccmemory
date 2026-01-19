@@ -119,7 +119,7 @@ export function ActivityFeed({
             )}
             onClick={() => onSelectMemory?.(event.memory as unknown as Memory)}
           >
-            <div className="flex-shrink-0 mt-0.5">
+            <div className="shrink-0 mt-0.5">
               <Icon
                 className={cn(
                   "h-4 w-4",

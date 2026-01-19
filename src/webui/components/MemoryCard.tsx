@@ -45,7 +45,7 @@ export function MemoryCard({ result, onClick }: MemoryCardProps): JSX.Element {
       className={cn(
         "cursor-pointer transition-all duration-200 hover:shadow-md hover:bg-accent/30 border-l-4",
         sectorBorderColor[memory.sector],
-        isSuperseded && "opacity-50 grayscale-[30%]"
+        isSuperseded && "opacity-50 grayscale-30"
       )}
       onClick={onClick}
     >

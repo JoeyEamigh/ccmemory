@@ -422,7 +422,7 @@ export function Timeline({
       <div className="flex flex-wrap gap-4">
         <div className="flex gap-2">
           <Button
-            variant={selectedDate === new Date().toISOString().split("T")[0] ? "default" : "outline"}
+            variant={selectedDate === new Date().toISOString().split("T")[0] ? "default" : "outline-solid"}
             size="sm"
             onClick={() => handleQuickDate(0)}
           >
