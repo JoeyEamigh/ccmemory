@@ -81,54 +81,54 @@ After completing a task:
 ## Phase 3: Memory System
 
 ### P3.1: Memory Sectors
-- [ ] **T035** Implement `src/services/memory/types.ts`
-- [ ] **T036** Five-sector model (episodic, semantic, procedural, emotional, reflective)
-- [ ] **T037** Sector classification patterns
-- [ ] **T038** Decay rate constants per sector
-- [ ] **T039** Write sector classification tests (`src/services/memory/__test__/types.test.ts`)
+- [x] **T035** Implement `src/services/memory/types.ts`
+- [x] **T036** Five-sector model (episodic, semantic, procedural, emotional, reflective)
+- [x] **T037** Sector classification patterns
+- [x] **T038** Decay rate constants per sector
+- [x] **T039** Write sector classification tests (`src/services/memory/__test__/types.test.ts`)
 
 ### P3.2: Deduplication
-- [ ] **T040** Implement `src/services/memory/dedup.ts`
-- [ ] **T041** Simhash computation (64-bit)
-- [ ] **T042** Hamming distance calculation
-- [ ] **T043** Duplicate detection with threshold
-- [ ] **T044** Write deduplication tests (`src/services/memory/__test__/dedup.test.ts`)
+- [x] **T040** Implement `src/services/memory/dedup.ts`
+- [x] **T041** Simhash computation (64-bit)
+- [x] **T042** Hamming distance calculation
+- [x] **T043** Duplicate detection with threshold
+- [x] **T044** Write deduplication tests (`src/services/memory/__test__/dedup.test.ts`)
 
 ### P3.3: Memory Relationships
-- [ ] **T045** Implement `src/services/memory/relationships.ts`
-- [ ] **T046** Relationship types (SUPERSEDES, CONTRADICTS, RELATED_TO, BUILDS_ON)
-- [ ] **T047** Create relationship with validation
-- [ ] **T048** Get related memories
-- [ ] **T049** Write relationship tests (`src/services/memory/__test__/relationships.test.ts`)
+- [x] **T045** Implement `src/services/memory/relationships.ts`
+- [x] **T046** Relationship types (SUPERSEDES, CONTRADICTS, RELATED_TO, BUILDS_ON)
+- [x] **T047** Create relationship with validation
+- [x] **T048** Get related memories
+- [x] **T049** Write relationship tests (`src/services/memory/__test__/relationships.test.ts`)
 
 ### P3.4: Memory Store
-- [ ] **T050** Implement `src/services/memory/store.ts`
-- [ ] **T051** Create memory with auto-classification
-- [ ] **T052** Bi-temporal timestamps (valid_from, valid_until)
-- [ ] **T053** Deduplication on create (boost existing)
-- [ ] **T054** Concept extraction
-- [ ] **T055** Get, update, soft delete operations
-- [ ] **T056** List with filtering (sector, tier, salience)
-- [ ] **T057** Touch (access tracking)
-- [ ] **T058** Reinforce with diminishing returns
-- [ ] **T059** De-emphasize (reduce salience)
-- [ ] **T060** Write memory store tests (`src/services/memory/__test__/store.test.ts`)
+- [x] **T050** Implement `src/services/memory/store.ts`
+- [x] **T051** Create memory with auto-classification
+- [x] **T052** Bi-temporal timestamps (valid_from, valid_until)
+- [x] **T053** Deduplication on create (boost existing)
+- [x] **T054** Concept extraction
+- [x] **T055** Get, update, soft delete operations
+- [x] **T056** List with filtering (sector, tier, salience)
+- [x] **T057** Touch (access tracking)
+- [x] **T058** Reinforce with diminishing returns
+- [x] **T059** De-emphasize (reduce salience)
+- [x] **T060** Write memory store tests (`src/services/memory/__test__/store.test.ts`)
 
 ### P3.5: Session Tracking
-- [ ] **T061** Implement `src/services/memory/sessions.ts`
-- [ ] **T062** Session creation with metadata
-- [ ] **T063** Track memory usage (created, recalled, updated, reinforced)
-- [ ] **T064** End session with summary
-- [ ] **T065** Promote session tier memories
-- [ ] **T066** Write session tests (`src/services/memory/__test__/sessions.test.ts`)
+- [x] **T061** Implement `src/services/memory/sessions.ts`
+- [x] **T062** Session creation with metadata
+- [x] **T063** Track memory usage (created, recalled, updated, reinforced)
+- [x] **T064** End session with summary
+- [x] **T065** Promote session tier memories
+- [x] **T066** Write session tests (`src/services/memory/__test__/sessions.test.ts`)
 
 ### P3.6: Salience Decay
-- [ ] **T067** Implement `src/services/memory/decay.ts`
-- [ ] **T068** Decay calculation by sector
-- [ ] **T069** Access count protection
-- [ ] **T070** Salience boost function
-- [ ] **T071** Background decay process
-- [ ] **T072** Write decay tests (`src/services/memory/__test__/decay.test.ts`)
+- [x] **T067** Implement `src/services/memory/decay.ts`
+- [x] **T068** Decay calculation by sector
+- [x] **T069** Access count protection
+- [x] **T070** Salience boost function
+- [x] **T071** Background decay process
+- [x] **T072** Write decay tests (`src/services/memory/__test__/decay.test.ts`)
 
 ---
 
