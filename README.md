@@ -468,7 +468,6 @@ src/
 
 scripts/              # Build scripts
 plugin/               # Claude Code plugin (ready to copy)
-spec/                 # Design specifications (including Indexer.md)
 tests/                # Integration tests
 ```
 
