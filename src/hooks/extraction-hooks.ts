@@ -1,4 +1,6 @@
 import { closeDatabase } from '../db/database.js';
+import { readLockFile } from '../services/codeindex/coordination.js';
+import { createCodeIndexService } from '../services/codeindex/index.js';
 import { createEmbeddingServiceOptional } from '../services/embedding/index.js';
 import {
   addCommand,
@@ -371,11 +373,51 @@ export async function sessionStartHook(): Promise<void> {
     log.debug('hooks', 'Cleaned up stale sessions', { count: cleaned });
   }
 
+  await maybeAutoStartWatcher(cwd, project.id);
+
   log.debug('hooks', 'Session initialized (no context injection)', { session_id });
 
   clearTimeout(timeoutId);
   closeDatabase();
   process.exit(0);
+}
+
+async function maybeAutoStartWatcher(projectPath: string, projectId: string): Promise<void> {
+  try {
+    const existingWatcher = await readLockFile(projectPath);
+    if (existingWatcher) {
+      log.debug('hooks', 'Watcher already running', { projectPath, pid: existingWatcher.pid });
+      return;
+    }
+
+    const embeddingService = await createEmbeddingServiceOptional();
+    if (!embeddingService) {
+      log.debug('hooks', 'No embedding service available, skipping watcher auto-start');
+      return;
+    }
+
+    const codeIndex = createCodeIndexService(embeddingService);
+    const state = await codeIndex.getState(projectId);
+
+    if (!state) {
+      log.debug('hooks', 'No code index exists for project, skipping watcher auto-start');
+      return;
+    }
+
+    log.info('hooks', 'Auto-starting code index watcher as background process', { projectPath });
+
+    const ccmemoryPath = process.argv[1] ?? 'ccmemory';
+    const child = Bun.spawn([ccmemoryPath, 'watch', projectPath], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+      env: process.env,
+    });
+
+    child.unref();
+
+    log.info('hooks', 'Spawned watcher background process', { projectPath, pid: child.pid });
+  } catch (err) {
+    log.error('hooks', 'Error during watcher auto-start', { error: (err as Error).message });
+  }
 }
 
 export async function sessionEndHook(): Promise<void> {

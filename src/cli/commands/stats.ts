@@ -85,5 +85,63 @@ export async function statsCommand(args: string[]): Promise<void> {
   console.log(`  Low (0.2-0.5): ${salienceRow?.['low'] ?? 0}`);
   console.log(`  Very Low (<0.2): ${salienceRow?.['very_low'] ?? 0}`);
 
+  const codeIndexStats = await db.execute(`
+    SELECT
+      (SELECT COUNT(*) FROM indexed_files) as indexed_files,
+      (SELECT COUNT(*) FROM documents WHERE is_code = 1) as code_documents,
+      (SELECT COUNT(*) FROM document_chunks dc
+       JOIN documents d ON dc.document_id = d.id
+       WHERE d.is_code = 1) as code_chunks
+  `);
+
+  const codeIndexRow = codeIndexStats.rows[0];
+  const indexedFilesCount = Number(codeIndexRow?.['indexed_files'] ?? 0);
+  const codeDocsCount = Number(codeIndexRow?.['code_documents'] ?? 0);
+  const codeChunksCount = Number(codeIndexRow?.['code_chunks'] ?? 0);
+
+  if (indexedFilesCount > 0 || codeDocsCount > 0) {
+    console.log('\nCode Index:');
+    console.log(`  Indexed Files: ${indexedFilesCount}`);
+    console.log(`  Code Documents: ${codeDocsCount}`);
+    console.log(`  Code Chunks: ${codeChunksCount}`);
+
+    const languageStats = await db.execute(`
+      SELECT language, COUNT(*) as count
+      FROM documents
+      WHERE is_code = 1 AND language IS NOT NULL
+      GROUP BY language
+      ORDER BY count DESC
+      LIMIT 10
+    `);
+
+    if (languageStats.rows.length > 0) {
+      console.log('\n  By Language:');
+      for (const row of languageStats.rows) {
+        console.log(`    ${row['language']}: ${row['count']}`);
+      }
+    }
+
+    const projectIndexStates = await db.execute(`
+      SELECT
+        p.name as project_name,
+        p.path as project_path,
+        cis.indexed_files,
+        cis.last_indexed_at
+      FROM code_index_state cis
+      JOIN projects p ON cis.project_id = p.id
+      ORDER BY cis.last_indexed_at DESC
+      LIMIT 5
+    `);
+
+    if (projectIndexStates.rows.length > 0) {
+      console.log('\n  Recent Index Activity:');
+      for (const row of projectIndexStates.rows) {
+        const lastIndexed = new Date(Number(row['last_indexed_at'])).toLocaleString();
+        const projectName = row['project_name'] ?? row['project_path'];
+        console.log(`    ${projectName}: ${row['indexed_files']} files (${lastIndexed})`);
+      }
+    }
+  }
+
   log.info('cli', 'Stats displayed', { project: values.project });
 }

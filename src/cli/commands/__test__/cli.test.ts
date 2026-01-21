@@ -122,6 +122,45 @@ describe('CLI Stats Command', () => {
     expect(result).toContain('Totals:');
     expect(result).toContain('Memories:');
   });
+
+  test('shows code index stats when code is indexed', async () => {
+    const db = await getDatabase();
+    const now = Date.now();
+
+    await db.execute(`
+      INSERT INTO indexed_files (id, project_id, path, checksum, mtime, indexed_at)
+      VALUES ('if1', 'proj1', '/test/file1.ts', 'abc123', ${now}, ${now})
+    `);
+
+    await db.execute(`
+      INSERT INTO documents (id, project_id, is_code, language, source_path, source_type, full_content, line_count, created_at, updated_at)
+      VALUES ('doc1', 'proj1', 1, 'ts', '/test/file1.ts', 'file', 'function foo() {}', 50, ${now}, ${now})
+    `);
+
+    await db.execute(`
+      INSERT INTO document_chunks (id, document_id, content, chunk_index, start_line, end_line)
+      VALUES ('chunk1', 'doc1', 'function foo() {}', 0, 1, 10)
+    `);
+
+    await db.execute(`
+      INSERT INTO code_index_state (project_id, indexed_files, last_indexed_at)
+      VALUES ('proj1', 1, ${now})
+    `);
+
+    const result = await Bun.$`bun /home/joey/Documents/ccmemory/src/cli/index.ts stats`
+      .env({
+        ...process.env,
+        CCMEMORY_DATA_DIR: testDir,
+        CCMEMORY_CONFIG_DIR: testDir,
+      })
+      .text();
+
+    expect(result).toContain('Code Index:');
+    expect(result).toContain('Indexed Files:');
+    expect(result).toContain('Code Documents:');
+    expect(result).toContain('By Language:');
+    expect(result).toContain('ts:');
+  });
 });
 
 describe('CLI Show Command', () => {

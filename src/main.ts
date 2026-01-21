@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { codeIndexCommand, codeIndexExportCommand, codeIndexImportCommand } from './cli/commands/code-index.js';
+import { codeSearchCommand } from './cli/commands/code-search.js';
 import { configCommand } from './cli/commands/config.js';
 import { archiveCommand, deleteCommand } from './cli/commands/delete.js';
 import { extractBgCommand } from './cli/commands/extract-bg.js';
@@ -11,6 +13,7 @@ import { showCommand } from './cli/commands/show.js';
 import { shutdownCommand } from './cli/commands/shutdown.js';
 import { statsCommand } from './cli/commands/stats.js';
 import { updateCommand } from './cli/commands/update.js';
+import { watchCommand } from './cli/commands/watch.js';
 import { testSdkCommand } from './cli/commands/test-sdk.js';
 import { log } from './utils/log.js';
 
@@ -29,6 +32,11 @@ const cliCommands: Record<string, (args: string[]) => Promise<void>> = {
   serve: serveCommand,
   shutdown: shutdownCommand,
   update: updateCommand,
+  watch: watchCommand,
+  'code-index': codeIndexCommand,
+  'code-index-export': codeIndexExportCommand,
+  'code-index-import': codeIndexImportCommand,
+  'code-search': codeSearchCommand,
   'extract-bg': extractBgCommand,
   'test-sdk': testSdkCommand,
 };
@@ -148,6 +156,21 @@ Commands:
   update                  Check for and install updates
     -c, --check            Check only, don't install
     -f, --force            Force update even if current
+
+Code Indexing:
+  watch [dir]             Start file watcher daemon for code indexing
+    --stop                 Stop watcher for directory
+    --status               Show active watchers
+
+  code-index [dir]        One-shot index of code files
+    -f, --force            Re-index all files
+    --dry-run              Scan only, no indexing
+
+  code-search <query>     Semantic code search
+    -l, --language <lang>  Filter by language (ts, js, py, etc.)
+    -n, --limit <n>        Max results (default: 10)
+    -p, --project <path>   Project path
+    --json                 JSON output
 
 Internal commands (used by Claude Code plugin):
   mcp-server              Start MCP server (stdio transport)

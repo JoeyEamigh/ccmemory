@@ -1,6 +1,8 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { createCodeIndexService } from '../services/codeindex/index.js';
+import type { CodeLanguage, CodeSearchResult } from '../services/codeindex/types.js';
 import { createDocumentService, type DocumentSearchResult } from '../services/documents/ingest.js';
 import { createEmbeddingService } from '../services/embedding/index.js';
 import { supersede } from '../services/memory/relationships.js';
@@ -173,6 +175,34 @@ include_superseded: {
       },
     },
   },
+  {
+    name: 'code_search',
+    description:
+      'Search indexed code by semantic similarity. Returns snippets with file paths and line numbers. Project code must be indexed first using code_index or the watcher.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Search query describing what code you are looking for' },
+        language: {
+          type: 'string',
+          description: 'Filter by programming language (ts, js, py, go, rs, java, etc.)',
+        },
+        limit: { type: 'number', description: 'Max results (default: 10)' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'code_index',
+    description: 'Index or re-index project code files for semantic search. Respects .gitignore.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        force: { type: 'boolean', description: 'Re-index all files even if unchanged (default: false)' },
+        dry_run: { type: 'boolean', description: 'Scan only, report files without indexing (default: false)' },
+      },
+    },
+  },
 ];
 
 type ToolArgs = {
@@ -194,6 +224,9 @@ type ToolArgs = {
   path?: string;
   url?: string;
   title?: string;
+  language?: string;
+  force?: boolean;
+  dry_run?: boolean;
 };
 
 async function handleToolCall(name: string, args: ToolArgs, cwd: string): Promise<string> {
@@ -294,6 +327,59 @@ async function handleToolCall(name: string, args: ToolArgs, cwd: string): Promis
       return `Document ingested: ${doc.title ?? doc.id}`;
     }
 
+    case 'code_search': {
+      if (!args.query) throw new Error('query is required');
+      const codeIndex = createCodeIndexService(embeddingService);
+      const state = await codeIndex.getState(project.id);
+
+      if (!state) {
+        return `IMPORTANT: Tell the user that project code has not been indexed yet.
+They should run \`ccmemory watch .\` in the project directory to enable
+semantic code search, or you can run it for them via Bash.
+
+No indexed code to search.`;
+      }
+
+      const timeSinceIndex = Date.now() - state.lastIndexedAt;
+      const hoursAgo = Math.floor(timeSinceIndex / (1000 * 60 * 60));
+      let staleWarning = '';
+      if (hoursAgo > 24) {
+        staleWarning = `\n\nNote: Index is ${hoursAgo} hours old. Consider re-indexing with \`ccmemory code-index\`.`;
+      }
+
+      const results = await codeIndex.search({
+        query: args.query,
+        projectId: project.id,
+        language: args.language as CodeLanguage | undefined,
+        limit: args.limit ?? 10,
+      });
+      log.info('mcp', 'Tool call completed', { name, ms: Date.now() - start });
+      return formatCodeSearchResults(results) + staleWarning;
+    }
+
+    case 'code_index': {
+      const codeIndex = createCodeIndexService(embeddingService);
+      const progress = await codeIndex.index(cwd, project.id, {
+        force: args.force ?? false,
+        dryRun: args.dry_run ?? false,
+      });
+      log.info('mcp', 'Tool call completed', { name, ms: Date.now() - start });
+
+      if (args.dry_run) {
+        return `Dry run complete: Found ${progress.totalFiles} code files to index.`;
+      }
+
+      let result = `Code indexing complete:
+- Files scanned: ${progress.scannedFiles}
+- Files indexed: ${progress.indexedFiles}`;
+
+      if (progress.errors.length > 0) {
+        result += `\n- Errors: ${progress.errors.length}`;
+      }
+
+      return result;
+    }
+
     default:
       log.warn('mcp', 'Unknown tool requested', { name });
       throw new Error(`Unknown tool: ${name}`);
@@ -369,6 +455,34 @@ Source: ${r.document.sourcePath ?? r.document.sourceUrl ?? 'inline'}
 Match: ${r.chunk.content.slice(0, 200)}...`;
     })
     .join('\n\n');
+}
+
+function formatCodeSearchResults(results: CodeSearchResult[]): string {
+  if (results.length === 0) return 'No code found matching your query.';
+
+  return results
+    .map((r, i) => {
+      const lines = [
+        `[${i + 1}] ${r.path}:${r.startLine}-${r.endLine}`,
+        `Language: ${r.language} | Type: ${r.chunkType} | Score: ${r.score.toFixed(3)}`,
+      ];
+
+      if (r.symbols.length > 0) {
+        lines.push(`Symbols: ${r.symbols.join(', ')}`);
+      }
+
+      const preview = r.content.split('\n').slice(0, 10).join('\n');
+      lines.push('');
+      lines.push('```' + r.language);
+      lines.push(preview);
+      if (r.content.split('\n').length > 10) {
+        lines.push('...');
+      }
+      lines.push('```');
+
+      return lines.join('\n');
+    })
+    .join('\n\n---\n\n');
 }
 
 const server = new Server({ name: 'ccmemory', version: '1.0.0' }, { capabilities: { tools: {} } });

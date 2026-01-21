@@ -67,6 +67,39 @@ export const migrations: Migration[] = [
       `ALTER TABLE segment_accumulators ADD COLUMN completed_tasks_json TEXT DEFAULT '[]'`,
     ],
   },
+  {
+    version: 7,
+    name: 'code_indexing',
+    statements: [
+      `ALTER TABLE documents ADD COLUMN language TEXT`,
+      `ALTER TABLE documents ADD COLUMN line_count INTEGER`,
+      `ALTER TABLE documents ADD COLUMN is_code INTEGER DEFAULT 0`,
+      `ALTER TABLE document_chunks ADD COLUMN start_line INTEGER`,
+      `ALTER TABLE document_chunks ADD COLUMN end_line INTEGER`,
+      `ALTER TABLE document_chunks ADD COLUMN chunk_type TEXT`,
+      `ALTER TABLE document_chunks ADD COLUMN symbols_json TEXT`,
+      `CREATE TABLE IF NOT EXISTS code_index_state (
+        project_id TEXT PRIMARY KEY,
+        last_indexed_at INTEGER,
+        indexed_files INTEGER DEFAULT 0,
+        gitignore_hash TEXT,
+        FOREIGN KEY (project_id) REFERENCES projects(id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS indexed_files (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        indexed_at INTEGER NOT NULL,
+        UNIQUE(project_id, path)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_indexed_files_project ON indexed_files(project_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_indexed_files_path ON indexed_files(project_id, path)`,
+      `CREATE INDEX IF NOT EXISTS idx_documents_code ON documents(project_id, is_code) WHERE is_code = 1`,
+      `CREATE INDEX IF NOT EXISTS idx_documents_language ON documents(language) WHERE language IS NOT NULL`,
+    ],
+  },
 ];
 
 export async function getCurrentVersion(client: Client): Promise<number> {

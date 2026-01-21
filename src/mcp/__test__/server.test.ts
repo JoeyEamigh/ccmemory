@@ -340,3 +340,210 @@ describe('Tool Response Formatting', () => {
     expect(results.length).toBe(0);
   });
 });
+
+describe('Code Index MCP Tools', () => {
+  let db: Database;
+  let embeddingService: EmbeddingService;
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = `/tmp/mcp-codeindex-test-${Date.now()}`;
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    await mkdir(testDir, { recursive: true });
+
+    await writeFile(
+      `${testDir}/main.ts`,
+      `
+export function processData(data: string[]): number {
+  return data.length;
+}
+
+export class DataProcessor {
+  process(input: string): string {
+    return input.toUpperCase();
+  }
+}
+`,
+    );
+
+    await writeFile(
+      `${testDir}/utils.ts`,
+      `
+export function formatOutput(value: number): string {
+  return \`Result: \${value}\`;
+}
+`,
+    );
+
+    db = await createDatabase(':memory:');
+    setDatabase(db);
+    embeddingService = createMockEmbeddingService();
+
+    const now = Date.now();
+    await db.execute(`INSERT INTO projects (id, path, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, [
+      'codeproj',
+      testDir,
+      'Code Test Project',
+      now,
+      now,
+    ]);
+
+    await db.execute(
+      `INSERT INTO embedding_models (id, name, provider, dimensions, is_active, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      ['mock:test-model', 'test-model', 'mock', 128, 1, now],
+    );
+  });
+
+  afterEach(async () => {
+    closeDatabase();
+    const { rm } = await import('node:fs/promises');
+    await rm(testDir, { recursive: true, force: true });
+  });
+
+  describe('code_index tool', () => {
+    test('indexes project code files', async () => {
+      const { createCodeIndexService } = await import('../../services/codeindex/index.js');
+      const codeIndex = createCodeIndexService(embeddingService);
+
+      const progress = await codeIndex.index(testDir, 'codeproj');
+
+      expect(progress.phase).toBe('complete');
+      expect(progress.indexedFiles).toBeGreaterThan(0);
+      expect(progress.errors.length).toBe(0);
+    });
+
+    test('dry run reports files without indexing', async () => {
+      const { createCodeIndexService } = await import('../../services/codeindex/index.js');
+      const codeIndex = createCodeIndexService(embeddingService);
+
+      const progress = await codeIndex.index(testDir, 'codeproj', { dryRun: true });
+
+      expect(progress.totalFiles).toBeGreaterThan(0);
+      expect(progress.indexedFiles).toBe(0);
+
+      const state = await codeIndex.getState('codeproj');
+      expect(state).toBeNull();
+    });
+
+    test('force re-indexes changed files', async () => {
+      const { createCodeIndexService } = await import('../../services/codeindex/index.js');
+      const { writeFile } = await import('node:fs/promises');
+
+      const codeIndex = createCodeIndexService(embeddingService);
+
+      await codeIndex.index(testDir, 'codeproj');
+
+      await writeFile(`${testDir}/main.ts`, 'const modified = true;');
+
+      const progress = await codeIndex.index(testDir, 'codeproj', { force: true });
+
+      expect(progress.indexedFiles).toBe(1);
+    });
+  });
+
+  describe('code_search tool', () => {
+    test('returns results after indexing', async () => {
+      const { createCodeIndexService } = await import('../../services/codeindex/index.js');
+      const codeIndex = createCodeIndexService(embeddingService);
+
+      await codeIndex.index(testDir, 'codeproj');
+
+      const results = await codeIndex.search({
+        query: 'process data',
+        projectId: 'codeproj',
+        limit: 10,
+      });
+
+      expect(results.length).toBeGreaterThan(0);
+    });
+
+    test('returns empty array for unindexed project', async () => {
+      const { createCodeIndexService } = await import('../../services/codeindex/index.js');
+      const codeIndex = createCodeIndexService(embeddingService);
+
+      const results = await codeIndex.search({
+        query: 'anything',
+        projectId: 'codeproj',
+      });
+
+      expect(results).toEqual([]);
+    });
+
+    test('filters by language when specified', async () => {
+      const { createCodeIndexService } = await import('../../services/codeindex/index.js');
+      const { writeFile } = await import('node:fs/promises');
+
+      await writeFile(`${testDir}/script.py`, 'def helper(): pass');
+
+      const codeIndex = createCodeIndexService(embeddingService);
+      await codeIndex.index(testDir, 'codeproj');
+
+      const tsResults = await codeIndex.search({
+        query: 'function',
+        projectId: 'codeproj',
+        language: 'ts',
+        limit: 10,
+      });
+
+      for (const result of tsResults) {
+        expect(result.language).toBe('ts');
+      }
+    });
+
+    test('results include file path and line numbers', async () => {
+      const { createCodeIndexService } = await import('../../services/codeindex/index.js');
+      const codeIndex = createCodeIndexService(embeddingService);
+
+      await codeIndex.index(testDir, 'codeproj');
+
+      const results = await codeIndex.search({
+        query: 'process',
+        projectId: 'codeproj',
+        limit: 5,
+      });
+
+      expect(results.length).toBeGreaterThan(0);
+      const result = results[0];
+      expect(result?.path).toBeDefined();
+      expect(result?.startLine).toBeGreaterThan(0);
+      expect(result?.endLine).toBeGreaterThanOrEqual(result?.startLine ?? 0);
+    });
+
+    test('results include extracted symbols', async () => {
+      const { createCodeIndexService } = await import('../../services/codeindex/index.js');
+      const codeIndex = createCodeIndexService(embeddingService);
+
+      await codeIndex.index(testDir, 'codeproj');
+
+      const results = await codeIndex.search({
+        query: 'DataProcessor class',
+        projectId: 'codeproj',
+        limit: 10,
+      });
+
+      const hasSymbols = results.some(r => r.symbols.length > 0);
+      expect(hasSymbols).toBe(true);
+    });
+
+    test('getState returns null before indexing', async () => {
+      const { createCodeIndexService } = await import('../../services/codeindex/index.js');
+      const codeIndex = createCodeIndexService(embeddingService);
+
+      const state = await codeIndex.getState('codeproj');
+      expect(state).toBeNull();
+    });
+
+    test('getState returns state after indexing', async () => {
+      const { createCodeIndexService } = await import('../../services/codeindex/index.js');
+      const codeIndex = createCodeIndexService(embeddingService);
+
+      await codeIndex.index(testDir, 'codeproj');
+
+      const state = await codeIndex.getState('codeproj');
+      expect(state).not.toBeNull();
+      expect(state?.projectId).toBe('codeproj');
+      expect(state?.lastIndexedAt).toBeGreaterThan(0);
+    });
+  });
+});
