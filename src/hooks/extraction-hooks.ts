@@ -365,6 +365,12 @@ export async function sessionStartHook(): Promise<void> {
   const project = await getOrCreateProject(cwd);
   await getOrCreateSession(session_id, project.id);
 
+  const sessionService = createSessionService();
+  const cleaned = await sessionService.cleanupStaleSessions();
+  if (cleaned > 0) {
+    log.debug('hooks', 'Cleaned up stale sessions', { count: cleaned });
+  }
+
   log.debug('hooks', 'Session initialized (no context injection)', { session_id });
 
   clearTimeout(timeoutId);

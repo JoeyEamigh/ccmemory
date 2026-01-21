@@ -220,7 +220,8 @@ export function createDocumentService(embeddingService: EmbeddingService): Docum
         limit,
       });
 
-      const queryEmbedding = await embeddingService.embed(query);
+      const instructedQuery = `Instruct: Given a natural language query, find semantically related document content\nQuery:${query}`;
+      const queryEmbedding = await embeddingService.embed(instructedQuery);
       const modelId = embeddingService.getActiveModelId();
 
       let sql: string;

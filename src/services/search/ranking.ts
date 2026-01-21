@@ -9,10 +9,10 @@ export type RankingWeights = {
 };
 
 export const DEFAULT_WEIGHTS: RankingWeights = {
-  semantic: 0.4,
-  keyword: 0.25,
-  salience: 0.2,
-  recency: 0.15,
+  semantic: 0.75,
+  keyword: 0.0,
+  salience: 0.15,
+  recency: 0.1,
   sectorBoost: {
     reflective: 1.2,
     semantic: 1.1,

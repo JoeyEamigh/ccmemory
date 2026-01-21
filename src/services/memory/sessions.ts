@@ -35,6 +35,7 @@ export type SessionService = {
   getSessionMemories(id: string): Promise<Memory[]>;
   promoteSessionMemories(id: string, minUsageCount?: number): Promise<number>;
   getActiveSession(projectId: string): Promise<Session | null>;
+  cleanupStaleSessions(maxAgeMs?: number): Promise<number>;
 };
 
 function rowToSession(row: Record<string, unknown>): Session {
@@ -63,6 +64,8 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
   return {};
 }
 
+const DEFAULT_SESSION_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours
+
 export async function getOrCreateSession(sessionId: string, projectId: string): Promise<Session> {
   const db = await getDatabase();
 
@@ -73,6 +76,22 @@ export async function getOrCreateSession(sessionId: string, projectId: string): 
   }
 
   const now = Date.now();
+
+  const previousActive = await db.execute(
+    `SELECT id FROM sessions WHERE project_id = ? AND ended_at IS NULL AND id != ?`,
+    [projectId, sessionId],
+  );
+
+  if (previousActive.rows.length > 0) {
+    const previousIds = previousActive.rows.map(row => String(row['id']));
+    const placeholders = previousIds.map(() => '?').join(', ');
+    await db.execute(
+      `UPDATE sessions SET ended_at = ? WHERE id IN (${placeholders})`,
+      [now, ...previousIds],
+    );
+    log.info('session', 'Ended previous active sessions', { count: previousIds.length, projectId });
+  }
+
   await db.execute(
     `INSERT INTO sessions (id, project_id, started_at, context_json)
      VALUES (?, ?, ?, ?)`,
@@ -253,6 +272,37 @@ export function createSessionService(): SessionService {
       const row = result.rows[0];
       if (!row) return null;
       return rowToSession(row);
+    },
+
+    async cleanupStaleSessions(maxAgeMs = DEFAULT_SESSION_MAX_AGE_MS): Promise<number> {
+      const db = await getDatabase();
+      const now = Date.now();
+      const cutoff = now - maxAgeMs;
+
+      const staleResult = await db.execute(
+        `SELECT id FROM sessions
+         WHERE ended_at IS NULL AND started_at < ?`,
+        [cutoff],
+      );
+
+      if (staleResult.rows.length === 0) {
+        return 0;
+      }
+
+      const staleIds = staleResult.rows.map(row => String(row['id']));
+
+      log.info('session', 'Ending stale sessions', {
+        count: staleIds.length,
+        maxAgeHours: maxAgeMs / (60 * 60 * 1000),
+      });
+
+      const placeholders = staleIds.map(() => '?').join(', ');
+      await db.execute(
+        `UPDATE sessions SET ended_at = ? WHERE id IN (${placeholders})`,
+        [now, ...staleIds],
+      );
+
+      return staleIds.length;
     },
   };
 

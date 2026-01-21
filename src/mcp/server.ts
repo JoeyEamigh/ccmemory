@@ -27,12 +27,7 @@ const TOOLS = [
           description: 'Filter by memory sector',
         },
         limit: { type: 'number', description: 'Max results (default: 10)' },
-        mode: {
-          type: 'string',
-          enum: ['hybrid', 'semantic', 'keyword'],
-          description: 'Search mode',
-        },
-        include_superseded: {
+include_superseded: {
           type: 'boolean',
           description: 'Include memories that have been superseded (default: false)',
         },
@@ -184,7 +179,6 @@ type ToolArgs = {
   query?: string;
   sector?: string;
   limit?: number;
-  mode?: string;
   include_superseded?: boolean;
   anchor_id?: string;
   depth_before?: number;
@@ -220,7 +214,7 @@ async function handleToolCall(name: string, args: ToolArgs, cwd: string): Promis
         projectId: project.id,
         sector: args.sector as 'episodic' | 'semantic' | 'procedural' | 'emotional' | 'reflective' | undefined,
         limit: args.limit ?? 10,
-        mode: (args.mode as 'hybrid' | 'semantic' | 'keyword') ?? 'hybrid',
+        mode: 'semantic',
         includeSuperseded: args.include_superseded ?? false,
       });
       log.info('mcp', 'Tool call completed', { name, ms: Date.now() - start });

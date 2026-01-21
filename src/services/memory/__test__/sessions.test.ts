@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDatabase, createDatabase, setDatabase, type Database } from '../../../db/database.js';
-import { createSessionService, type SessionService } from '../sessions.js';
+import { createSessionService, getOrCreateSession, type SessionService } from '../sessions.js';
 import { createMemoryStore, type MemoryStore } from '../store.js';
 
 describe('SessionService', () => {
@@ -282,6 +282,104 @@ describe('SessionService', () => {
       const active = await sessionService.getActiveSession('proj1');
 
       expect(active?.id).toBe(session2.id);
+    });
+  });
+
+  describe('getOrCreateSession', () => {
+    test('creates new session if none exists', async () => {
+      const session = await getOrCreateSession('new-session-id', 'proj1');
+
+      expect(session.id).toBe('new-session-id');
+      expect(session.projectId).toBe('proj1');
+      expect(session.endedAt).toBeUndefined();
+    });
+
+    test('returns existing session if already exists', async () => {
+      const session1 = await getOrCreateSession('existing-session', 'proj1');
+      const session2 = await getOrCreateSession('existing-session', 'proj1');
+
+      expect(session1.id).toBe(session2.id);
+      expect(session1.startedAt).toBe(session2.startedAt);
+    });
+
+    test('ends previous active sessions for same project', async () => {
+      await getOrCreateSession('session-1', 'proj1');
+      await getOrCreateSession('session-2', 'proj1');
+
+      const session1 = await sessionService.get('session-1');
+      const session2 = await sessionService.get('session-2');
+
+      expect(session1?.endedAt).toBeDefined();
+      expect(session2?.endedAt).toBeUndefined();
+    });
+
+    test('does not end sessions for different projects', async () => {
+      const now = Date.now();
+      await db.execute(`INSERT INTO projects (id, path, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, [
+        'proj2',
+        '/test/path2',
+        'Test Project 2',
+        now,
+        now,
+      ]);
+
+      await getOrCreateSession('session-proj1', 'proj1');
+      await getOrCreateSession('session-proj2', 'proj2');
+
+      const session1 = await sessionService.get('session-proj1');
+      const session2 = await sessionService.get('session-proj2');
+
+      expect(session1?.endedAt).toBeUndefined();
+      expect(session2?.endedAt).toBeUndefined();
+    });
+  });
+
+  describe('cleanupStaleSessions', () => {
+    test('ends sessions older than max age', async () => {
+      const now = Date.now();
+      const oldTimestamp = now - 7 * 60 * 60 * 1000; // 7 hours ago
+
+      await db.execute(
+        `INSERT INTO sessions (id, project_id, started_at, context_json) VALUES (?, ?, ?, ?)`,
+        ['old-session', 'proj1', oldTimestamp, '{}'],
+      );
+
+      const cleaned = await sessionService.cleanupStaleSessions(6 * 60 * 60 * 1000); // 6 hour threshold
+
+      expect(cleaned).toBe(1);
+
+      const session = await sessionService.get('old-session');
+      expect(session?.endedAt).toBeDefined();
+    });
+
+    test('does not end sessions newer than max age', async () => {
+      await sessionService.create({ projectId: 'proj1' });
+
+      const cleaned = await sessionService.cleanupStaleSessions(6 * 60 * 60 * 1000);
+
+      expect(cleaned).toBe(0);
+
+      const active = await sessionService.getActiveSession('proj1');
+      expect(active).not.toBeNull();
+    });
+
+    test('does not end already ended sessions', async () => {
+      const now = Date.now();
+      const oldTimestamp = now - 7 * 60 * 60 * 1000;
+
+      await db.execute(
+        `INSERT INTO sessions (id, project_id, started_at, ended_at, context_json) VALUES (?, ?, ?, ?, ?)`,
+        ['old-ended-session', 'proj1', oldTimestamp, oldTimestamp + 1000, '{}'],
+      );
+
+      const cleaned = await sessionService.cleanupStaleSessions(6 * 60 * 60 * 1000);
+
+      expect(cleaned).toBe(0);
+    });
+
+    test('returns zero when no stale sessions', async () => {
+      const cleaned = await sessionService.cleanupStaleSessions();
+      expect(cleaned).toBe(0);
     });
   });
 });

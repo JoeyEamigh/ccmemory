@@ -65,7 +65,8 @@ export async function searchVector(
     limit,
   });
 
-  const queryEmbedding = await embeddingService.embed(query);
+  const instructedQuery = `Instruct: Given a natural language query, find semantically related user preferences, decisions, and knowledge\nQuery:${query}`;
+  const queryEmbedding = await embeddingService.embed(instructedQuery);
   const modelId = embeddingService.getActiveModelId();
 
   log.debug('search', 'Query embedded', {

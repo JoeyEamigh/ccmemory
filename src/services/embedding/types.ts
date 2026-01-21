@@ -46,6 +46,6 @@ export const DEFAULT_CONFIG: EmbeddingConfig = {
     model: 'qwen3-embedding',
   },
   openrouter: {
-    model: 'openai/text-embedding-3-small',
+    model: 'qwen/qwen3-embedding-8b',
   },
 };
