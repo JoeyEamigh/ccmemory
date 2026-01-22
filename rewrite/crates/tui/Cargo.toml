@@ -1,0 +1,24 @@
+[package]
+name = "tui"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+engram-core = { workspace = true }
+daemon = { workspace = true }
+tokio = { workspace = true, features = ["net", "signal"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+futures = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+unicode-width = "0.2"
+uuid = { version = "1", features = ["v7", "v4"] }

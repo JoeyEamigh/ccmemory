@@ -1,0 +1,21 @@
+[package]
+name = "extract"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+engram-core = { workspace = true }
+thiserror = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
+criterion = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+
+[[bench]]
+name = "dedup_bench"
+harness = false

@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/db",
+    "crates/embedding",
+    "crates/index",
+    "crates/extract",
+    "crates/llm",
+    "crates/daemon",
+    "crates/cli",
+    "crates/tui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+# Internal crates
+engram-core = { path = "crates/core" }
+db = { path = "crates/db" }
+embedding = { path = "crates/embedding" }
+index = { path = "crates/index" }
+extract = { path = "crates/extract" }
+llm = { path = "crates/llm" }
+daemon = { path = "crates/daemon" }
+tui = { path = "crates/tui" }
+
+# External dependencies (add with cargo add)
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+criterion = "0.5"

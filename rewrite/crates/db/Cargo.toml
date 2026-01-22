@@ -1,0 +1,38 @@
+[package]
+name = "db"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+engram-core = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+lancedb = "0.23"
+arrow = "56"
+arrow-array = "56"
+arrow-schema = "56"
+async-trait = "0.1"
+futures = "0.3"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+criterion = { workspace = true }
+uuid = { version = "1", features = ["v4", "v7"] }
+
+[[bench]]
+name = "memory_bench"
+harness = false
+
+[[bench]]
+name = "code_bench"
+harness = false

@@ -1,0 +1,18 @@
+[package]
+name = "llm"
+version.workspace = true
+edition.workspace = true
+description = "LLM inference for CCEngram via Claude CLI"
+
+[lib]
+doctest = false
+
+[dependencies]
+tokio = { workspace = true, features = ["process", "io-util"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
