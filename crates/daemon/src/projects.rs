@@ -2,8 +2,8 @@ use db::{ProjectDb, default_data_dir};
 use embedding::EmbeddingProvider;
 use engram_core::{ChunkParams, Config, DocumentChunk, DocumentId, DocumentSource, ProjectId, chunk_text};
 use index::{ChangeKind, Chunker, DebounceConfig, DebouncedWatcher, Scanner, WatcherCoordinator, should_ignore};
-use std::collections::HashSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -484,12 +484,12 @@ fn run_watcher_loop(
             if let Ok(rt) = tokio::runtime::Handle::try_current() {
               // Find and delete document by source
               let filter = format!("source = '{}'", source.replace('\'', "''"));
-              if let Ok(chunks) = rt.block_on(async { db_clone.list_document_chunks(Some(&filter), Some(1)).await }) {
-                if let Some(chunk) = chunks.first() {
-                  let doc_id = chunk.document_id;
-                  if let Err(e) = rt.block_on(async { db_clone.delete_document(&doc_id).await }) {
-                    warn!("Failed to delete document {}: {}", source, e);
-                  }
+              if let Ok(chunks) = rt.block_on(async { db_clone.list_document_chunks(Some(&filter), Some(1)).await })
+                && let Some(chunk) = chunks.first()
+              {
+                let doc_id = chunk.document_id;
+                if let Err(e) = rt.block_on(async { db_clone.delete_document(&doc_id).await }) {
+                  warn!("Failed to delete document {}: {}", source, e);
                 }
               }
             }
@@ -526,11 +526,11 @@ fn run_watcher_loop(
               let source = relative_path.clone();
               if let Ok(rt) = tokio::runtime::Handle::try_current() {
                 let filter = format!("source = '{}'", source.replace('\'', "''"));
-                if let Ok(chunks) = rt.block_on(async { db_clone.list_document_chunks(Some(&filter), Some(1)).await }) {
-                  if let Some(chunk) = chunks.first() {
-                    let doc_id = chunk.document_id;
-                    let _ = rt.block_on(async { db_clone.delete_document(&doc_id).await });
-                  }
+                if let Ok(chunks) = rt.block_on(async { db_clone.list_document_chunks(Some(&filter), Some(1)).await })
+                  && let Some(chunk) = chunks.first()
+                {
+                  let doc_id = chunk.document_id;
+                  let _ = rt.block_on(async { db_clone.delete_document(&doc_id).await });
                 }
 
                 // Chunk and store the document
@@ -539,8 +539,7 @@ fn run_watcher_loop(
                 let total_chunks = text_chunks.len();
 
                 let document_id = DocumentId::new();
-                let project_uuid =
-                  uuid::Uuid::parse_str(project_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
+                let project_uuid = uuid::Uuid::parse_str(project_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
 
                 for (i, (chunk_content, char_offset)) in text_chunks.into_iter().enumerate() {
                   let chunk = DocumentChunk::new(
