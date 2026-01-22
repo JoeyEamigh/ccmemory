@@ -46,12 +46,12 @@ fn bench_memory_add(c: &mut Criterion) {
       rt.block_on(async {
         let temp_dir = TempDir::new().unwrap();
         let project_id = engram_core::ProjectId::from_path(Path::new("/bench"));
-        let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+        let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
           .await
           .unwrap();
 
         let memory = create_test_memory(Uuid::new_v4(), 0);
-        let vector: Vec<f32> = (0..768).map(|i| (i as f32 * 0.001).sin()).collect();
+        let vector: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.001).sin()).collect();
         db.add_memory(black_box(&memory), Some(&vector)).await.unwrap();
       });
     });
@@ -72,14 +72,14 @@ fn bench_memory_batch_add(c: &mut Criterion) {
         rt.block_on(async {
           let temp_dir = TempDir::new().unwrap();
           let project_id = engram_core::ProjectId::from_path(Path::new("/bench"));
-          let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+          let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
             .await
             .unwrap();
 
           let project_uuid = Uuid::new_v4();
           for i in 0..size {
             let memory = create_test_memory(project_uuid, i);
-            let vector: Vec<f32> = (0..768).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
+            let vector: Vec<f32> = (0..4096).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
             db.add_memory(&memory, Some(&vector)).await.unwrap();
           }
         });
@@ -97,14 +97,14 @@ fn bench_memory_search(c: &mut Criterion) {
   let (db, _temp_dir) = rt.block_on(async {
     let temp_dir = TempDir::new().unwrap();
     let project_id = engram_core::ProjectId::from_path(Path::new("/bench"));
-    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
       .await
       .unwrap();
 
     let project_uuid = Uuid::new_v4();
     for i in 0..100 {
       let memory = create_test_memory(project_uuid, i);
-      let vector: Vec<f32> = (0..768).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
+      let vector: Vec<f32> = (0..4096).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
       db.add_memory(&memory, Some(&vector)).await.unwrap();
     }
 
@@ -115,7 +115,7 @@ fn bench_memory_search(c: &mut Criterion) {
 
   for limit in [5, 10, 20].iter() {
     group.bench_with_input(BenchmarkId::from_parameter(limit), limit, |b, &limit| {
-      let query_vec: Vec<f32> = (0..768).map(|i| (i as f32 * 0.002).cos()).collect();
+      let query_vec: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.002).cos()).collect();
       b.iter(|| {
         rt.block_on(async {
           db.search_memories(black_box(&query_vec), black_box(limit), None)
@@ -136,14 +136,14 @@ fn bench_memory_list(c: &mut Criterion) {
   let (db, _temp_dir) = rt.block_on(async {
     let temp_dir = TempDir::new().unwrap();
     let project_id = engram_core::ProjectId::from_path(Path::new("/bench"));
-    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
       .await
       .unwrap();
 
     let project_uuid = Uuid::new_v4();
     for i in 0..200 {
       let memory = create_test_memory(project_uuid, i);
-      let vector: Vec<f32> = (0..768).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
+      let vector: Vec<f32> = (0..4096).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
       db.add_memory(&memory, Some(&vector)).await.unwrap();
     }
 

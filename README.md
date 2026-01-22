@@ -29,7 +29,7 @@ brew install ollama
 
 # Start Ollama and pull the embedding model
 ollama serve
-ollama pull nomic-embed-text
+ollama pull qwen3-embedding
 ```
 
 ### Option 1: Quick Install (Recommended)
@@ -91,11 +91,11 @@ cp -r ccengram/plugin ~/.claude/plugins/ccengram
 
 CCEngram supports three tool presets to control which MCP tools are available to Claude Code:
 
-| Preset | Tools | Description |
-|--------|-------|-------------|
-| **minimal** | `memory_search`, `code_search`, `docs_search` | Read-only search (recommended to start) |
-| **standard** | Above + `memory_add`, `memory_reinforce`, `memory_deemphasize`, `memory_timeline`, `entity_top`, `project_stats` | Standard operations (9 tools) |
-| **full** | All 36 tools | Full control over all memory operations |
+| Preset       | Tools                                                                                                            | Description                             |
+| ------------ | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| **minimal**  | `memory_search`, `code_search`, `docs_search`                                                                    | Read-only search (recommended to start) |
+| **standard** | Above + `memory_add`, `memory_reinforce`, `memory_deemphasize`, `memory_timeline`, `entity_top`, `project_stats` | Standard operations (9 tools)           |
+| **full**     | All 36 tools                                                                                                     | Full control over all memory operations |
 
 **Recommendation**: Start with `minimal`. Hooks handle memory capture automatically.
 
@@ -126,8 +126,8 @@ preset = "minimal"
 
 [embedding]
 provider = "ollama"
-model = "nomic-embed-text"
-dimensions = 768
+model = "qwen3-embedding"
+dimensions = 4096
 
 [decay]
 episodic_rate = 0.1
@@ -153,13 +153,13 @@ The config file is watched for changes. Docs settings are reloaded automatically
 
 ## Memory Sectors
 
-| Sector | Description | Decay Rate |
-|--------|-------------|------------|
-| **Episodic** | What happened (tool calls, observations) | Fast (0.1/day) |
-| **Semantic** | Facts and knowledge | Slow (0.02/day) |
-| **Procedural** | How to do things (commands, workflows) | Very slow (0.01/day) |
-| **Emotional** | Preferences and reactions | Medium (0.05/day) |
-| **Reflective** | Session summaries and insights | Very slow (0.01/day) |
+| Sector         | Description                              | Decay Rate           |
+| -------------- | ---------------------------------------- | -------------------- |
+| **Episodic**   | What happened (tool calls, observations) | Fast (0.1/day)       |
+| **Semantic**   | Facts and knowledge                      | Slow (0.02/day)      |
+| **Procedural** | How to do things (commands, workflows)   | Very slow (0.01/day) |
+| **Emotional**  | Preferences and reactions                | Medium (0.05/day)    |
+| **Reflective** | Session summaries and insights           | Very slow (0.01/day) |
 
 ## CLI Usage
 
@@ -225,14 +225,14 @@ ccengram tui
 
 ### Keybindings
 
-| Key | Action |
-|-----|--------|
-| `Tab` | Switch views |
-| `/` | Search |
-| `j/k` | Navigate up/down |
-| `Enter` | Select/expand |
-| `q` | Quit |
-| `?` | Help |
+| Key     | Action           |
+| ------- | ---------------- |
+| `Tab`   | Switch views     |
+| `/`     | Search           |
+| `j/k`   | Navigate up/down |
+| `Enter` | Select/expand    |
+| `q`     | Quit             |
+| `?`     | Help             |
 
 ## Architecture
 
@@ -336,12 +336,12 @@ Error: Failed to connect to Ollama at http://localhost:11434
 ### Model Not Found
 
 ```
-Error: Model nomic-embed-text not found
+Error: Model qwen3-embedding not found
 ```
 
 **Solutions:**
 
-1. Pull the model: `ollama pull nomic-embed-text`
+1. Pull the model: `ollama pull qwen3-embedding`
 2. Check available models: `ollama list`
 
 ### Embedding Dimension Mismatch

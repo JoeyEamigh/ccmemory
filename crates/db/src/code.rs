@@ -315,7 +315,7 @@ mod tests {
   async fn create_test_db() -> (TempDir, ProjectDb) {
     let temp_dir = TempDir::new().unwrap();
     let project_id = ProjectId::from_path(Path::new("/test"));
-    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
       .await
       .unwrap();
     (temp_dir, db)

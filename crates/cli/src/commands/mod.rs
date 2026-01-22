@@ -11,7 +11,7 @@ mod search;
 mod update;
 mod watch;
 
-pub use admin::{cmd_archive, cmd_config, cmd_health, cmd_stats};
+pub use admin::{cmd_archive, cmd_config_init, cmd_config_reset, cmd_config_show, cmd_health, cmd_stats};
 pub use agent::{cmd_agent, cmd_tui};
 pub use daemon::cmd_daemon;
 pub use hook::cmd_hook;

@@ -237,7 +237,9 @@ mod tests {
     let data_dir = TempDir::new().unwrap();
     let db_path = data_dir.path().join("test.lancedb");
     let project_id = ProjectId::from_path(Path::new("/test"));
-    let db = ProjectDb::open_at_path(project_id.clone(), db_path, 768).await.unwrap();
+    let db = ProjectDb::open_at_path(project_id.clone(), db_path, 4096)
+      .await
+      .unwrap();
 
     // Create test memories with different properties
     let memories = vec![
@@ -278,7 +280,9 @@ mod tests {
     let data_dir = TempDir::new().unwrap();
     let db_path = data_dir.path().join("test.lancedb");
     let project_id = ProjectId::from_path(Path::new("/test"));
-    let db = ProjectDb::open_at_path(project_id.clone(), db_path, 768).await.unwrap();
+    let db = ProjectDb::open_at_path(project_id.clone(), db_path, 4096)
+      .await
+      .unwrap();
 
     // Create test chunks
     let chunks_data = vec![

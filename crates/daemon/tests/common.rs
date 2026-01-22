@@ -2,8 +2,8 @@
 //!
 //! These tests verify end-to-end functionality of the daemon, tools, and database.
 //!
-//! Note: These tests expect Ollama to be running locally with the nomic-embed-text model.
-//! Run: ollama pull nomic-embed-text
+//! Note: These tests expect Ollama to be running locally with the qwen3-embedding model.
+//! Run: ollama pull qwen3-embedding
 
 use daemon::{ProjectRegistry, Router};
 use embedding::{EmbeddingProvider, OllamaProvider};

@@ -321,7 +321,7 @@ async fn test_database_migrations() {
   let db_path = data_dir.path().join("test.lancedb");
   let project_id = engram_core::ProjectId::from_path(Path::new("/test/migrations"));
 
-  let db = ProjectDb::open_at_path(project_id, db_path, 768).await.unwrap();
+  let db = ProjectDb::open_at_path(project_id, db_path, 4096).await.unwrap();
 
   // New database should need migration
   let needs = db.needs_migration().await.unwrap();
@@ -361,7 +361,9 @@ async fn test_session_memory_links() {
   let db_path = data_dir.path().join("test.lancedb");
   let project_id = ProjectId::from_path(Path::new("/test"));
 
-  let db = ProjectDb::open_at_path(project_id.clone(), db_path, 768).await.unwrap();
+  let db = ProjectDb::open_at_path(project_id.clone(), db_path, 4096)
+    .await
+    .unwrap();
 
   // Create and add a session
   let mut session = Session::new(uuid::Uuid::new_v4());
@@ -408,7 +410,9 @@ async fn test_session_stats_extended() {
   let db_path = data_dir.path().join("test.lancedb");
   let project_id = ProjectId::from_path(Path::new("/test"));
 
-  let db = ProjectDb::open_at_path(project_id.clone(), db_path, 768).await.unwrap();
+  let db = ProjectDb::open_at_path(project_id.clone(), db_path, 4096)
+    .await
+    .unwrap();
 
   // Create a session
   let session = Session::new(uuid::Uuid::new_v4());

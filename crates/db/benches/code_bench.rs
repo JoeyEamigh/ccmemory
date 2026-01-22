@@ -72,12 +72,12 @@ fn bench_code_chunk_add(c: &mut Criterion) {
       rt.block_on(async {
         let temp_dir = TempDir::new().unwrap();
         let project_id = engram_core::ProjectId::from_path(Path::new("/bench"));
-        let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+        let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
           .await
           .unwrap();
 
         let chunk = create_test_chunk(0, Language::Rust);
-        let vector: Vec<f32> = (0..768).map(|i| (i as f32 * 0.001).sin()).collect();
+        let vector: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.001).sin()).collect();
         db.add_code_chunk(black_box(&chunk), Some(&vector)).await.unwrap();
       });
     });
@@ -98,7 +98,7 @@ fn bench_code_chunk_batch_add(c: &mut Criterion) {
         rt.block_on(async {
           let temp_dir = TempDir::new().unwrap();
           let project_id = engram_core::ProjectId::from_path(Path::new("/bench"));
-          let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+          let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
             .await
             .unwrap();
 
@@ -112,7 +112,7 @@ fn bench_code_chunk_batch_add(c: &mut Criterion) {
                   Language::TypeScript
                 },
               );
-              let vector: Vec<f32> = (0..768).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
+              let vector: Vec<f32> = (0..4096).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
               (chunk, vector)
             })
             .collect();
@@ -133,7 +133,7 @@ fn bench_code_chunk_search(c: &mut Criterion) {
   let (db, _temp_dir) = rt.block_on(async {
     let temp_dir = TempDir::new().unwrap();
     let project_id = engram_core::ProjectId::from_path(Path::new("/bench"));
-    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
       .await
       .unwrap();
 
@@ -147,7 +147,7 @@ fn bench_code_chunk_search(c: &mut Criterion) {
             Language::TypeScript
           },
         );
-        let vector: Vec<f32> = (0..768).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
+        let vector: Vec<f32> = (0..4096).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
         (chunk, vector)
       })
       .collect();
@@ -161,7 +161,7 @@ fn bench_code_chunk_search(c: &mut Criterion) {
 
   for limit in [5, 10, 20].iter() {
     group.bench_with_input(BenchmarkId::from_parameter(limit), limit, |b, &limit| {
-      let query_vec: Vec<f32> = (0..768).map(|i| (i as f32 * 0.002).cos()).collect();
+      let query_vec: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.002).cos()).collect();
       b.iter(|| {
         rt.block_on(async {
           db.search_code_chunks(black_box(&query_vec), black_box(limit), None)
@@ -182,7 +182,7 @@ fn bench_code_chunk_search_filtered(c: &mut Criterion) {
   let (db, _temp_dir) = rt.block_on(async {
     let temp_dir = TempDir::new().unwrap();
     let project_id = engram_core::ProjectId::from_path(Path::new("/bench"));
-    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
       .await
       .unwrap();
 
@@ -196,7 +196,7 @@ fn bench_code_chunk_search_filtered(c: &mut Criterion) {
             Language::TypeScript
           },
         );
-        let vector: Vec<f32> = (0..768).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
+        let vector: Vec<f32> = (0..4096).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
         (chunk, vector)
       })
       .collect();
@@ -210,7 +210,7 @@ fn bench_code_chunk_search_filtered(c: &mut Criterion) {
 
   // Filter by language
   group.bench_function("by_language", |b| {
-    let query_vec: Vec<f32> = (0..768).map(|i| (i as f32 * 0.002).cos()).collect();
+    let query_vec: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.002).cos()).collect();
     b.iter(|| {
       rt.block_on(async {
         db.search_code_chunks(black_box(&query_vec), 10, Some("language = 'rust'"))
@@ -222,7 +222,7 @@ fn bench_code_chunk_search_filtered(c: &mut Criterion) {
 
   // Filter by file path pattern
   group.bench_function("by_file_path", |b| {
-    let query_vec: Vec<f32> = (0..768).map(|i| (i as f32 * 0.002).cos()).collect();
+    let query_vec: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.002).cos()).collect();
     b.iter(|| {
       rt.block_on(async {
         db.search_code_chunks(black_box(&query_vec), 10, Some("file_path LIKE 'src/module_1%'"))
@@ -242,7 +242,7 @@ fn bench_code_chunk_get(c: &mut Criterion) {
   let (db, chunk_ids, _temp_dir) = rt.block_on(async {
     let temp_dir = TempDir::new().unwrap();
     let project_id = engram_core::ProjectId::from_path(Path::new("/bench"));
-    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
       .await
       .unwrap();
 
@@ -250,7 +250,7 @@ fn bench_code_chunk_get(c: &mut Criterion) {
     for i in 0..100 {
       let chunk = create_test_chunk(i, Language::Rust);
       chunk_ids.push(chunk.id);
-      let vector: Vec<f32> = (0..768).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
+      let vector: Vec<f32> = (0..4096).map(|j| ((i + j) as f32 * 0.001).sin()).collect();
       db.add_code_chunk(&chunk, Some(&vector)).await.unwrap();
     }
 

@@ -641,7 +641,9 @@ async fn test_router_memory_promotion() {
   let db_path = data_dir.path().join("test.lancedb");
   let project_id = ProjectId::from_path(Path::new("/test"));
 
-  let db = ProjectDb::open_at_path(project_id.clone(), db_path, 768).await.unwrap();
+  let db = ProjectDb::open_at_path(project_id.clone(), db_path, 4096)
+    .await
+    .unwrap();
 
   // Create two sessions
   let session1 = Session::new(uuid::Uuid::new_v4());

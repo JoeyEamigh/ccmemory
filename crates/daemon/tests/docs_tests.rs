@@ -126,7 +126,7 @@ async fn test_document_metadata_and_updates() {
   let db_path = data_dir.path().join("test.lancedb");
   let project_id = engram_core::ProjectId::from_path(Path::new("/test"));
 
-  let db = ProjectDb::open_at_path(project_id, db_path, 768).await.unwrap();
+  let db = ProjectDb::open_at_path(project_id, db_path, 4096).await.unwrap();
 
   let doc_project_id = uuid::Uuid::new_v4();
 
@@ -195,7 +195,7 @@ async fn test_document_full_content_storage() {
   let db_path = data_dir.path().join("test.lancedb");
   let project_id = engram_core::ProjectId::from_path(Path::new("/test"));
 
-  let db = ProjectDb::open_at_path(project_id, db_path, 768).await.unwrap();
+  let db = ProjectDb::open_at_path(project_id, db_path, 4096).await.unwrap();
 
   let project_uuid = uuid::Uuid::new_v4();
   let full_content = "This is the full document content.\n\nWith multiple paragraphs.\n\nAnd more text.";

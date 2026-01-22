@@ -112,7 +112,7 @@ pub struct EmbeddingConfig {
   /// Model name (e.g., "qwen3-embedding", "openai/text-embedding-3-small")
   pub model: String,
 
-  /// Embedding dimensions (e.g., 4096, 1536, 768)
+  /// Embedding dimensions (e.g., 4096, 1536, 4096)
   pub dimensions: usize,
 
   /// Ollama server URL (only used when provider = ollama)
@@ -634,13 +634,13 @@ mod tests {
 preset = "minimal"
 
 [embedding]
-dimensions = 768
+dimensions = 4096
 "#;
     std::fs::write(claude_dir.join("ccengram.toml"), config_content).unwrap();
 
     let config = Config::load_for_project(temp.path());
     assert_eq!(config.tools.preset, ToolPreset::Minimal);
-    assert_eq!(config.embedding.dimensions, 768);
+    assert_eq!(config.embedding.dimensions, 4096);
   }
 
   #[test]

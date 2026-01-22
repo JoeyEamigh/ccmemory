@@ -47,13 +47,13 @@ crates/
 ## Sample Commands
 
 ```bash
-cargo build                     # Build all
-cargo test                      # Run tests
-cargo clippy --all              # Lint all
-cargo fmt --all                 # Format all
-cargo run -p cli -- daemon      # Run daemon
-cargo run -p cli -- search "q"  # Search
-cargo run -p cli -- tui         # Launch TUI
+cargo build                              # Build all
+cargo test                               # Run tests
+cargo clippy --all                       # Lint all
+cargo fmt --all                          # Format all
+cargo run -p cli -- daemon               # Run daemon
+cargo run -p cli -- search memories "q"  # Search memories
+cargo run -p cli -- tui                  # Launch TUI
 ```
 
 ## Tool Presets
@@ -69,7 +69,7 @@ cargo run -p cli -- tui         # Launch TUI
 Initialize project config:
 
 ```bash
-ccengram config --init --preset minimal
+ccengram config init --preset minimal
 ```
 
 ## MemExplore Subagent
@@ -97,12 +97,25 @@ Use for:
 ## CLI Commands
 
 ```bash
+# Core
 ccengram daemon                     # Start daemon (required)
-ccengram search "query"             # Search memories
-ccengram search-code "query"        # Search code
-ccengram search-docs "query"        # Search documents
+ccengram watch                      # Start file watcher
+ccengram tui                        # Launch TUI
+ccengram mcp                        # MCP server (for plugin)
+ccengram hook <name>                # Handle hook event
 
-# Index subcommands
+# Search (memories, code, docs)
+ccengram search memories "query"    # Search memories
+ccengram search code "query"        # Search code
+ccengram search docs "query"        # Search documents
+
+# Memory management
+ccengram memory show <id>           # Show memory details
+ccengram memory delete <id>         # Soft-delete a memory
+ccengram memory export              # Export memories to file
+ccengram memory archive             # Archive old low-salience memories
+
+# Index management
 ccengram index                      # Index code (default)
 ccengram index code                 # Index code files
 ccengram index code --force         # Re-index all code
@@ -111,11 +124,18 @@ ccengram index docs                 # Index documents from configured directory
 ccengram index docs --directory ./  # Index docs from specific directory
 ccengram index file <path>          # Index a single file (auto-detects type)
 
-ccengram watch                      # Start file watcher
-ccengram tui                        # Launch TUI
-ccengram mcp                        # MCP server (for plugin)
-ccengram hook <name>                # Handle hook event
+# Configuration
+ccengram config help                # Show presets and config locations
+ccengram config show                # Show effective config
+ccengram config init                # Create project config (standard preset)
+ccengram config init --preset minimal
+ccengram config reset               # Reset user config to defaults
+
+# Utilities
+ccengram stats                      # Show statistics
+ccengram health                     # Health check
 ccengram migrate                    # Migrate embeddings
+ccengram update                     # Check for updates
 ccengram agent                      # Generate MemExplore agent
 ```
 

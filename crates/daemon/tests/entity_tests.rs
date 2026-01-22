@@ -19,7 +19,7 @@ async fn test_memory_relationships() {
   let db_path = data_dir.path().join("test.lancedb");
   let project_id = engram_core::ProjectId::from_path(Path::new("/test"));
 
-  let db = ProjectDb::open_at_path(project_id, db_path, 768).await.unwrap();
+  let db = ProjectDb::open_at_path(project_id, db_path, 4096).await.unwrap();
 
   // Create memory IDs
   let from_id = MemoryId::new();
@@ -128,7 +128,7 @@ async fn test_entity_operations() {
   let db_path = data_dir.path().join("test.lancedb");
   let project_id = engram_core::ProjectId::from_path(Path::new("/test"));
 
-  let db = ProjectDb::open_at_path(project_id, db_path, 768).await.unwrap();
+  let db = ProjectDb::open_at_path(project_id, db_path, 4096).await.unwrap();
 
   // Create an entity
   let entity = Entity {
@@ -226,7 +226,7 @@ async fn test_memory_entity_links() {
   let db_path = data_dir.path().join("test.lancedb");
   let project_id = engram_core::ProjectId::from_path(Path::new("/test"));
 
-  let db = ProjectDb::open_at_path(project_id, db_path, 768).await.unwrap();
+  let db = ProjectDb::open_at_path(project_id, db_path, 4096).await.unwrap();
 
   // Create entity
   let entity = Entity {
@@ -302,7 +302,7 @@ async fn test_router_entity_tools() {
     .join(project_id.as_str())
     .join("lancedb");
   std::fs::create_dir_all(&data_dir).unwrap();
-  let db = db::ProjectDb::open_at_path(project_id, data_dir, 768).await.unwrap();
+  let db = db::ProjectDb::open_at_path(project_id, data_dir, 4096).await.unwrap();
 
   let entity = Entity {
     id: uuid::Uuid::new_v4(),

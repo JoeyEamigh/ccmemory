@@ -252,7 +252,7 @@ mod tests {
 
   #[test]
   fn test_memories_schema() {
-    let schema = memories_schema(768);
+    let schema = memories_schema(4096);
     assert!(schema.field_with_name("id").is_ok());
     assert!(schema.field_with_name("content").is_ok());
     assert!(schema.field_with_name("vector").is_ok());
@@ -260,7 +260,7 @@ mod tests {
 
   #[test]
   fn test_code_chunks_schema() {
-    let schema = code_chunks_schema(768);
+    let schema = code_chunks_schema(4096);
     assert!(schema.field_with_name("file_path").is_ok());
     assert!(schema.field_with_name("vector").is_ok());
   }
@@ -274,7 +274,7 @@ mod tests {
 
   #[test]
   fn test_documents_schema() {
-    let schema = documents_schema(768);
+    let schema = documents_schema(4096);
     assert!(schema.field_with_name("id").is_ok());
     assert!(schema.field_with_name("content").is_ok());
     assert!(schema.field_with_name("title").is_ok());

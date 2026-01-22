@@ -421,157 +421,95 @@ pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) ->
   Ok(())
 }
 
-/// Show or modify configuration
-pub async fn cmd_config(
-  key: Option<String>,
-  value: Option<String>,
-  reset: bool,
-  list: bool,
-  init: bool,
-  preset: &str,
-  show: bool,
-) -> Result<()> {
+/// Show current effective configuration
+pub async fn cmd_config_show() -> Result<()> {
+  use engram_core::Config;
+
+  let cwd = std::env::current_dir()?;
+  let config = Config::load_for_project(&cwd);
+
+  // Check which config file is being used
+  let project_config = Config::project_config_path(&cwd);
+  let user_config = Config::user_config_path();
+
+  println!("Effective configuration for: {:?}", cwd);
+  println!();
+
+  if project_config.exists() {
+    println!("Using project config: {:?}", project_config);
+  } else if let Some(ref user_path) = user_config {
+    if user_path.exists() {
+      println!("Using user config: {:?}", user_path);
+    } else {
+      println!("Using default configuration (no config file found)");
+    }
+  } else {
+    println!("Using default configuration");
+  }
+  println!();
+
+  // Show config as TOML
+  let toml_str = toml::to_string_pretty(&config)?;
+  println!("{}", toml_str);
+
+  Ok(())
+}
+
+/// Initialize project configuration file
+pub async fn cmd_config_init(preset: &str) -> Result<()> {
   use engram_core::{Config, ToolPreset};
 
-  // Handle --init: create project-relative config
-  if init {
-    let cwd = std::env::current_dir()?;
-    let config_path = Config::project_config_path(&cwd);
+  let cwd = std::env::current_dir()?;
+  let config_path = Config::project_config_path(&cwd);
 
-    if config_path.exists() {
-      error!("Config file already exists: {:?}", config_path);
-      println!("Delete it first if you want to regenerate");
+  if config_path.exists() {
+    error!("Config file already exists: {:?}", config_path);
+    println!("Delete it first if you want to regenerate");
+    std::process::exit(1);
+  }
+
+  // Parse preset
+  let tool_preset = match preset.to_lowercase().as_str() {
+    "minimal" => ToolPreset::Minimal,
+    "standard" => ToolPreset::Standard,
+    "full" => ToolPreset::Full,
+    _ => {
+      error!("Invalid preset: {}. Use minimal, standard, or full", preset);
       std::process::exit(1);
     }
+  };
 
-    // Parse preset
-    let tool_preset = match preset.to_lowercase().as_str() {
-      "minimal" => ToolPreset::Minimal,
-      "standard" => ToolPreset::Standard,
-      "full" => ToolPreset::Full,
-      _ => {
-        error!("Invalid preset: {}. Use minimal, standard, or full", preset);
-        std::process::exit(1);
-      }
-    };
+  // Create .claude directory if needed
+  if let Some(parent) = config_path.parent() {
+    std::fs::create_dir_all(parent)?;
+  }
 
-    // Create .claude directory if needed
-    if let Some(parent) = config_path.parent() {
+  // Generate and write config
+  let template = Config::generate_template(tool_preset);
+  std::fs::write(&config_path, &template)?;
+
+  println!("Created project config: {:?}", config_path);
+  println!();
+  println!("Tool preset: {}", preset);
+  println!("Edit the file to customize settings.");
+
+  Ok(())
+}
+
+/// Reset user configuration to defaults
+pub async fn cmd_config_reset() -> Result<()> {
+  use engram_core::{Config, ToolPreset};
+
+  if let Some(user_config_path) = Config::user_config_path() {
+    if let Some(parent) = user_config_path.parent() {
       std::fs::create_dir_all(parent)?;
     }
-
-    // Generate and write config
-    let template = Config::generate_template(tool_preset);
-    std::fs::write(&config_path, &template)?;
-
-    println!("Created project config: {:?}", config_path);
-    println!();
-    println!("Tool preset: {}", preset);
-    println!("Edit the file to customize settings.");
-    return Ok(());
-  }
-
-  // Handle --show: display effective config
-  if show {
-    let cwd = std::env::current_dir()?;
-    let config = Config::load_for_project(&cwd);
-
-    // Check which config file is being used
-    let project_config = Config::project_config_path(&cwd);
-    let user_config = Config::user_config_path();
-
-    println!("Effective configuration for: {:?}", cwd);
-    println!();
-
-    if project_config.exists() {
-      println!("Using project config: {:?}", project_config);
-    } else if let Some(ref user_path) = user_config {
-      if user_path.exists() {
-        println!("Using user config: {:?}", user_path);
-      } else {
-        println!("Using default configuration (no config file found)");
-      }
-    } else {
-      println!("Using default configuration");
-    }
-    println!();
-
-    // Show config as TOML
-    let toml_str = toml::to_string_pretty(&config)?;
-    println!("{}", toml_str);
-    return Ok(());
-  }
-
-  // Handle --list: show available tool presets
-  if list {
-    println!("Tool presets:");
-    println!();
-    println!("  minimal   - memory_search, code_search, docs_search");
-    println!("  standard  - memory_search, memory_add, memory_reinforce, memory_deemphasize,");
-    println!("              code_search, docs_search, memory_timeline, entity_top, project_stats");
-    println!("  full      - all {} tools", engram_core::ALL_TOOLS.len());
-    println!();
-    println!("Configuration sections: tools, embedding, decay, search, index");
-    println!();
-    println!("Usage:");
-    println!("  ccengram config --init                  # Create project config with standard preset");
-    println!("  ccengram config --init --preset minimal # Create with minimal preset");
-    println!("  ccengram config --show                  # Show effective config");
-    return Ok(());
-  }
-
-  // Handle --reset: reset user config to defaults
-  if reset {
-    if let Some(user_config_path) = Config::user_config_path() {
-      if let Some(parent) = user_config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-      }
-      let template = Config::generate_template(ToolPreset::Standard);
-      std::fs::write(&user_config_path, &template)?;
-      println!("Reset user config to defaults: {:?}", user_config_path);
-    } else {
-      error!("Could not determine user config path");
-      std::process::exit(1);
-    }
-    return Ok(());
-  }
-
-  // Legacy key/value handling
-  match (key, value) {
-    (Some(_k), Some(_v)) => {
-      println!("Direct key/value setting is deprecated.");
-      println!("Use 'ccengram config --init' to create a config file, then edit it directly.");
-    }
-    (Some(k), None) => {
-      // Get a value from current config
-      let cwd = std::env::current_dir()?;
-      let config = Config::load_for_project(&cwd);
-      let toml_str = toml::to_string_pretty(&config)?;
-
-      // Simple grep-style search
-      for line in toml_str.lines() {
-        if line.contains(&k) {
-          println!("{}", line);
-        }
-      }
-    }
-    (None, _) => {
-      // Show help
-      println!("CCEngram Configuration");
-      println!();
-      println!("Usage:");
-      println!("  ccengram config --init                  # Create project config");
-      println!("  ccengram config --init --preset minimal # Create with minimal preset");
-      println!("  ccengram config --show                  # Show effective config");
-      println!("  ccengram config --list                  # Show available presets");
-      println!("  ccengram config --reset                 # Reset user config");
-      println!();
-      println!("Config locations:");
-      println!("  Project: .claude/ccengram.toml");
-      if let Some(user_path) = Config::user_config_path() {
-        println!("  User:    {:?}", user_path);
-      }
-    }
+    let template = Config::generate_template(ToolPreset::Standard);
+    std::fs::write(&user_config_path, &template)?;
+    println!("Reset user config to defaults: {:?}", user_config_path);
+  } else {
+    error!("Could not determine user config path");
+    std::process::exit(1);
   }
 
   Ok(())

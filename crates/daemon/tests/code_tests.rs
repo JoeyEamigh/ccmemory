@@ -472,7 +472,7 @@ async fn test_index_checkpoints() {
   let db_path = data_dir.path().join("test.lancedb");
   let project_id = engram_core::ProjectId::from_path(Path::new("/test"));
 
-  let db = ProjectDb::open_at_path(project_id, db_path, 768).await.unwrap();
+  let db = ProjectDb::open_at_path(project_id, db_path, 4096).await.unwrap();
 
   let proj_id = "test_project_checkpoints";
   let files = vec![

@@ -9,8 +9,9 @@ mod logging;
 mod mcp;
 
 use commands::{
-  cmd_agent, cmd_archive, cmd_config, cmd_daemon, cmd_delete, cmd_export, cmd_health, cmd_hook, cmd_index,
-  cmd_migrate, cmd_search, cmd_search_code, cmd_search_docs, cmd_show, cmd_stats, cmd_tui, cmd_update, cmd_watch,
+  cmd_agent, cmd_archive, cmd_config_init, cmd_config_reset, cmd_config_show, cmd_daemon, cmd_delete, cmd_export,
+  cmd_health, cmd_hook, cmd_index, cmd_migrate, cmd_search, cmd_search_code, cmd_search_docs, cmd_show, cmd_stats,
+  cmd_tui, cmd_update, cmd_watch,
 };
 use logging::{init_cli_logging, init_daemon_logging};
 use mcp::cmd_mcp;
@@ -18,6 +19,17 @@ use mcp::cmd_mcp;
 #[derive(Parser)]
 #[command(name = "ccengram")]
 #[command(about = "Intelligent memory and code search for Claude Code")]
+#[command(after_help = "\
+QUICK START:
+  ccengram daemon                 # Start daemon (required)
+  ccengram config init            # Initialize project config
+  ccengram index code             # Index codebase
+  ccengram search memories \"q\"    # Search memories
+
+COMMON WORKFLOWS:
+  ccengram watch                  # Auto-index on file changes
+  ccengram tui                    # Interactive terminal UI
+  ccengram health                 # Check system status")]
 struct Cli {
   #[command(subcommand)]
   command: Commands,
@@ -66,19 +78,13 @@ pub enum IndexCommand {
   },
 }
 
+/// Subcommands for `ccengram search`
 #[derive(Subcommand)]
-enum Commands {
-  /// Start the daemon
-  Daemon {
-    #[arg(long)]
-    foreground: bool,
-  },
-  /// MCP server (for Claude Code integration)
-  Mcp,
-  /// Handle hook event
-  Hook { name: String },
-  /// Search memories
-  Search {
+pub enum SearchCommand {
+  /// Search memories (default if no subcommand)
+  #[command(alias = "mem")]
+  Memories {
+    /// Search query
     query: String,
     #[arg(short, long, default_value = "10")]
     limit: usize,
@@ -100,18 +106,13 @@ enum Commands {
     /// Filter by scope path prefix
     #[arg(long)]
     scope: Option<String>,
-    /// Use semantic (vector) search only (default, this flag is for compatibility)
-    #[arg(long)]
-    semantic: bool,
-    /// Use keyword search only (not supported - emits warning)
-    #[arg(long)]
-    keywords: bool,
     /// Output as JSON
     #[arg(long)]
     json: bool,
   },
-  /// Search code (semantic search over indexed code)
-  SearchCode {
+  /// Search indexed code
+  Code {
+    /// Search query
     query: String,
     #[arg(short, long, default_value = "10")]
     limit: usize,
@@ -130,18 +131,13 @@ enum Commands {
     /// Filter by symbol name
     #[arg(long)]
     symbol: Option<String>,
-    /// Use semantic (vector) search only (default, this flag is for compatibility)
-    #[arg(long)]
-    semantic: bool,
-    /// Use keyword search only (not supported - emits warning)
-    #[arg(long)]
-    keywords: bool,
     /// Output as JSON
     #[arg(long)]
     json: bool,
   },
-  /// Search documents (semantic search over ingested docs)
-  SearchDocs {
+  /// Search indexed documents
+  Docs {
+    /// Search query
     query: String,
     #[arg(short, long, default_value = "10")]
     limit: usize,
@@ -152,10 +148,15 @@ enum Commands {
     #[arg(long)]
     json: bool,
   },
+}
+
+/// Subcommands for `ccengram memory`
+#[derive(Subcommand)]
+pub enum MemoryCommand {
   /// Show detailed memory by ID
   Show {
     /// Memory ID to show
-    memory_id: String,
+    id: String,
     /// Include related memories
     #[arg(long)]
     related: bool,
@@ -166,7 +167,7 @@ enum Commands {
   /// Delete a memory
   Delete {
     /// Memory ID to delete
-    memory_id: String,
+    id: String,
     /// Permanently delete (hard delete)
     #[arg(long)]
     hard: bool,
@@ -180,21 +181,15 @@ enum Commands {
     #[arg(short, long, default_value = "json")]
     format: String,
   },
-  /// Manage code and document index
-  Index {
-    #[command(subcommand)]
-    command: Option<IndexCommand>,
-  },
-  /// Watch for file changes and update index
-  Watch {
-    /// Stop any running watcher
-    #[arg(long)]
-    stop: bool,
-    /// Check watcher status
-    #[arg(long)]
-    status: bool,
-  },
   /// Archive old low-salience memories
+  #[command(long_about = "Archive old, low-salience memories by soft-deleting them.\n\n\
+    Archived memories are hidden from search but can be restored. Use --dry-run \
+    to preview what would be archived before committing.",
+    after_help = "\
+EXAMPLES:
+  ccengram memory archive --dry-run           # Preview what would be archived
+  ccengram memory archive --threshold 0.2     # Archive memories with salience < 0.2
+  ccengram memory archive --before 2024-01-01 # Archive old memories")]
   Archive {
     /// Archive memories older than this date (YYYY-MM-DD)
     #[arg(long)]
@@ -206,32 +201,111 @@ enum Commands {
     #[arg(long)]
     dry_run: bool,
   },
+}
+
+/// Subcommands for `ccengram config`
+#[derive(Subcommand)]
+pub enum ConfigCommand {
+  /// Show current effective configuration
+  #[command(long_about = "Show the current effective configuration.\n\n\
+    Displays which config file is being used and its contents as TOML.")]
+  Show,
+
+  /// Initialize project config file (.claude/ccengram.toml)
+  #[command(long_about = "Initialize a project-specific configuration file.\n\n\
+    Creates .claude/ccengram.toml with the specified tool preset.")]
+  Init {
+    /// Tool preset: minimal, standard, or full
+    #[arg(long, default_value = "standard", value_parser = ["minimal", "standard", "full"])]
+    preset: String,
+  },
+
+  /// Reset user configuration to defaults
+  #[command(long_about = "Reset the user-level configuration file to defaults.\n\n\
+    This affects ~/.config/ccengram/config.toml, not project configs.")]
+  Reset,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+  /// Start the daemon
+  Daemon {
+    /// Run in foreground (don't daemonize)
+    #[arg(long)]
+    foreground: bool,
+  },
+  /// MCP server (for Claude Code integration)
+  Mcp,
+  /// Handle hook event
+  Hook {
+    /// Hook name to handle
+    name: String,
+  },
+  /// Search memories, code, or documents
+  #[command(after_help = "\
+EXAMPLES:
+  ccengram search memories \"authentication flow\"
+  ccengram search memories \"user preferences\" --sector semantic
+  ccengram search code \"error handling\" --language rust
+  ccengram search code \"database\" --type function
+  ccengram search docs \"API reference\"")]
+  Search {
+    #[command(subcommand)]
+    command: SearchCommand,
+  },
+  /// Manage memories (show, delete, export, archive)
+  #[command(after_help = "\
+NOTE:
+  Memories are created automatically via hooks during Claude Code sessions.
+  Use 'ccengram search memories' to find memories by content.")]
+  Memory {
+    #[command(subcommand)]
+    command: MemoryCommand,
+  },
+  /// Manage code and document index
+  #[command(after_help = "\
+WORKFLOW:
+  Indexing runs automatically via 'ccengram watch', or manually:
+
+  ccengram index code             # Index source files
+  ccengram index code --force     # Re-index everything
+  ccengram index docs             # Index documentation
+  ccengram index file <path>      # Index a single file
+
+SUPPORTED LANGUAGES:
+  Rust, Python, TypeScript, JavaScript, Go, and more via tree-sitter")]
+  Index {
+    #[command(subcommand)]
+    command: Option<IndexCommand>,
+  },
+  /// Manage configuration
+  #[command(after_help = "\
+PRESETS:
+  minimal   - memory_search, code_search, docs_search (3 tools)
+  standard  - Above + memory_add, memory_reinforce, memory_deemphasize,
+              memory_timeline, entity_top, project_stats (9 tools)
+  full      - All available tools
+
+CONFIG LOCATIONS:
+  Project: .claude/ccengram.toml
+  User:    ~/.config/ccengram/config.toml")]
+  Config {
+    #[command(subcommand)]
+    command: ConfigCommand,
+  },
+  /// Watch for file changes and update index
+  Watch {
+    /// Stop any running watcher
+    #[arg(long)]
+    stop: bool,
+    /// Check watcher status
+    #[arg(long)]
+    status: bool,
+  },
   /// Show statistics
   Stats,
   /// Health check
   Health,
-  /// Show or set configuration
-  Config {
-    /// Configuration key to get/set
-    key: Option<String>,
-    /// Value to set (if provided with key)
-    value: Option<String>,
-    /// Reset all configuration to defaults
-    #[arg(long)]
-    reset: bool,
-    /// List all configuration keys
-    #[arg(long)]
-    list: bool,
-    /// Initialize project config file (.claude/ccengram.toml)
-    #[arg(long)]
-    init: bool,
-    /// Tool preset for init: minimal, standard (default), or full
-    #[arg(long, default_value = "standard")]
-    preset: String,
-    /// Show current effective config
-    #[arg(long)]
-    show: bool,
-  },
   /// Check for updates or update to latest version
   Update {
     /// Only check for updates without installing
@@ -284,93 +358,87 @@ async fn main() -> Result<()> {
     Commands::Daemon { foreground: _ } => cmd_daemon().await,
     Commands::Mcp => cmd_mcp().await,
     Commands::Hook { name } => cmd_hook(&name).await,
-    Commands::Search {
-      query,
-      limit,
-      project,
-      sector,
-      memory_type,
-      min_salience,
-      include_superseded,
-      scope,
-      semantic: _,
-      keywords,
-      json,
-    } => {
-      if keywords {
-        eprintln!("Warning: --keywords mode is not supported in this version. Using semantic search.");
-      }
-      cmd_search(
-        &query,
+
+    // Search subcommands
+    Commands::Search { command } => match command {
+      SearchCommand::Memories {
+        query,
         limit,
-        project.as_deref(),
-        sector.as_deref(),
-        memory_type.as_deref(),
+        project,
+        sector,
+        memory_type,
         min_salience,
         include_superseded,
-        scope.as_deref(),
+        scope,
         json,
-      )
-      .await
-    }
-    Commands::SearchCode {
-      query,
-      limit,
-      project,
-      language,
-      chunk_type,
-      path,
-      symbol,
-      semantic: _,
-      keywords,
-      json,
-    } => {
-      if keywords {
-        eprintln!("Warning: --keywords mode is not supported in this version. Using semantic search.");
+      } => {
+        cmd_search(
+          &query,
+          limit,
+          project.as_deref(),
+          sector.as_deref(),
+          memory_type.as_deref(),
+          min_salience,
+          include_superseded,
+          scope.as_deref(),
+          json,
+        )
+        .await
       }
-      cmd_search_code(
-        &query,
+      SearchCommand::Code {
+        query,
         limit,
-        project.as_deref(),
-        language.as_deref(),
-        chunk_type.as_deref(),
-        path.as_deref(),
-        symbol.as_deref(),
+        project,
+        language,
+        chunk_type,
+        path,
+        symbol,
         json,
-      )
-      .await
-    }
-    Commands::SearchDocs {
-      query,
-      limit,
-      project,
-      json,
-    } => cmd_search_docs(&query, limit, project.as_deref(), json).await,
-    Commands::Show {
-      memory_id,
-      related,
-      json,
-    } => cmd_show(&memory_id, related, json).await,
-    Commands::Delete { memory_id, hard } => cmd_delete(&memory_id, hard).await,
-    Commands::Export { output, format } => cmd_export(output.as_deref(), &format).await,
+      } => {
+        cmd_search_code(
+          &query,
+          limit,
+          project.as_deref(),
+          language.as_deref(),
+          chunk_type.as_deref(),
+          path.as_deref(),
+          symbol.as_deref(),
+          json,
+        )
+        .await
+      }
+      SearchCommand::Docs {
+        query,
+        limit,
+        project,
+        json,
+      } => cmd_search_docs(&query, limit, project.as_deref(), json).await,
+    },
+
+    // Memory subcommands
+    Commands::Memory { command } => match command {
+      MemoryCommand::Show { id, related, json } => cmd_show(&id, related, json).await,
+      MemoryCommand::Delete { id, hard } => cmd_delete(&id, hard).await,
+      MemoryCommand::Export { output, format } => cmd_export(output.as_deref(), &format).await,
+      MemoryCommand::Archive {
+        before,
+        threshold,
+        dry_run,
+      } => cmd_archive(before.as_deref(), threshold, dry_run).await,
+    },
+
     Commands::Index { command } => cmd_index(command).await,
+
+    // Config subcommands
+    Commands::Config { command } => match command {
+      ConfigCommand::Show => cmd_config_show().await,
+      ConfigCommand::Init { preset } => cmd_config_init(&preset).await,
+      ConfigCommand::Reset => cmd_config_reset().await,
+    },
+
     Commands::Watch { stop, status } => cmd_watch(stop, status).await,
-    Commands::Archive {
-      before,
-      threshold,
-      dry_run,
-    } => cmd_archive(before.as_deref(), threshold, dry_run).await,
     Commands::Stats => cmd_stats().await,
     Commands::Health => cmd_health().await,
-    Commands::Config {
-      key,
-      value,
-      reset,
-      list,
-      init,
-      preset,
-      show,
-    } => cmd_config(key, value, reset, list, init, &preset, show).await,
     Commands::Update { check, version } => cmd_update(check, version).await,
     Commands::Migrate { dry_run, force } => cmd_migrate(dry_run, force).await,
     Commands::Agent { output, force } => cmd_agent(output.as_deref(), force).await,

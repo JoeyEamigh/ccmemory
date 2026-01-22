@@ -337,7 +337,7 @@ mod tests {
     let temp_dir = TempDir::new().unwrap();
     let project_id = ProjectId::from_path(Path::new("/test/project"));
 
-    let db = ProjectDb::open_at_path(project_id.clone(), temp_dir.path().join("test.lancedb"), 768)
+    let db = ProjectDb::open_at_path(project_id.clone(), temp_dir.path().join("test.lancedb"), 4096)
       .await
       .unwrap();
 
@@ -349,7 +349,7 @@ mod tests {
     let temp_dir = TempDir::new().unwrap();
     let project_id = ProjectId::from_path(Path::new("/test/project"));
 
-    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 768)
+    let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
       .await
       .unwrap();
 
