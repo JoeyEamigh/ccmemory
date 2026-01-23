@@ -1,5 +1,5 @@
 [package]
-name = "ccengram-parser"
+name = "parser"
 version.workspace = true
 edition.workspace = true
 description = "Tree-sitter based code parsing for CCEngram"

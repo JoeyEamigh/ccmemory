@@ -1,6 +1,6 @@
-use ccengram_parser::TreeSitterParser;
 use chrono::Utc;
 use engram_core::{CHARS_PER_TOKEN, ChunkType, CodeChunk, Language};
+use parser::TreeSitterParser;
 use uuid::Uuid;
 
 /// Configuration for the chunker

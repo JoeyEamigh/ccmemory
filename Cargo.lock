@@ -1173,38 +1173,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ccengram-parser"
-version = "0.1.0"
-dependencies = [
- "engram-core",
- "pretty_assertions",
- "thiserror 2.0.18",
- "tree-sitter 0.26.3",
- "tree-sitter-bash",
- "tree-sitter-c",
- "tree-sitter-c-sharp",
- "tree-sitter-cpp",
- "tree-sitter-css",
- "tree-sitter-go",
- "tree-sitter-html",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-json",
- "tree-sitter-kotlin",
- "tree-sitter-lua",
- "tree-sitter-markdown",
- "tree-sitter-php",
- "tree-sitter-python",
- "tree-sitter-ruby",
- "tree-sitter-rust",
- "tree-sitter-scala",
- "tree-sitter-toml",
- "tree-sitter-typescript",
- "tree-sitter-yaml",
- "tree-sitter-zig",
-]
-
-[[package]]
 name = "census"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3707,7 +3675,6 @@ dependencies = [
 name = "index"
 version = "0.1.0"
 dependencies = [
- "ccengram-parser",
  "chrono",
  "criterion",
  "db",
@@ -3718,6 +3685,7 @@ dependencies = [
  "ignore",
  "libc",
  "notify",
+ "parser",
  "rayon",
  "serde",
  "serde_json",
@@ -5464,6 +5432,38 @@ dependencies = [
  "tokio",
  "twox-hash",
  "zstd",
+]
+
+[[package]]
+name = "parser"
+version = "0.1.0"
+dependencies = [
+ "engram-core",
+ "pretty_assertions",
+ "thiserror 2.0.18",
+ "tree-sitter 0.26.3",
+ "tree-sitter-bash",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-css",
+ "tree-sitter-go",
+ "tree-sitter-html",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-kotlin",
+ "tree-sitter-lua",
+ "tree-sitter-markdown",
+ "tree-sitter-php",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-scala",
+ "tree-sitter-toml",
+ "tree-sitter-typescript",
+ "tree-sitter-yaml",
+ "tree-sitter-zig",
 ]
 
 [[package]]
