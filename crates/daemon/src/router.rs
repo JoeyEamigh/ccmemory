@@ -265,6 +265,10 @@ impl Router {
       "project_stats" => self.tool_handler.project_stats(request).await,
       "health_check" => self.tool_handler.health_check(request).await,
 
+      // Unified exploration tools (new)
+      "explore" => self.tool_handler.explore(request).await,
+      "context" => self.tool_handler.context(request).await,
+
       // Migration
       "migrate_embedding" => self.tool_handler.migrate_embedding(request).await,
 

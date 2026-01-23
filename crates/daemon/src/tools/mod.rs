@@ -6,10 +6,15 @@
 mod code;
 mod documents;
 mod entities;
+mod explore;
+mod format;
 mod memory;
 mod ranking;
+mod suggestions;
 mod system;
 mod watch;
+
+pub use format::{format_context_response, format_explore_response};
 
 use crate::projects::ProjectRegistry;
 use embedding::EmbeddingProvider;

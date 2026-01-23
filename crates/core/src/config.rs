@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 
 /// All available MCP tools (excluding internal-only tools like hook, ping, status)
 pub const ALL_TOOLS: &[&str] = &[
+  // Unified exploration tools (new)
+  "explore",
+  "context",
   // Memory tools
   "memory_search",
   "memory_get",
@@ -60,33 +63,30 @@ pub const ALL_TOOLS: &[&str] = &[
 /// Internal tools that are always available but not exposed in tool lists
 pub const INTERNAL_TOOLS: &[&str] = &["hook", "ping", "status"];
 
-/// Minimal preset: search tools plus high-value code understanding tools
+/// Minimal preset: streamlined exploration tools (2 tools)
+/// This is the recommended preset for most users.
 pub const PRESET_MINIMAL: &[&str] = &[
-  "memory_search",
-  "code_search",
-  "docs_search",
-  "code_memories",
-  "code_context_full",
+  "explore",
+  "context",
 ];
 
-/// Standard preset: recommended daily driver set
+/// Standard preset: exploration + management + diagnostics (11 tools)
 pub const PRESET_STANDARD: &[&str] = &[
-  "memory_search",
+  // Exploration tools
+  "explore",
+  "context",
+  // Memory management (for manual curation)
   "memory_add",
   "memory_reinforce",
   "memory_deemphasize",
-  "memory_related",
-  "code_search",
-  "code_context",
-  "code_memories",
-  "code_callers",
-  "code_callees",
-  "code_related",
-  "code_context_full",
-  "docs_search",
-  "doc_context",
-  "memory_timeline",
-  "entity_top",
+  // Code maintenance
+  "code_index",
+  "code_stats",
+  // Watch management
+  "watch_start",
+  "watch_stop",
+  "watch_status",
+  // Diagnostics
   "project_stats",
 ];
 
@@ -220,6 +220,23 @@ pub struct SearchConfig {
 
   /// Recency weight in ranking (default: 0.2)
   pub recency_weight: f64,
+
+  // ---- Explore tool settings ----
+
+  /// Default expand_top for explore tool - how many top results include full context (default: 3)
+  pub explore_expand_top: usize,
+
+  /// Default limit for explore tool - max results per scope (default: 10)
+  pub explore_limit: usize,
+
+  /// Default depth for context tool - items per section like callers, callees (default: 5)
+  pub context_depth: usize,
+
+  /// Max items in batch context call (default: 5)
+  pub context_max_batch: usize,
+
+  /// Max suggestions to generate from explore results (default: 5)
+  pub explore_max_suggestions: usize,
 }
 
 impl Default for SearchConfig {
@@ -230,6 +247,11 @@ impl Default for SearchConfig {
       semantic_weight: 0.5,
       salience_weight: 0.3,
       recency_weight: 0.2,
+      explore_expand_top: 3,
+      explore_limit: 10,
+      context_depth: 5,
+      context_max_batch: 5,
+      explore_max_suggestions: 5,
     }
   }
 }
@@ -593,10 +615,9 @@ impl Config {
 
 [tools]
 # Preset: minimal, standard, or full
-#   minimal  = memory_search, code_search, docs_search
-#   standard = memory_search, memory_add, memory_reinforce, memory_deemphasize,
-#              code_search, docs_search, memory_timeline, entity_top, project_stats
-#   full     = all {tool_count} tools
+#   minimal  = explore, context (2 tools - recommended for exploration)
+#   standard = explore, context, memory management, code maintenance, diagnostics (11 tools)
+#   full     = all {tool_count} tools including legacy search tools
 preset = "{preset_name}"
 
 # Override preset with explicit tool list (uncomment to use):
@@ -666,6 +687,24 @@ include_superseded = false
 semantic_weight = 0.5
 salience_weight = 0.3
 recency_weight = 0.2
+
+# ---- Explore tool settings ----
+
+# How many top results include full context (callers, callees, memories)
+# Higher = fewer tool calls needed, but larger responses
+explore_expand_top = 3
+
+# Max results per scope in explore
+explore_limit = 10
+
+# Items per section in context (callers, callees, siblings, memories)
+context_depth = 5
+
+# Max IDs in a single batch context call
+context_max_batch = 5
+
+# Max suggestions to generate from explore results
+explore_max_suggestions = 5
 
 # ============================================================================
 # Code Indexing
@@ -787,30 +826,27 @@ mod tests {
       ..Default::default()
     };
     let tools = config.enabled_tool_set();
-    assert_eq!(tools.len(), 5);
-    assert!(tools.contains("memory_search"));
-    assert!(tools.contains("code_search"));
-    assert!(tools.contains("docs_search"));
-    assert!(tools.contains("code_memories"));
-    assert!(tools.contains("code_context_full"));
+    assert_eq!(tools.len(), 2);
+    assert!(tools.contains("explore"));
+    assert!(tools.contains("context"));
   }
 
   #[test]
   fn test_preset_standard() {
     let config = Config::default();
     let tools = config.enabled_tool_set();
-    assert_eq!(tools.len(), 17);
-    assert!(tools.contains("memory_search"));
+    assert_eq!(tools.len(), 11);
+    assert!(tools.contains("explore"));
+    assert!(tools.contains("context"));
     assert!(tools.contains("memory_add"));
-    assert!(tools.contains("memory_related"));
-    assert!(tools.contains("code_search"));
-    assert!(tools.contains("code_context"));
-    assert!(tools.contains("code_memories"));
-    assert!(tools.contains("code_callers"));
-    assert!(tools.contains("code_callees"));
-    assert!(tools.contains("code_related"));
-    assert!(tools.contains("code_context_full"));
-    assert!(tools.contains("doc_context"));
+    assert!(tools.contains("memory_reinforce"));
+    assert!(tools.contains("memory_deemphasize"));
+    assert!(tools.contains("code_index"));
+    assert!(tools.contains("code_stats"));
+    assert!(tools.contains("watch_start"));
+    assert!(tools.contains("watch_stop"));
+    assert!(tools.contains("watch_status"));
+    assert!(tools.contains("project_stats"));
     assert!(!tools.contains("memory_delete")); // Not in standard
   }
 
@@ -854,7 +890,17 @@ mod tests {
     };
     let tools = config.enabled_tool_set();
     assert!(!tools.contains("memory_add"));
-    assert!(tools.contains("memory_search"));
+    assert!(tools.contains("explore"));
+  }
+
+  #[test]
+  fn test_search_config_explore_defaults() {
+    let config = SearchConfig::default();
+    assert_eq!(config.explore_expand_top, 3);
+    assert_eq!(config.explore_limit, 10);
+    assert_eq!(config.context_depth, 5);
+    assert_eq!(config.context_max_batch, 5);
+    assert_eq!(config.explore_max_suggestions, 5);
   }
 
   #[test]

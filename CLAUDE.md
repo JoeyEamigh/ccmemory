@@ -53,15 +53,67 @@ cargo clippy --all-targets --all-features # Lint all
 cargo fmt --all                           # Format all
 ```
 
-## Tool Presets
+## MCP Tools
 
-**Recommendation**: Start with `minimal` preset. Hooks handle memory capture automatically, so Claude only needs search tools.
+### Unified Exploration Tools (Minimal Preset - Recommended)
+
+The minimal preset provides 2 powerful tools optimized for codebase exploration:
+
+#### `explore` - Universal semantic search
+
+Search code, memories, and docs with one tool. Returns ranked results with navigation hints.
+
+```json
+{
+  "query": "authentication flow",  // Natural language or symbol name
+  "scope": "all",                  // "code" | "memory" | "docs" | "all"
+  "expand_top": 3,                 // Include full context for top N results
+  "limit": 10                      // Max results per scope
+}
+```
+
+**Response includes:**
+- Ranked results with preview, file:line, and type
+- Navigation hints (caller count, callee count, related memory count)
+- Full context for top `expand_top` results (callers, callees, siblings, memories)
+- Suggested related queries for further exploration
+
+#### `context` - Comprehensive drill-down
+
+Get full context for any explore result. Auto-detects type (code/memory/doc).
+
+```json
+{
+  "id": "abc123",      // Single ID from explore results
+  "ids": ["a", "b"],   // OR array of IDs (max 5) for batch context
+  "depth": 5           // Items per section (callers, callees, etc.)
+}
+```
+
+**Returns for code:** content, callers, callees, siblings, related memories
+**Returns for memory:** content, timeline, related memories
+**Returns for docs:** content, before/after chunks
+
+### Typical Exploration Flow
+
+```
+# 1. Start broad - find entry points
+explore("authentication", expand_top=3)
+
+# 2. Drill into specific result if needed
+context("chunk_abc123")
+
+# 3. Follow suggestions or callers/callees
+explore("session management", scope="code")
+```
+
+## Tool Presets
 
 | Preset | Tools | Description |
 |--------|-------|-------------|
-| **minimal** | `memory_search`, `code_search`, `docs_search` | Read-only (3 tools) |
-| **standard** | Above + `memory_add`, `memory_reinforce`, `memory_deemphasize`, `code_context`, `doc_context`, `memory_timeline`, `entity_top`, `project_stats` | Standard (11 tools) |
-| **full** | All 38 tools | Everything |
+| **minimal** | `explore`, `context` | Streamlined exploration (2 tools) - **Recommended** |
+| **standard** | Above + memory management, code maintenance, diagnostics | Daily driver (11 tools) |
+| **full** | All 40 tools including legacy search tools | Everything |
 
 Initialize project config:
 

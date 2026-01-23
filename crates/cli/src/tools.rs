@@ -8,7 +8,81 @@ use std::collections::HashMap;
 pub fn all_tool_definitions() -> HashMap<&'static str, Value> {
   let mut tools = HashMap::new();
 
+  // ============================================================================
+  // Unified Exploration Tools (NEW - minimal preset)
+  // ============================================================================
+
+  tools.insert(
+    "explore",
+    json!({
+        "name": "explore",
+        "description": "Search code, memories, and docs by natural language or symbol name. Returns ranked results with navigation hints. Use expand_top to include full context (callers, callees, related memories) for top results in one call.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural language query, symbol name, or file path"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["code", "memory", "docs", "all"],
+                    "description": "Where to search: 'code' for implementation, 'memory' for past decisions/patterns, 'docs' for documentation, 'all' for everything (default: all)"
+                },
+                "expand_top": {
+                    "type": "number",
+                    "description": "Include full context (callers, callees, siblings, memories) for top N results (default: 3)"
+                },
+                "limit": {
+                    "type": "number",
+                    "description": "Max results per scope (default: 10)"
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["json", "text"],
+                    "description": "Output format: 'json' for structured data, 'text' for human-readable with code blocks (default: json)"
+                }
+            },
+            "required": ["query"]
+        }
+    }),
+  );
+
+  tools.insert(
+    "context",
+    json!({
+        "name": "context",
+        "description": "Get full context for item(s) from explore results. For code: callers, callees, siblings, related memories. For memory: timeline, related. For docs: surrounding chunks. Accepts single ID or array of IDs for batch retrieval.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Single ID from explore results (prefix match supported, min 6 chars)"
+                },
+                "ids": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Array of IDs for batch context (max 5). Use this OR id, not both."
+                },
+                "depth": {
+                    "type": "number",
+                    "description": "Items per section - callers, callees, etc. (default: 5)"
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["json", "text"],
+                    "description": "Output format: 'json' for structured data, 'text' for human-readable with code blocks (default: json)"
+                }
+            }
+        }
+    }),
+  );
+
+  // ============================================================================
   // Memory tools
+  // ============================================================================
+
   tools.insert(
         "memory_search",
         json!({
@@ -643,14 +717,11 @@ mod tests {
     let filtered = get_filtered_tool_definitions(&config);
     let arr = filtered.as_array().unwrap();
 
-    assert_eq!(arr.len(), 5);
+    assert_eq!(arr.len(), 2);
 
     let names: Vec<&str> = arr.iter().filter_map(|t| t.get("name")?.as_str()).collect();
-    assert!(names.contains(&"memory_search"));
-    assert!(names.contains(&"code_search"));
-    assert!(names.contains(&"docs_search"));
-    assert!(names.contains(&"code_memories"));
-    assert!(names.contains(&"code_context_full"));
+    assert!(names.contains(&"explore"));
+    assert!(names.contains(&"context"));
   }
 
   #[test]
@@ -660,7 +731,7 @@ mod tests {
     let filtered = get_filtered_tool_definitions(&config);
     let arr = filtered.as_array().unwrap();
 
-    assert_eq!(arr.len(), 17);
+    assert_eq!(arr.len(), 11);
   }
 
   #[test]
