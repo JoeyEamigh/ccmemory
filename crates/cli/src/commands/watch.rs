@@ -1,21 +1,12 @@
 //! Watch command for file change monitoring
 
 use anyhow::{Context, Result};
-use daemon::{Client, Request, default_socket_path, is_running};
+use daemon::{Request, connect_or_start};
 use tracing::error;
 
 /// Watch for file changes
 pub async fn cmd_watch(stop: bool, status: bool) -> Result<()> {
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let cwd = std::env::current_dir()
     .map(|p| p.to_string_lossy().to_string())

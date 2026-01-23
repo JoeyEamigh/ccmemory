@@ -301,17 +301,17 @@ impl MemoryView<'_> {
 
     let mut y = inner.y;
 
-    // ID
+    // ID (full ID in detail panel for copy/paste)
     if let Some(id) = memory.get("id").and_then(|i| i.as_str()) {
-      let short_id = if id.len() > 8 { &id[..8] } else { id };
       buf.set_string(inner.x, y, "ID: ", Style::default().fg(Theme::SUBTEXT));
-      buf.set_string(inner.x + 4, y, short_id, Style::default().fg(Theme::TEXT));
-      buf.set_string(
-        inner.x + 4 + short_id.len() as u16,
-        y,
-        "...",
-        Style::default().fg(Theme::MUTED),
-      );
+      // Show full ID, truncating only if wider than available space
+      let max_id_width = inner.width.saturating_sub(4) as usize;
+      let display_id = if id.len() > max_id_width {
+        format!("{}...", &id[..max_id_width.saturating_sub(3)])
+      } else {
+        id.to_string()
+      };
+      buf.set_string(inner.x + 4, y, &display_id, Style::default().fg(Theme::TEXT));
       y += 1;
     }
 

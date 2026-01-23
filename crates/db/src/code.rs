@@ -168,6 +168,53 @@ impl ProjectDb {
       .list_code_chunks(Some(&format!("file_path = '{}'", file_path)), None)
       .await
   }
+
+  /// Find code chunks by ID prefix
+  ///
+  /// Searches for code chunks whose ID starts with the given prefix.
+  pub async fn find_code_chunks_by_prefix(&self, prefix: &str) -> Result<Vec<CodeChunk>> {
+    if prefix.len() < 6 {
+      return Err(DbError::InvalidInput(
+        "ID prefix must be at least 6 characters".into(),
+      ));
+    }
+
+    // Use LIKE query for prefix matching
+    let filter = format!("id LIKE '{}%'", prefix);
+    self.list_code_chunks(Some(&filter), Some(10)).await
+  }
+
+  /// Get a code chunk by ID or prefix
+  ///
+  /// First tries exact match, then falls back to prefix matching.
+  /// Returns error if prefix matches multiple chunks (ambiguous).
+  pub async fn get_code_chunk_by_id_or_prefix(&self, id_or_prefix: &str) -> Result<Option<CodeChunk>> {
+    // Try exact UUID match first
+    if let Ok(chunk_id) = Uuid::parse_str(id_or_prefix)
+      && let Ok(Some(chunk)) = self.get_code_chunk(&chunk_id).await
+    {
+      return Ok(Some(chunk));
+    }
+
+    // Try prefix match if at least 6 characters
+    if id_or_prefix.len() >= 6 {
+      let matches = self.find_code_chunks_by_prefix(id_or_prefix).await?;
+      match matches.len() {
+        0 => Ok(None),
+        1 => Ok(Some(matches.into_iter().next().expect("just checked len"))),
+        count => Err(DbError::AmbiguousPrefix {
+          prefix: id_or_prefix.to_string(),
+          count,
+        }),
+      }
+    } else if id_or_prefix.len() < 6 {
+      Err(DbError::InvalidInput(
+        "ID prefix must be at least 6 characters".into(),
+      ))
+    } else {
+      Ok(None)
+    }
+  }
 }
 
 /// Convert a CodeChunk to an Arrow RecordBatch

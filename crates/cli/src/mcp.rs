@@ -1,7 +1,7 @@
 //! MCP (Model Context Protocol) server for Claude Code integration
 
 use anyhow::{Context, Result};
-use daemon::{Client, Request, default_socket_path, is_running};
+use daemon::{Request, connect_or_start};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
@@ -56,8 +56,6 @@ fn mcp_error(id: Option<serde_json::Value>, code: i32, message: &str) -> McpResp
 /// MCP stdio server - implements the Model Context Protocol for Claude Code
 pub async fn cmd_mcp() -> Result<()> {
   // Tool definitions are loaded from cli::tools and filtered based on config
-
-  let socket_path = default_socket_path();
 
   // Use async IO for proper non-blocking behavior with MCP
   let stdin = tokio::io::stdin();
@@ -116,75 +114,66 @@ pub async fn cmd_mcp() -> Result<()> {
           .cloned()
           .unwrap_or(serde_json::json!({}));
 
-        // Check if daemon is running
-        if !is_running(&socket_path) {
-          mcp_error(
-            mcp_request.id,
-            -32000,
-            "CCEngram daemon is not running. Start it with: ccengram daemon",
-          )
-        } else {
-          // Add cwd to arguments for project context
-          let mut args = arguments;
-          if let Some(obj) = args.as_object_mut()
-            && !obj.contains_key("cwd")
-            && let Ok(cwd) = std::env::current_dir()
-          {
-            obj.insert("cwd".to_string(), serde_json::json!(cwd.to_string_lossy()));
-          }
+        // Add cwd to arguments for project context
+        let mut args = arguments;
+        if let Some(obj) = args.as_object_mut()
+          && !obj.contains_key("cwd")
+          && let Ok(cwd) = std::env::current_dir()
+        {
+          obj.insert("cwd".to_string(), serde_json::json!(cwd.to_string_lossy()));
+        }
 
-          // Forward to daemon
-          match Client::connect_to(&socket_path).await {
-            Ok(mut client) => {
-              let request = Request {
-                id: Some(serde_json::json!(1)),
-                method: tool_name.to_string(),
-                params: args,
-              };
+        // Connect to daemon (auto-starts if not running)
+        match connect_or_start().await {
+          Ok(mut client) => {
+            let request = Request {
+              id: Some(serde_json::json!(1)),
+              method: tool_name.to_string(),
+              params: args,
+            };
 
-              match client.request(request).await {
-                Ok(daemon_response) => {
-                  if let Some(err) = daemon_response.error {
-                    // Return error as text content (MCP style)
-                    mcp_success(
-                      mcp_request.id,
-                      serde_json::json!({
-                          "content": [{
-                              "type": "text",
-                              "text": format!("Error: {}", err.message)
-                          }],
-                          "isError": true
-                      }),
-                    )
-                  } else if let Some(result) = daemon_response.result {
-                    // Format result as text content
-                    let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
-                    mcp_success(
-                      mcp_request.id,
-                      serde_json::json!({
-                          "content": [{
-                              "type": "text",
-                              "text": text
-                          }]
-                      }),
-                    )
-                  } else {
-                    mcp_success(
-                      mcp_request.id,
-                      serde_json::json!({
-                          "content": [{
-                              "type": "text",
-                              "text": "Success"
-                          }]
-                      }),
-                    )
-                  }
+            match client.request(request).await {
+              Ok(daemon_response) => {
+                if let Some(err) = daemon_response.error {
+                  // Return error as text content (MCP style)
+                  mcp_success(
+                    mcp_request.id,
+                    serde_json::json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!("Error: {}", err.message)
+                        }],
+                        "isError": true
+                    }),
+                  )
+                } else if let Some(result) = daemon_response.result {
+                  // Format result as text content
+                  let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
+                  mcp_success(
+                    mcp_request.id,
+                    serde_json::json!({
+                        "content": [{
+                            "type": "text",
+                            "text": text
+                        }]
+                    }),
+                  )
+                } else {
+                  mcp_success(
+                    mcp_request.id,
+                    serde_json::json!({
+                        "content": [{
+                            "type": "text",
+                            "text": "Success"
+                        }]
+                    }),
+                  )
                 }
-                Err(e) => mcp_error(mcp_request.id, -32000, &format!("Daemon error: {}", e)),
               }
+              Err(e) => mcp_error(mcp_request.id, -32000, &format!("Daemon error: {}", e)),
             }
-            Err(e) => mcp_error(mcp_request.id, -32000, &format!("Connection error: {}", e)),
           }
+          Err(e) => mcp_error(mcp_request.id, -32000, &format!("Failed to start daemon: {}", e)),
         }
       }
       // Unknown method

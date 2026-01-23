@@ -167,6 +167,80 @@ impl ProjectDb {
     let count = table.count_rows(filter.map(|s| s.to_string())).await?;
     Ok(count)
   }
+
+  /// Find document chunks by ID prefix
+  ///
+  /// Searches for document chunks whose ID starts with the given prefix.
+  pub async fn find_document_chunks_by_prefix(&self, prefix: &str) -> Result<Vec<DocumentChunk>> {
+    if prefix.len() < 6 {
+      return Err(DbError::InvalidInput(
+        "ID prefix must be at least 6 characters".into(),
+      ));
+    }
+
+    // Use LIKE query for prefix matching
+    let filter = format!("id LIKE '{}%'", prefix);
+    self.list_document_chunks(Some(&filter), Some(10)).await
+  }
+
+  /// Get a document chunk by ID or prefix
+  ///
+  /// First tries exact match, then falls back to prefix matching.
+  /// Returns error if prefix matches multiple chunks (ambiguous).
+  pub async fn get_document_chunk_by_id_or_prefix(&self, id_or_prefix: &str) -> Result<Option<DocumentChunk>> {
+    // Try exact match first
+    if let Ok(chunk_id) = id_or_prefix.parse::<DocumentId>()
+      && let Ok(Some(chunk)) = self.get_document_chunk(&chunk_id).await
+    {
+      return Ok(Some(chunk));
+    }
+
+    // Try prefix match if at least 6 characters
+    if id_or_prefix.len() >= 6 {
+      let matches = self.find_document_chunks_by_prefix(id_or_prefix).await?;
+      match matches.len() {
+        0 => Ok(None),
+        1 => Ok(Some(matches.into_iter().next().expect("just checked len"))),
+        count => Err(DbError::AmbiguousPrefix {
+          prefix: id_or_prefix.to_string(),
+          count,
+        }),
+      }
+    } else if id_or_prefix.len() < 6 {
+      Err(DbError::InvalidInput(
+        "ID prefix must be at least 6 characters".into(),
+      ))
+    } else {
+      Ok(None)
+    }
+  }
+
+  /// Get adjacent document chunks from the same document
+  ///
+  /// Returns chunks with chunk_index in range [center_index - before, center_index + after],
+  /// ordered by chunk_index.
+  pub async fn get_adjacent_document_chunks(
+    &self,
+    document_id: &DocumentId,
+    center_index: usize,
+    chunks_before: usize,
+    chunks_after: usize,
+  ) -> Result<Vec<DocumentChunk>> {
+    let start_index = center_index.saturating_sub(chunks_before);
+    let end_index = center_index + chunks_after;
+
+    let filter = format!(
+      "document_id = '{}' AND chunk_index >= {} AND chunk_index <= {}",
+      document_id, start_index, end_index
+    );
+
+    let mut chunks = self.list_document_chunks(Some(&filter), None).await?;
+
+    // Sort by chunk_index to ensure correct order
+    chunks.sort_by_key(|c| c.chunk_index);
+
+    Ok(chunks)
+  }
 }
 
 /// Convert a DocumentChunk to an Arrow RecordBatch

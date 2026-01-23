@@ -283,7 +283,14 @@ impl App {
       Action::OpenFilter => self.open_filter(),
       Action::ToggleHelp => self.show_help = !self.show_help,
       Action::Reinforce => self.reinforce().await,
-      Action::Deemphasize => self.deemphasize().await,
+      Action::Deemphasize => {
+        // In Search view, 'd' toggles documents scope instead of deemphasize
+        if self.current_view == View::Search && !self.search.input_active {
+          self.toggle_search_documents().await;
+        } else {
+          self.deemphasize().await;
+        }
+      }
       Action::Submit => self.submit().await,
       Action::Input(c) => self.input_char(c),
       Action::DeleteChar => self.delete_char(),
@@ -294,6 +301,8 @@ impl App {
       Action::NextPanel => self.next_panel(),
       Action::Refresh => self.refresh_current_view().await,
       Action::CycleSort => self.cycle_sort(),
+      Action::ToggleSearchMemories => self.toggle_search_memories().await,
+      Action::ToggleSearchCode => self.toggle_search_code().await,
       Action::None => {}
     }
   }
@@ -352,15 +361,25 @@ impl App {
 
   fn back(&mut self) {
     match self.input_mode {
-      InputMode::Search | InputMode::Filter => {
+      InputMode::Search => {
         self.input_mode = InputMode::Normal;
         if self.current_view == View::Search {
           self.search.input_active = false;
         }
       }
+      InputMode::Filter => {
+        // Cancel filter input, clear filter text (don't apply)
+        self.input_mode = InputMode::Normal;
+        self.search.filter_input_active = false;
+        self.search.filter_text.clear();
+        // Keep any previously applied filter (don't call clear_filter)
+      }
       InputMode::Normal => {
         if self.show_help {
           self.show_help = false;
+        } else if self.current_view == View::Search && self.search.filter_active {
+          // Clear active filter first
+          self.search.clear_filter();
         } else {
           self.current_view = View::Dashboard;
         }
@@ -380,7 +399,13 @@ impl App {
   }
 
   fn open_filter(&mut self) {
-    self.input_mode = InputMode::Filter;
+    // Filter only works in Search view
+    if self.current_view == View::Search {
+      self.input_mode = InputMode::Filter;
+      self.search.filter_input_active = true;
+      // Clear any previous partial filter text when opening filter mode
+      self.search.filter_text.clear();
+    }
   }
 
   async fn reinforce(&mut self) {
@@ -428,8 +453,10 @@ impl App {
         self.search.input_active = false;
       }
       InputMode::Filter => {
-        // Apply filter
+        // Apply filter and exit filter mode
+        self.search.apply_filter();
         self.input_mode = InputMode::Normal;
+        self.search.filter_input_active = false;
       }
       InputMode::Normal => {}
     }
@@ -445,7 +472,9 @@ impl App {
         }
       }
       InputMode::Filter => {
-        // Add to filter string
+        // Add to filter string and apply live filtering
+        self.search.filter_text.push(c);
+        self.search.apply_filter();
       }
       InputMode::Normal => {}
     }
@@ -461,7 +490,9 @@ impl App {
         }
       }
       InputMode::Filter => {
-        // Remove from filter string
+        // Remove from filter string and apply live filtering
+        self.search.filter_text.pop();
+        self.search.apply_filter();
       }
       InputMode::Normal => {}
     }
@@ -519,8 +550,9 @@ impl App {
         }
       }
       View::Search => {
-        if !self.search.results.is_empty() {
-          self.search.selected = self.search.results.len() - 1;
+        let display_len = self.search.display_results().len();
+        if display_len > 0 {
+          self.search.selected = display_len - 1;
         }
       }
       _ => {}
@@ -537,6 +569,36 @@ impl App {
     // Only memory view supports sorting currently
     if self.current_view == View::Memory {
       self.memory.cycle_sort();
+    }
+  }
+
+  async fn toggle_search_memories(&mut self) {
+    // Only works in Search view, normal mode
+    if self.current_view != View::Search || self.search.input_active {
+      return;
+    }
+    if self.search.toggle_memories() && !self.search.query.is_empty() {
+      self.execute_search().await;
+    }
+  }
+
+  async fn toggle_search_code(&mut self) {
+    // Only works in Search view, normal mode
+    if self.current_view != View::Search || self.search.input_active {
+      return;
+    }
+    if self.search.toggle_code() && !self.search.query.is_empty() {
+      self.execute_search().await;
+    }
+  }
+
+  async fn toggle_search_documents(&mut self) {
+    // Only works in Search view, normal mode
+    if self.current_view != View::Search || self.search.input_active {
+      return;
+    }
+    if self.search.toggle_documents() && !self.search.query.is_empty() {
+      self.execute_search().await;
     }
   }
 
@@ -780,15 +842,17 @@ fn render_header(app: &App, area: Rect, buf: &mut Buffer) {
 
 fn render_footer(app: &App, area: Rect, buf: &mut Buffer) {
   let keybindings = match app.input_mode {
-    InputMode::Normal => {
-      if app.current_view == View::Memory {
-        "q:Quit  1-7:Views  j/k:Nav  /:Search  f:Filter  s:Sort  ?:Help  r/d:Salience"
-      } else {
-        "q:Quit  1-7:Views  j/k:Nav  /:Search  ?:Help  r:Reinforce  d:Deemphasize  R:Refresh"
-      }
+    InputMode::Normal => match app.current_view {
+      View::Memory => "q:Quit  1-7:Views  j/k:Nav  /:Search  s:Sort  ?:Help  r/d:Salience",
+      View::Search => "q:Quit  /:Search  f:Filter  m/c/d:Scopes  j/k:Nav  Esc:Clear  ?:Help",
+      _ => "q:Quit  1-7:Views  j/k:Nav  /:Search  ?:Help  R:Refresh",
+    },
+    InputMode::Search => "Enter:Search  Esc:Cancel  Type to search...",
+    InputMode::Filter => {
+      let filter_hint = format!("Enter:Apply  Esc:Cancel  Filter: {}_", app.search.filter_text);
+      // We'll set this directly below since it's dynamic
+      return render_footer_with_filter(app, area, buf, &filter_hint);
     }
-    InputMode::Search => "Enter:Search  Esc:Cancel",
-    InputMode::Filter => "Enter:Apply  Esc:Cancel",
   };
 
   buf.set_string(area.x + 1, area.y, keybindings, Style::default().fg(Theme::MUTED));
@@ -799,10 +863,20 @@ fn render_footer(app: &App, area: Rect, buf: &mut Buffer) {
   buf.set_string(path_x, area.y, path_display, Style::default().fg(Theme::SUBTEXT));
 }
 
+fn render_footer_with_filter(app: &App, area: Rect, buf: &mut Buffer, text: &str) {
+  // Show filter input prominently
+  buf.set_string(area.x + 1, area.y, text, Style::default().fg(Theme::ACCENT));
+
+  // Project path on right
+  let path_display = app.project_path.file_name().and_then(|n| n.to_str()).unwrap_or(".");
+  let path_x = area.x + area.width.saturating_sub(path_display.len() as u16 + 2);
+  buf.set_string(path_x, area.y, path_display, Style::default().fg(Theme::SUBTEXT));
+}
+
 fn render_help_overlay(area: Rect, buf: &mut Buffer) {
   // Center the help box
-  let help_width = 50;
-  let help_height = 18;
+  let help_width = 55;
+  let help_height = 24;
   let x = area.x + (area.width.saturating_sub(help_width)) / 2;
   let y = area.y + (area.height.saturating_sub(help_height)) / 2;
 
@@ -830,17 +904,22 @@ fn render_help_overlay(area: Rect, buf: &mut Buffer) {
     "  j/k      Navigate up/down",
     "  h/l      Scroll detail left/right",
     "  Enter    Select/expand",
-    "  Esc      Back/cancel",
+    "  Esc      Back/cancel/clear filter",
     "",
     "ACTIONS",
     "  /        Open search",
-    "  f        Open filter",
+    "  f        Open filter (Search view)",
     "  s        Cycle sort (Memory view)",
     "  r        Reinforce memory",
     "  d        Deemphasize memory",
     "  R        Refresh view",
     "  q        Quit",
     "  ?        Toggle help",
+    "",
+    "SEARCH VIEW",
+    "  m        Toggle memories scope",
+    "  c        Toggle code scope",
+    "  d        Toggle documents scope",
   ];
 
   for (i, line) in help_text.iter().enumerate() {

@@ -22,6 +22,10 @@ pub enum DbError {
   NotFound(String),
   #[error("Serialization error: {0}")]
   Serialization(#[from] serde_json::Error),
+  #[error("Invalid input: {0}")]
+  InvalidInput(String),
+  #[error("Ambiguous prefix '{prefix}' matches {count} items. Use more characters.")]
+  AmbiguousPrefix { prefix: String, count: usize },
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;

@@ -80,10 +80,7 @@ pub async fn cmd_update(check_only: bool, target_version: Option<String>) -> Res
     return Ok(());
   }
 
-  println!(
-    "New version available: v{} -> v{}",
-    CURRENT_VERSION, target_ver
-  );
+  println!("New version available: v{} -> v{}", CURRENT_VERSION, target_ver);
   println!("  Release: {}", target.name);
   println!("  URL: {}", target.html_url);
   println!();

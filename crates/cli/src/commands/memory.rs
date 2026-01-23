@@ -1,21 +1,12 @@
-//! Memory management commands (show, delete, export)
+//! Memory management commands (show, delete, export, restore, deleted)
 
 use anyhow::{Context, Result};
-use daemon::{Client, Request, default_socket_path, is_running};
+use daemon::{Request, connect_or_start};
 use tracing::error;
 
 /// Show detailed memory by ID
 pub async fn cmd_show(memory_id: &str, related: bool, json_output: bool) -> Result<()> {
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let cwd = std::env::current_dir()
     .map(|p| p.to_string_lossy().to_string())
@@ -110,16 +101,7 @@ pub async fn cmd_show(memory_id: &str, related: bool, json_output: bool) -> Resu
 
 /// Delete a memory
 pub async fn cmd_delete(memory_id: &str, hard: bool) -> Result<()> {
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let cwd = std::env::current_dir()
     .map(|p| p.to_string_lossy().to_string())
@@ -153,16 +135,7 @@ pub async fn cmd_delete(memory_id: &str, hard: bool) -> Result<()> {
 
 /// Export memories to file
 pub async fn cmd_export(output: Option<&str>, format: &str) -> Result<()> {
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let cwd = std::env::current_dir()
     .map(|p| p.to_string_lossy().to_string())
@@ -224,6 +197,126 @@ pub async fn cmd_export(output: Option<&str>, format: &str) -> Result<()> {
     } else {
       println!("{}", output_content);
     }
+  }
+
+  Ok(())
+}
+
+/// Restore a soft-deleted memory
+pub async fn cmd_restore(memory_id: &str) -> Result<()> {
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
+
+  let cwd = std::env::current_dir()
+    .map(|p| p.to_string_lossy().to_string())
+    .unwrap_or_else(|_| ".".to_string());
+
+  let request = Request {
+    id: Some(serde_json::json!(1)),
+    method: "memory_restore".to_string(),
+    params: serde_json::json!({
+        "memory_id": memory_id,
+        "cwd": cwd,
+    }),
+  };
+
+  let response = client.request(request).await.context("Failed to restore memory")?;
+
+  if let Some(err) = response.error {
+    error!("Restore error: {}", err.message);
+    std::process::exit(1);
+  }
+
+  if let Some(result) = response.result {
+    println!("Restored memory: {}", memory_id);
+    println!();
+
+    // Show restored memory details
+    if let Some(sector) = result.get("sector").and_then(|v| v.as_str()) {
+      println!("Sector:    {}", sector);
+    }
+    if let Some(mem_type) = result.get("memory_type").and_then(|v| v.as_str()) {
+      println!("Type:      {}", mem_type);
+    }
+    if let Some(salience) = result.get("salience").and_then(|v| v.as_f64()) {
+      println!("Salience:  {:.2}", salience);
+    }
+    println!();
+
+    if let Some(content) = result.get("content").and_then(|v| v.as_str()) {
+      println!("Content:");
+      println!("{}", content);
+    }
+  }
+
+  Ok(())
+}
+
+/// List soft-deleted memories
+pub async fn cmd_deleted(limit: usize, json_output: bool) -> Result<()> {
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
+
+  let cwd = std::env::current_dir()
+    .map(|p| p.to_string_lossy().to_string())
+    .unwrap_or_else(|_| ".".to_string());
+
+  let request = Request {
+    id: Some(serde_json::json!(1)),
+    method: "memory_list_deleted".to_string(),
+    params: serde_json::json!({
+        "cwd": cwd,
+        "limit": limit,
+    }),
+  };
+
+  let response = client
+    .request(request)
+    .await
+    .context("Failed to list deleted memories")?;
+
+  if let Some(err) = response.error {
+    error!("Error: {}", err.message);
+    std::process::exit(1);
+  }
+
+  if let Some(memories) = response.result {
+    if json_output {
+      println!("{}", serde_json::to_string_pretty(&memories)?);
+      return Ok(());
+    }
+
+    let empty_vec = vec![];
+    let memories = memories.as_array().unwrap_or(&empty_vec);
+
+    if memories.is_empty() {
+      println!("No deleted memories found.");
+      return Ok(());
+    }
+
+    println!("Deleted Memories ({}):", memories.len());
+    println!();
+
+    for (i, mem) in memories.iter().enumerate() {
+      let id = mem.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+      let sector = mem.get("sector").and_then(|v| v.as_str()).unwrap_or("?");
+      let content = mem.get("content").and_then(|v| v.as_str()).unwrap_or("");
+      let deleted_at = mem.get("deleted_at").and_then(|v| v.as_str()).unwrap_or("?");
+
+      // Truncate content for preview
+      let preview: String = content.chars().take(60).collect();
+      let preview = preview.replace('\n', " ");
+      let preview = if content.len() > 60 {
+        format!("{}...", preview)
+      } else {
+        preview
+      };
+
+      println!("{}. [{}] {}", i + 1, sector, id);
+      println!("   {}", preview);
+      println!("   Deleted: {}", deleted_at);
+      println!();
+    }
+
+    println!("Use 'ccengram memory restore <id>' to restore a memory.");
   }
 
   Ok(())

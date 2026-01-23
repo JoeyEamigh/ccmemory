@@ -167,6 +167,64 @@ impl ProjectDb {
     let count = table.count_rows(filter.map(|s| s.to_string())).await?;
     Ok(count)
   }
+
+  /// Find memories by ID prefix
+  ///
+  /// Searches for memories whose ID starts with the given prefix.
+  /// Requires minimum 6 characters for safety. Returns up to 10 matches.
+  pub async fn find_by_prefix(&self, prefix: &str) -> Result<Vec<Memory>> {
+    if prefix.len() < 6 {
+      return Err(DbError::InvalidInput(
+        "ID prefix must be at least 6 characters".into(),
+      ));
+    }
+
+    let table = self.memories_table().await?;
+
+    // Use LIKE query for prefix matching
+    let filter = format!("id LIKE '{}%'", prefix);
+    let results: Vec<RecordBatch> = table.query().only_if(filter).limit(10).execute().await?.try_collect().await?;
+
+    let mut memories = Vec::new();
+    for batch in results {
+      for i in 0..batch.num_rows() {
+        memories.push(batch_to_memory(&batch, i)?);
+      }
+    }
+
+    Ok(memories)
+  }
+
+  /// Get a memory by ID or prefix
+  ///
+  /// First tries exact match, then falls back to prefix matching.
+  /// Returns error if prefix matches multiple memories (ambiguous).
+  pub async fn get_memory_by_id_or_prefix(&self, id_or_prefix: &str) -> Result<Option<Memory>> {
+    // Try exact match first (if it looks like a full UUID)
+    if let Ok(memory_id) = id_or_prefix.parse::<MemoryId>()
+      && let Some(memory) = self.get_memory(&memory_id).await? {
+        return Ok(Some(memory));
+      }
+
+    // Try prefix match if at least 6 characters
+    if id_or_prefix.len() >= 6 {
+      let matches = self.find_by_prefix(id_or_prefix).await?;
+      match matches.len() {
+        0 => Ok(None),
+        1 => Ok(Some(matches.into_iter().next().unwrap())),
+        _ => Err(DbError::AmbiguousPrefix {
+          prefix: id_or_prefix.to_string(),
+          count: matches.len(),
+        }),
+      }
+    } else if id_or_prefix.len() < 6 {
+      Err(DbError::InvalidInput(
+        "ID prefix must be at least 6 characters".into(),
+      ))
+    } else {
+      Ok(None)
+    }
+  }
 }
 
 /// Convert a Memory to an Arrow RecordBatch

@@ -3,7 +3,7 @@
 use super::ToolHandler;
 use crate::router::{Request, Response};
 use db::{CheckpointType, IndexCheckpoint};
-use index::{compute_gitignore_hash, Chunker, Scanner};
+use index::{Chunker, Scanner, compute_gitignore_hash};
 use serde::Deserialize;
 use std::path::PathBuf;
 use tracing::{debug, warn};
@@ -484,6 +484,145 @@ impl ToolHandler {
       Err(e) => Response::error(request.id, -32000, &format!("Import failed: {}", e)),
     }
   }
+
+  /// Get surrounding lines for a code chunk by reading from filesystem
+  pub async fn code_context(&self, request: Request) -> Response {
+    #[derive(Deserialize)]
+    struct Args {
+      chunk_id: String,
+      #[serde(default)]
+      cwd: Option<String>,
+      #[serde(default)]
+      lines_before: Option<usize>,
+      #[serde(default)]
+      lines_after: Option<usize>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => return Response::error(request.id, -32602, &format!("Invalid params: {}", e)),
+    };
+
+    let project_path = args
+      .cwd
+      .map(PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let (_, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
+    };
+
+    // Cap and default context lines
+    let lines_before = args.lines_before.unwrap_or(20).min(500);
+    let lines_after = args.lines_after.unwrap_or(20).min(500);
+
+    // Look up chunk by ID or prefix
+    let chunk = match db.get_code_chunk_by_id_or_prefix(&args.chunk_id).await {
+      Ok(Some(c)) => c,
+      Ok(None) => {
+        return Response::error(
+          request.id,
+          -32000,
+          &format!("Code chunk not found: {}", args.chunk_id),
+        );
+      }
+      Err(db::DbError::AmbiguousPrefix { prefix, count }) => {
+        return Response::error(
+          request.id,
+          -32000,
+          &format!(
+            "Ambiguous prefix '{}' matches {} chunks. Use more characters.",
+            prefix, count
+          ),
+        );
+      }
+      Err(db::DbError::InvalidInput(msg)) => {
+        return Response::error(request.id, -32602, &msg);
+      }
+      Err(e) => {
+        return Response::error(request.id, -32000, &format!("Database error: {}", e));
+      }
+    };
+
+    // Construct the full file path
+    let file_path = project_path.join(&chunk.file_path);
+
+    // Read the file
+    let file_content = match std::fs::read_to_string(&file_path) {
+      Ok(content) => content,
+      Err(e) => {
+        // File not found or not readable - return chunk content as fallback
+        warn!(
+          "Could not read file {} for context: {}. Returning stored chunk content.",
+          file_path.display(),
+          e
+        );
+        return Response::success(
+          request.id,
+          serde_json::json!({
+            "chunk_id": chunk.id.to_string(),
+            "file_path": chunk.file_path,
+            "language": format!("{:?}", chunk.language).to_lowercase(),
+            "context": {
+              "before": { "content": "", "start_line": 0, "end_line": 0 },
+              "target": {
+                "content": chunk.content,
+                "start_line": chunk.start_line,
+                "end_line": chunk.end_line
+              },
+              "after": { "content": "", "start_line": 0, "end_line": 0 }
+            },
+            "total_file_lines": 0,
+            "warning": format!("File not readable: {}", e)
+          }),
+        );
+      }
+    };
+
+    let lines: Vec<&str> = file_content.lines().collect();
+    let total_lines = lines.len();
+
+    // Calculate line ranges (chunk lines are 1-indexed)
+    let target_start = (chunk.start_line as usize).saturating_sub(1); // Convert to 0-indexed
+    let target_end = (chunk.end_line as usize).min(total_lines); // Exclusive end
+
+    let before_start = target_start.saturating_sub(lines_before);
+    let after_end = (target_end + lines_after).min(total_lines);
+
+    // Extract content for each section
+    let before_content: String = lines[before_start..target_start].join("\n");
+    let target_content: String = lines[target_start..target_end].join("\n");
+    let after_content: String = lines[target_end..after_end].join("\n");
+
+    Response::success(
+      request.id,
+      serde_json::json!({
+        "chunk_id": chunk.id.to_string(),
+        "file_path": chunk.file_path,
+        "language": format!("{:?}", chunk.language).to_lowercase(),
+        "context": {
+          "before": {
+            "content": before_content,
+            "start_line": before_start + 1, // Convert back to 1-indexed
+            "end_line": target_start        // Exclusive, so equals target_start
+          },
+          "target": {
+            "content": target_content,
+            "start_line": chunk.start_line,
+            "end_line": chunk.end_line
+          },
+          "after": {
+            "content": after_content,
+            "start_line": target_end + 1,   // Convert back to 1-indexed
+            "end_line": after_end           // This is the count
+          }
+        },
+        "total_file_lines": total_lines
+      }),
+    )
+  }
+
 }
 
 #[cfg(test)]

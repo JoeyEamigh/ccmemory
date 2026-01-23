@@ -24,6 +24,7 @@ pub const ALL_TOOLS: &[&str] = &[
   "memory_timeline",
   // Code tools
   "code_search",
+  "code_context",
   "code_index",
   "code_list",
   "code_import_chunk",
@@ -34,6 +35,7 @@ pub const ALL_TOOLS: &[&str] = &[
   "watch_status",
   // Document tools
   "docs_search",
+  "doc_context",
   "docs_ingest",
   // Entity tools
   "entity_list",
@@ -62,7 +64,9 @@ pub const PRESET_STANDARD: &[&str] = &[
   "memory_reinforce",
   "memory_deemphasize",
   "code_search",
+  "code_context",
   "docs_search",
+  "doc_context",
   "memory_timeline",
   "entity_top",
   "project_stats",
@@ -245,6 +249,68 @@ impl Default for IndexConfig {
 }
 
 // ============================================================================
+// Daemon Configuration
+// ============================================================================
+
+/// Daemon lifecycle configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DaemonConfig {
+  /// Idle timeout in seconds before auto-shutdown (0 = shutdown immediately when last session ends)
+  /// Default: 300 (5 minutes)
+  #[serde(default = "default_idle_timeout_secs")]
+  pub idle_timeout_secs: u64,
+
+  /// Session timeout in seconds - sessions without activity are considered dead
+  /// Default: 1800 (30 minutes)
+  #[serde(default = "default_session_timeout_secs")]
+  pub session_timeout_secs: u64,
+
+  /// Log level: "off", "error", "warn", "info", "debug", "trace"
+  /// Default: "info"
+  #[serde(default = "default_log_level")]
+  pub log_level: String,
+
+  /// Log file rotation: "daily", "hourly", "never"
+  /// Default: "daily"
+  #[serde(default = "default_log_rotation")]
+  pub log_rotation: String,
+
+  /// Maximum log file age in days (0 = keep forever)
+  /// Default: 7
+  #[serde(default = "default_log_retention_days")]
+  pub log_retention_days: u64,
+}
+
+fn default_idle_timeout_secs() -> u64 {
+  300
+} // 5 minutes
+fn default_session_timeout_secs() -> u64 {
+  1800
+} // 30 minutes
+fn default_log_level() -> String {
+  "info".to_string()
+}
+fn default_log_rotation() -> String {
+  "daily".to_string()
+}
+fn default_log_retention_days() -> u64 {
+  7
+}
+
+impl Default for DaemonConfig {
+  fn default() -> Self {
+    Self {
+      idle_timeout_secs: default_idle_timeout_secs(),
+      session_timeout_secs: default_session_timeout_secs(),
+      log_level: default_log_level(),
+      log_rotation: default_log_rotation(),
+      log_retention_days: default_log_retention_days(),
+    }
+  }
+}
+
+// ============================================================================
 // Documents Configuration
 // ============================================================================
 
@@ -311,6 +377,10 @@ pub struct Config {
   /// Document indexing settings
   #[serde(default)]
   pub docs: DocsConfig,
+
+  /// Daemon lifecycle settings
+  #[serde(default)]
+  pub daemon: DaemonConfig,
 }
 
 /// Tool filtering configuration
@@ -527,6 +597,31 @@ extensions = ["md", "txt", "rst", "adoc", "org"]
 
 # Maximum document file size (bytes)
 max_file_size = 5242880  # 5MB
+
+# ============================================================================
+# Daemon Lifecycle
+# ============================================================================
+
+[daemon]
+# Idle timeout before auto-shutdown (seconds). 0 = shutdown immediately when
+# last Claude Code session ends. Default: 300 (5 minutes)
+idle_timeout_secs = 300
+
+# Session timeout (seconds). Sessions without activity for this duration are
+# considered dead and removed. Default: 1800 (30 minutes)
+session_timeout_secs = 1800
+
+# Log level: off, error, warn, info, debug, trace
+# Default: info
+log_level = "info"
+
+# Log rotation: daily, hourly, never
+# Default: daily
+log_rotation = "daily"
+
+# Log retention in days (0 = keep forever)
+# Default: 7
+log_retention_days = 7
 "#,
       tool_count = ALL_TOOLS.len(),
       preset_name = preset_name
@@ -559,10 +654,12 @@ mod tests {
   fn test_preset_standard() {
     let config = Config::default();
     let tools = config.enabled_tool_set();
-    assert_eq!(tools.len(), 9);
+    assert_eq!(tools.len(), 11);
     assert!(tools.contains("memory_search"));
     assert!(tools.contains("memory_add"));
     assert!(tools.contains("code_search"));
+    assert!(tools.contains("code_context"));
+    assert!(tools.contains("doc_context"));
     assert!(!tools.contains("memory_delete")); // Not in standard
   }
 
@@ -717,5 +814,47 @@ dimensions = 4096
     assert_eq!(config.min_salience, 0.05);
     assert_eq!(config.archive_threshold, 0.1);
     assert_eq!(config.max_idle_days, 90);
+  }
+
+  #[test]
+  fn test_daemon_defaults() {
+    let config = DaemonConfig::default();
+    assert_eq!(config.idle_timeout_secs, 300); // 5 minutes
+    assert_eq!(config.session_timeout_secs, 1800); // 30 minutes
+    assert_eq!(config.log_level, "info");
+    assert_eq!(config.log_rotation, "daily");
+    assert_eq!(config.log_retention_days, 7);
+  }
+
+  #[test]
+  fn test_daemon_config_in_template() {
+    let template = Config::generate_template(ToolPreset::Standard);
+    assert!(template.contains("[daemon]"));
+    assert!(template.contains("idle_timeout_secs"));
+    assert!(template.contains("session_timeout_secs"));
+    assert!(template.contains("log_level"));
+  }
+
+  #[test]
+  fn test_daemon_config_roundtrip() {
+    let config = Config {
+      daemon: DaemonConfig {
+        idle_timeout_secs: 600,
+        session_timeout_secs: 3600,
+        log_level: "debug".to_string(),
+        log_rotation: "hourly".to_string(),
+        log_retention_days: 14,
+      },
+      ..Default::default()
+    };
+
+    let toml_str = toml::to_string_pretty(&config).unwrap();
+    let parsed: Config = toml::from_str(&toml_str).unwrap();
+
+    assert_eq!(parsed.daemon.idle_timeout_secs, 600);
+    assert_eq!(parsed.daemon.session_timeout_secs, 3600);
+    assert_eq!(parsed.daemon.log_level, "debug");
+    assert_eq!(parsed.daemon.log_rotation, "hourly");
+    assert_eq!(parsed.daemon.log_retention_days, 14);
   }
 }

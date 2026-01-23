@@ -1,7 +1,9 @@
 //! CCEngram CLI - Intelligent memory and code search for Claude Code
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
+use std::io;
 use std::path::PathBuf;
 
 mod commands;
@@ -9,11 +11,12 @@ mod logging;
 mod mcp;
 
 use commands::{
-  cmd_agent, cmd_archive, cmd_config_init, cmd_config_reset, cmd_config_show, cmd_daemon, cmd_delete, cmd_export,
-  cmd_health, cmd_hook, cmd_index, cmd_migrate, cmd_search, cmd_search_code, cmd_search_docs, cmd_show, cmd_stats,
-  cmd_tui, cmd_update, cmd_watch,
+  cmd_agent, cmd_archive, cmd_config_init, cmd_config_reset, cmd_config_show, cmd_context, cmd_daemon, cmd_delete,
+  cmd_deleted, cmd_export, cmd_health, cmd_hook, cmd_index, cmd_logs, cmd_logs_list, cmd_migrate, cmd_projects_clean,
+  cmd_projects_clean_all, cmd_projects_list, cmd_projects_show, cmd_restore, cmd_search, cmd_search_code,
+  cmd_search_docs, cmd_show, cmd_stats, cmd_tui, cmd_update, cmd_watch,
 };
-use logging::{init_cli_logging, init_daemon_logging};
+use logging::{init_cli_logging, init_daemon_logging_with_config};
 use mcp::cmd_mcp;
 
 #[derive(Parser)]
@@ -82,7 +85,10 @@ pub enum IndexCommand {
 #[derive(Subcommand)]
 pub enum SearchCommand {
   /// Search memories (default if no subcommand)
-  #[command(alias = "mem")]
+  #[command(alias = "mem", after_help = "\
+NOTE:
+  IDs are shown as 8-character prefixes by default. Use --long to show full IDs.
+  You can use these prefixes directly in commands like 'memory show <prefix>'.")]
   Memories {
     /// Search query
     query: String,
@@ -109,6 +115,9 @@ pub enum SearchCommand {
     /// Output as JSON
     #[arg(long)]
     json: bool,
+    /// Show full IDs instead of truncated prefixes
+    #[arg(long)]
+    long: bool,
   },
   /// Search indexed code
   Code {
@@ -147,6 +156,9 @@ pub enum SearchCommand {
     /// Output as JSON
     #[arg(long)]
     json: bool,
+    /// Show full IDs instead of truncated prefixes
+    #[arg(long)]
+    long: bool,
   },
 }
 
@@ -182,14 +194,16 @@ pub enum MemoryCommand {
     format: String,
   },
   /// Archive old low-salience memories
-  #[command(long_about = "Archive old, low-salience memories by soft-deleting them.\n\n\
+  #[command(
+    long_about = "Archive old, low-salience memories by soft-deleting them.\n\n\
     Archived memories are hidden from search but can be restored. Use --dry-run \
     to preview what would be archived before committing.",
     after_help = "\
 EXAMPLES:
   ccengram memory archive --dry-run           # Preview what would be archived
   ccengram memory archive --threshold 0.2     # Archive memories with salience < 0.2
-  ccengram memory archive --before 2024-01-01 # Archive old memories")]
+  ccengram memory archive --before 2024-01-01 # Archive old memories"
+  )]
   Archive {
     /// Archive memories older than this date (YYYY-MM-DD)
     #[arg(long)]
@@ -200,6 +214,20 @@ EXAMPLES:
     /// Preview what would be archived without making changes
     #[arg(long)]
     dry_run: bool,
+  },
+  /// Restore a soft-deleted memory
+  Restore {
+    /// Memory ID to restore
+    id: String,
+  },
+  /// List soft-deleted memories
+  Deleted {
+    /// Maximum number of memories to show
+    #[arg(short, long, default_value = "20")]
+    limit: usize,
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
   },
 }
 
@@ -226,13 +254,53 @@ pub enum ConfigCommand {
   Reset,
 }
 
+/// Subcommands for `ccengram projects`
+#[derive(Subcommand)]
+pub enum ProjectsCommand {
+  /// List all indexed projects
+  List {
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
+  },
+  /// Show details for a specific project
+  Show {
+    /// Project ID or path
+    project: String,
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
+  },
+  /// Remove a project's data
+  Clean {
+    /// Project ID or path
+    project: String,
+    /// Skip confirmation prompt
+    #[arg(long)]
+    force: bool,
+  },
+  /// Remove all project data
+  CleanAll {
+    /// Skip confirmation prompt
+    #[arg(long)]
+    force: bool,
+  },
+}
+
 #[derive(Subcommand)]
 enum Commands {
   /// Start the daemon
+  #[command(long_about = "Start the CCEngram daemon.\n\n\
+    By default, runs in background mode with auto-shutdown enabled.\n\
+    Use --foreground for persistent daemon that logs to console.\n\
+    Use --background when auto-starting from CLI commands.")]
   Daemon {
-    /// Run in foreground (don't daemonize)
-    #[arg(long)]
+    /// Run in foreground (disables auto-shutdown, logs to console)
+    #[arg(long, conflicts_with = "background")]
     foreground: bool,
+    /// Run in background (enables auto-shutdown, used by auto-start)
+    #[arg(long, conflicts_with = "foreground")]
+    background: bool,
   },
   /// MCP server (for Claude Code integration)
   Mcp,
@@ -302,6 +370,30 @@ CONFIG LOCATIONS:
     #[arg(long)]
     status: bool,
   },
+  /// Get surrounding context for a code or document chunk
+  #[command(after_help = "\
+EXAMPLES:
+  ccengram context 019abc                    # Get context (auto-detects type)
+  ccengram context 019abc --before 30        # Get 30 lines/chunks before
+  ccengram context 019abc --json             # Output as JSON
+
+USAGE:
+  Use chunk IDs from 'search code' or 'search docs' results.
+  For code chunks: --before/--after specify lines (default: 20, max: 500)
+  For doc chunks: --before/--after specify chunks (default: 1, max: 10)")]
+  Context {
+    /// Chunk ID from search results (8+ character prefix works)
+    chunk_id: String,
+    /// Lines/chunks to include before (code: 20, docs: 1)
+    #[arg(short, long)]
+    before: Option<usize>,
+    /// Lines/chunks to include after (code: 20, docs: 1)
+    #[arg(short, long)]
+    after: Option<usize>,
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
+  },
   /// Show statistics
   Stats,
   /// Health check
@@ -339,15 +431,84 @@ CONFIG LOCATIONS:
     #[arg(short, long)]
     project: Option<PathBuf>,
   },
+  /// Manage indexed projects
+  #[command(after_help = "\
+EXAMPLES:
+  ccengram projects list                  # List all indexed projects
+  ccengram projects show /path/to/project # Show project details
+  ccengram projects clean /path/to/project # Remove project data")]
+  Projects {
+    #[command(subcommand)]
+    command: ProjectsCommand,
+  },
+  /// View daemon logs
+  #[command(after_help = "\
+EXAMPLES:
+  ccengram logs                    # Show last 50 lines
+  ccengram logs -f                 # Follow logs in real-time
+  ccengram logs -n 100             # Show last 100 lines
+  ccengram logs --level error      # Filter by log level
+  ccengram logs --open             # Open log directory")]
+  Logs {
+    /// Follow log output in real-time (like tail -f)
+    #[arg(short, long)]
+    follow: bool,
+    /// Number of lines to show (default: 50)
+    #[arg(short = 'n', long, default_value = "50")]
+    lines: usize,
+    /// Show logs from a specific date (YYYY-MM-DD)
+    #[arg(long)]
+    date: Option<String>,
+    /// Filter logs by level (error, warn, info, debug, trace)
+    #[arg(long)]
+    level: Option<String>,
+    /// Open log directory in file manager
+    #[arg(long)]
+    open: bool,
+    /// List available log files
+    #[arg(long)]
+    list: bool,
+  },
+  /// Generate shell completions
+  #[command(after_help = "\
+EXAMPLES:
+  ccengram completions bash > ~/.local/share/bash-completion/completions/ccengram
+  ccengram completions zsh > ~/.zfunc/_ccengram
+  ccengram completions fish > ~/.config/fish/completions/ccengram.fish
+  ccengram completions powershell >> $PROFILE
+
+INSTALLATION:
+  Bash:
+    Add to ~/.bashrc:
+      source <(ccengram completions bash)
+    Or generate once:
+      ccengram completions bash > ~/.local/share/bash-completion/completions/ccengram
+
+  Zsh:
+    Add to ~/.zshrc (before compinit):
+      fpath=(~/.zfunc $fpath)
+    Then generate:
+      ccengram completions zsh > ~/.zfunc/_ccengram
+
+  Fish:
+    ccengram completions fish > ~/.config/fish/completions/ccengram.fish
+
+  PowerShell:
+    ccengram completions powershell >> $PROFILE")]
+  Completions {
+    /// Shell to generate completions for
+    #[arg(value_enum)]
+    shell: Shell,
+  },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
   let cli = Cli::parse();
 
-  // Use file logging for daemon, console-only for other commands
+  // Use file logging for daemon (background mode), console-only for other commands
   let _guard = match &cli.command {
-    Commands::Daemon { .. } => init_daemon_logging(),
+    Commands::Daemon { foreground, .. } => init_daemon_logging_with_config(*foreground),
     _ => {
       init_cli_logging();
       None
@@ -355,7 +516,7 @@ async fn main() -> Result<()> {
   };
 
   match cli.command {
-    Commands::Daemon { foreground: _ } => cmd_daemon().await,
+    Commands::Daemon { foreground, background } => cmd_daemon(foreground, background).await,
     Commands::Mcp => cmd_mcp().await,
     Commands::Hook { name } => cmd_hook(&name).await,
 
@@ -371,6 +532,7 @@ async fn main() -> Result<()> {
         include_superseded,
         scope,
         json,
+        long,
       } => {
         cmd_search(
           &query,
@@ -382,6 +544,7 @@ async fn main() -> Result<()> {
           include_superseded,
           scope.as_deref(),
           json,
+          long,
         )
         .await
       }
@@ -412,7 +575,8 @@ async fn main() -> Result<()> {
         limit,
         project,
         json,
-      } => cmd_search_docs(&query, limit, project.as_deref(), json).await,
+        long,
+      } => cmd_search_docs(&query, limit, project.as_deref(), json, long).await,
     },
 
     // Memory subcommands
@@ -425,6 +589,8 @@ async fn main() -> Result<()> {
         threshold,
         dry_run,
       } => cmd_archive(before.as_deref(), threshold, dry_run).await,
+      MemoryCommand::Restore { id } => cmd_restore(&id).await,
+      MemoryCommand::Deleted { limit, json } => cmd_deleted(limit, json).await,
     },
 
     Commands::Index { command } => cmd_index(command).await,
@@ -437,11 +603,52 @@ async fn main() -> Result<()> {
     },
 
     Commands::Watch { stop, status } => cmd_watch(stop, status).await,
+    Commands::Context {
+      chunk_id,
+      before,
+      after,
+      json,
+    } => cmd_context(&chunk_id, before, after, json).await,
     Commands::Stats => cmd_stats().await,
     Commands::Health => cmd_health().await,
     Commands::Update { check, version } => cmd_update(check, version).await,
     Commands::Migrate { dry_run, force } => cmd_migrate(dry_run, force).await,
     Commands::Agent { output, force } => cmd_agent(output.as_deref(), force).await,
     Commands::Tui { project } => cmd_tui(project).await,
+
+    // Projects subcommands
+    Commands::Projects { command } => match command {
+      ProjectsCommand::List { json } => cmd_projects_list(json).await,
+      ProjectsCommand::Show { project, json } => cmd_projects_show(&project, json).await,
+      ProjectsCommand::Clean { project, force } => cmd_projects_clean(&project, force).await,
+      ProjectsCommand::CleanAll { force } => cmd_projects_clean_all(force).await,
+    },
+
+    // Logs command
+    Commands::Logs {
+      follow,
+      lines,
+      date,
+      level,
+      open,
+      list,
+    } => {
+      if list {
+        cmd_logs_list()
+      } else {
+        cmd_logs(follow, lines, date.as_deref(), level.as_deref(), open)
+      }
+    }
+
+    // Completions command
+    Commands::Completions { shell } => {
+      print_completions(shell);
+      Ok(())
+    }
   }
+}
+
+/// Print shell completions to stdout
+fn print_completions(shell: Shell) {
+  clap_complete::generate(shell, &mut Cli::command(), "ccengram", &mut io::stdout());
 }

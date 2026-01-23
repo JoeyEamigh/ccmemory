@@ -1,4 +1,5 @@
 use crate::projects::ProjectRegistry;
+use crate::session_tracker::{SessionId, SessionTracker};
 use embedding::EmbeddingProvider;
 use engram_core::{Memory, MemoryType, Sector, resolve_project_path};
 use extract::{classify_sector, compute_hashes, extract_concepts, extract_files};
@@ -222,6 +223,8 @@ pub struct HookHandler {
   session_projects: RwLock<HashMap<String, PathBuf>>,
   /// Whether to use background extraction (non-blocking) for PreCompact/Stop triggers
   use_background_extraction: bool,
+  /// Session tracker for daemon lifecycle management (optional)
+  lifecycle_session_tracker: RwLock<Option<Arc<SessionTracker>>>,
 }
 
 impl HookHandler {
@@ -234,6 +237,7 @@ impl HookHandler {
       use_llm_extraction: true,
       session_projects: RwLock::new(HashMap::new()),
       use_background_extraction: true, // Default to background extraction
+      lifecycle_session_tracker: RwLock::new(None),
     }
   }
 
@@ -246,7 +250,14 @@ impl HookHandler {
       use_llm_extraction: true,
       session_projects: RwLock::new(HashMap::new()),
       use_background_extraction: true, // Default to background extraction
+      lifecycle_session_tracker: RwLock::new(None),
     }
+  }
+
+  /// Set the session tracker for daemon lifecycle management
+  pub async fn set_session_tracker(&self, tracker: Arc<SessionTracker>) {
+    let mut guard = self.lifecycle_session_tracker.write().await;
+    *guard = Some(tracker);
   }
 
   /// Get the project path for a session, using stored binding if available
@@ -750,9 +761,22 @@ impl HookHandler {
     });
   }
 
+  /// Touch the session tracker to update last-seen time (called on any hook)
+  async fn touch_session(&self, session_id: &str) {
+    let guard = self.lifecycle_session_tracker.read().await;
+    if let Some(ref tracker) = *guard {
+      tracker.touch(&SessionId::from(session_id)).await;
+    }
+  }
+
   /// Handle a hook event
   pub async fn handle(&self, event: HookEvent, params: serde_json::Value) -> Result<serde_json::Value, HookError> {
     debug!("Processing hook event: {:?}", event);
+
+    // Touch session on any hook to update last-seen time
+    if let Some(session_id) = params.get("session_id").and_then(|v| v.as_str()) {
+      self.touch_session(session_id).await;
+    }
 
     match event {
       HookEvent::SessionStart => self.on_session_start(params).await,
@@ -771,6 +795,14 @@ impl HookHandler {
     let cwd = params.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
 
     info!("Session started: {} in {}", session_id, cwd);
+
+    // Register with lifecycle session tracker for daemon auto-shutdown
+    {
+      let guard = self.lifecycle_session_tracker.read().await;
+      if let Some(ref tracker) = *guard {
+        tracker.register(SessionId::from(session_id)).await;
+      }
+    }
 
     // Bind session to project path (with git root detection)
     // This ensures directory changes within the session don't switch projects
@@ -802,6 +834,14 @@ impl HookHandler {
     let summary = params.get("summary").and_then(|v| v.as_str());
 
     info!("Session ended: {}", session_id);
+
+    // Unregister from lifecycle session tracker
+    {
+      let guard = self.lifecycle_session_tracker.read().await;
+      if let Some(ref tracker) = *guard {
+        tracker.unregister(&SessionId::from(session_id)).await;
+      }
+    }
 
     // Get the bound project path (or resolve from cwd as fallback)
     let project_path = self.get_session_project_path(session_id, cwd).await;

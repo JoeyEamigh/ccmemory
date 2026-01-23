@@ -2,7 +2,7 @@
 
 use super::ToolHandler;
 use crate::router::{Request, Response};
-use engram_core::{chunk_text, ChunkParams, DocumentChunk, DocumentId, DocumentSource};
+use engram_core::{ChunkParams, DocumentChunk, DocumentId, DocumentSource, chunk_text};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -247,6 +247,123 @@ impl ToolHandler {
           "char_count": content.len(),
           "chunks_created": stored_chunks,
           "total_chunks": total_chunks,
+      }),
+    )
+  }
+
+  /// Get adjacent chunks from the same document
+  pub async fn doc_context(&self, request: Request) -> Response {
+    #[derive(Deserialize)]
+    struct Args {
+      chunk_id: String,
+      #[serde(default)]
+      cwd: Option<String>,
+      #[serde(default)]
+      chunks_before: Option<usize>,
+      #[serde(default)]
+      chunks_after: Option<usize>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => return Response::error(request.id, -32602, &format!("Invalid params: {}", e)),
+    };
+
+    let project_path = args
+      .cwd
+      .map(PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let (_, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
+    };
+
+    // Cap and default context chunks
+    let chunks_before = args.chunks_before.unwrap_or(1).min(10);
+    let chunks_after = args.chunks_after.unwrap_or(1).min(10);
+
+    // Look up chunk by ID or prefix
+    let target_chunk = match db.get_document_chunk_by_id_or_prefix(&args.chunk_id).await {
+      Ok(Some(c)) => c,
+      Ok(None) => {
+        return Response::error(
+          request.id,
+          -32000,
+          &format!("Document chunk not found: {}", args.chunk_id),
+        );
+      }
+      Err(db::DbError::AmbiguousPrefix { prefix, count }) => {
+        return Response::error(
+          request.id,
+          -32000,
+          &format!(
+            "Ambiguous prefix '{}' matches {} chunks. Use more characters.",
+            prefix, count
+          ),
+        );
+      }
+      Err(db::DbError::InvalidInput(msg)) => {
+        return Response::error(request.id, -32602, &msg);
+      }
+      Err(e) => {
+        return Response::error(request.id, -32000, &format!("Database error: {}", e));
+      }
+    };
+
+    // Get adjacent chunks
+    let adjacent_chunks = match db
+      .get_adjacent_document_chunks(
+        &target_chunk.document_id,
+        target_chunk.chunk_index,
+        chunks_before,
+        chunks_after,
+      )
+      .await
+    {
+      Ok(chunks) => chunks,
+      Err(e) => {
+        return Response::error(
+          request.id,
+          -32000,
+          &format!("Failed to retrieve adjacent chunks: {}", e),
+        );
+      }
+    };
+
+    // Split into before, target, and after
+    let mut before_chunks: Vec<serde_json::Value> = Vec::new();
+    let mut after_chunks: Vec<serde_json::Value> = Vec::new();
+    let mut target_json = serde_json::json!(null);
+
+    for chunk in adjacent_chunks {
+      let chunk_json = serde_json::json!({
+        "chunk_index": chunk.chunk_index,
+        "content": chunk.content,
+      });
+
+      if chunk.chunk_index < target_chunk.chunk_index {
+        before_chunks.push(chunk_json);
+      } else if chunk.chunk_index > target_chunk.chunk_index {
+        after_chunks.push(chunk_json);
+      } else {
+        target_json = chunk_json;
+      }
+    }
+
+    Response::success(
+      request.id,
+      serde_json::json!({
+        "chunk_id": target_chunk.id.to_string(),
+        "document_id": target_chunk.document_id.to_string(),
+        "title": target_chunk.title,
+        "source": target_chunk.source,
+        "context": {
+          "before": before_chunks,
+          "target": target_json,
+          "after": after_chunks,
+        },
+        "total_chunks": target_chunk.total_chunks,
       }),
     )
   }

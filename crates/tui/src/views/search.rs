@@ -28,13 +28,17 @@ pub struct SearchResult {
 pub struct SearchState {
   pub query: String,
   pub results: Vec<SearchResult>,
+  pub filtered_results: Vec<SearchResult>,
   pub selected: usize,
   pub search_memories: bool,
   pub search_code: bool,
   pub search_documents: bool,
   pub input_active: bool,
+  pub filter_input_active: bool,
   pub loading: bool,
   pub error: Option<String>,
+  pub filter_text: String,
+  pub filter_active: bool,
 }
 
 impl SearchState {
@@ -43,30 +47,43 @@ impl SearchState {
       search_memories: true,
       search_code: true,
       search_documents: true,
+      filter_text: String::new(),
+      filter_active: false,
+      filtered_results: Vec::new(),
       ..Default::default()
     }
   }
 
   pub fn set_results(&mut self, results: Vec<SearchResult>) {
     self.results = results;
-    if self.selected >= self.results.len() && !self.results.is_empty() {
-      self.selected = self.results.len() - 1;
+    // Re-apply filter if active
+    if self.filter_active {
+      self.apply_filter();
+    } else {
+      self.filtered_results = self.results.clone();
+    }
+    // Bounds check selection
+    let display_len = self.display_results().len();
+    if self.selected >= display_len && display_len > 0 {
+      self.selected = display_len - 1;
     }
   }
 
   pub fn selected_result(&self) -> Option<&SearchResult> {
-    self.results.get(self.selected)
+    self.display_results().get(self.selected)
   }
 
   pub fn select_next(&mut self) {
-    if self.results.is_empty() {
+    let display = self.display_results();
+    if display.is_empty() {
       return;
     }
-    self.selected = (self.selected + 1).min(self.results.len() - 1);
+    self.selected = (self.selected + 1).min(display.len() - 1);
   }
 
   pub fn select_prev(&mut self) {
-    if self.results.is_empty() {
+    let display = self.display_results();
+    if display.is_empty() {
       return;
     }
     self.selected = self.selected.saturating_sub(1);
@@ -75,27 +92,114 @@ impl SearchState {
   pub fn clear(&mut self) {
     self.query.clear();
     self.results.clear();
+    self.filtered_results.clear();
+    self.selected = 0;
+    self.filter_text.clear();
+    self.filter_active = false;
+  }
+
+  pub fn toggle_memories(&mut self) -> bool {
+    // Prevent disabling if it's the only enabled scope
+    if self.search_memories && !self.search_code && !self.search_documents {
+      return false;
+    }
+    self.search_memories = !self.search_memories;
+    true
+  }
+
+  pub fn toggle_code(&mut self) -> bool {
+    // Prevent disabling if it's the only enabled scope
+    if self.search_code && !self.search_memories && !self.search_documents {
+      return false;
+    }
+    self.search_code = !self.search_code;
+    true
+  }
+
+  pub fn toggle_documents(&mut self) -> bool {
+    // Prevent disabling if it's the only enabled scope
+    if self.search_documents && !self.search_memories && !self.search_code {
+      return false;
+    }
+    self.search_documents = !self.search_documents;
+    true
+  }
+
+  /// Apply filter to results
+  pub fn apply_filter(&mut self) {
+    if self.filter_text.is_empty() {
+      self.filter_active = false;
+      self.filtered_results = self.results.clone();
+    } else {
+      self.filter_active = true;
+      let filter_lower = self.filter_text.to_lowercase();
+      self.filtered_results = self
+        .results
+        .iter()
+        .filter(|r| {
+          // Filter by preview content
+          let preview = self.get_result_filter_text(r);
+          preview.to_lowercase().contains(&filter_lower)
+        })
+        .cloned()
+        .collect();
+    }
+    // Reset selection if out of bounds
+    if self.selected >= self.filtered_results.len() {
+      self.selected = 0;
+    }
+  }
+
+  /// Get text to match against for filtering
+  fn get_result_filter_text(&self, result: &SearchResult) -> String {
+    match result.result_type {
+      SearchResultType::Memory => {
+        let content = result.data.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        let sector = result.data.get("sector").and_then(|s| s.as_str()).unwrap_or("");
+        format!("{} {}", sector, content)
+      }
+      SearchResultType::Code => {
+        let file = result.data.get("file_path").and_then(|f| f.as_str()).unwrap_or("");
+        let content = result.data.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        let symbols = result
+          .data
+          .get("symbols")
+          .and_then(|s| s.as_array())
+          .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" "))
+          .unwrap_or_default();
+        format!("{} {} {}", file, symbols, content)
+      }
+      SearchResultType::Document => {
+        let title = result.data.get("title").and_then(|t| t.as_str()).unwrap_or("");
+        let content = result.data.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        format!("{} {}", title, content)
+      }
+    }
+  }
+
+  /// Clear filter
+  pub fn clear_filter(&mut self) {
+    self.filter_text.clear();
+    self.filter_active = false;
+    self.filtered_results = self.results.clone();
     self.selected = 0;
   }
 
-  pub fn toggle_memories(&mut self) {
-    self.search_memories = !self.search_memories;
+  /// Get displayable results (filtered or all)
+  pub fn display_results(&self) -> &[SearchResult] {
+    if self.filter_active || !self.filter_text.is_empty() {
+      &self.filtered_results
+    } else {
+      &self.results
+    }
   }
 
-  pub fn toggle_code(&mut self) {
-    self.search_code = !self.search_code;
-  }
-
-  pub fn toggle_documents(&mut self) {
-    self.search_documents = !self.search_documents;
-  }
-
-  /// Count results by type
+  /// Count results by type (from display results)
   pub fn count_by_type(&self) -> (usize, usize, usize) {
     let mut memories = 0;
     let mut code = 0;
     let mut documents = 0;
-    for result in &self.results {
+    for result in self.display_results() {
       match result.result_type {
         SearchResultType::Memory => memories += 1,
         SearchResultType::Code => code += 1,
@@ -125,27 +229,46 @@ impl<'a> SearchView<'a> {
 
 impl Widget for SearchView<'_> {
   fn render(self, area: Rect, buf: &mut Buffer) {
-    // Layout: search bar, scope toggles, results list, detail panel
-    let chunks = Layout::default()
-      .direction(Direction::Vertical)
-      .constraints([
+    // Layout: search bar, filter bar (when active), scope toggles, results list, detail panel
+    let constraints = if self.state.filter_input_active {
+      vec![
+        Constraint::Length(3), // Search bar
+        Constraint::Length(3), // Filter bar
+        Constraint::Length(2), // Scope toggles
+        Constraint::Min(10),   // Results
+      ]
+    } else {
+      vec![
         Constraint::Length(3), // Search bar
         Constraint::Length(2), // Scope toggles
         Constraint::Min(10),   // Results
-      ])
+      ]
+    };
+
+    let chunks = Layout::default()
+      .direction(Direction::Vertical)
+      .constraints(constraints)
       .split(area);
 
     // Search bar
     self.render_search_bar(chunks[0], buf);
 
+    // Filter bar and results based on whether filter input is active
+    let (scope_chunk, results_chunk) = if self.state.filter_input_active {
+      self.render_filter_bar(chunks[1], buf);
+      (chunks[2], chunks[3])
+    } else {
+      (chunks[1], chunks[2])
+    };
+
     // Scope toggles
-    self.render_scope_toggles(chunks[1], buf);
+    self.render_scope_toggles(scope_chunk, buf);
 
     // Results split into list and detail
     let result_chunks = Layout::default()
       .direction(Direction::Horizontal)
       .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-      .split(chunks[2]);
+      .split(results_chunk);
 
     self.render_results_list(result_chunks[0], buf);
     self.render_result_detail(result_chunks[1], buf);
@@ -192,61 +315,113 @@ impl SearchView<'_> {
     }
   }
 
+  fn render_filter_bar(&self, area: Rect, buf: &mut Buffer) {
+    let block = Block::default()
+      .title("FILTER")
+      .title_style(Style::default().fg(Theme::ACCENT).bold())
+      .borders(Borders::ALL)
+      .border_style(Style::default().fg(Theme::ACCENT));
+
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    // Filter prompt
+    buf.set_string(inner.x, inner.y, "> ", Style::default().fg(Theme::ACCENT));
+
+    // Filter text
+    let filter_display = if self.state.filter_text.len() > inner.width as usize - 4 {
+      format!(
+        "...{}",
+        &self.state.filter_text[self.state.filter_text.len().saturating_sub(inner.width as usize - 7)..]
+      )
+    } else {
+      self.state.filter_text.clone()
+    };
+    buf.set_string(inner.x + 2, inner.y, &filter_display, Style::default().fg(Theme::TEXT));
+
+    // Cursor
+    let cursor_x = inner.x + 2 + filter_display.len() as u16;
+    if cursor_x < inner.x + inner.width {
+      buf.set_string(cursor_x, inner.y, "▌", Style::default().fg(Theme::ACCENT));
+    }
+  }
+
   fn render_scope_toggles(&self, area: Rect, buf: &mut Buffer) {
     let mut x = area.x + 2;
     let y = area.y;
 
-    // Memories toggle
+    // Memories toggle with keybinding hint
     let memories_style = if self.state.search_memories {
       Style::default().fg(Theme::SEMANTIC).bold()
     } else {
       Style::default().fg(Theme::MUTED)
     };
     let memories_label = if self.state.search_memories {
-      "[✓] Memories"
+      "[✓] Memories (m)"
     } else {
-      "[ ] Memories"
+      "[ ] Memories (m)"
     };
     buf.set_string(x, y, memories_label, memories_style);
-    x += memories_label.len() as u16 + 3;
+    x += memories_label.len() as u16 + 2;
 
-    // Code toggle
+    // Code toggle with keybinding hint
     let code_style = if self.state.search_code {
       Style::default().fg(Theme::PROCEDURAL).bold()
     } else {
       Style::default().fg(Theme::MUTED)
     };
     let code_label = if self.state.search_code {
-      "[✓] Code"
+      "[✓] Code (c)"
     } else {
-      "[ ] Code"
+      "[ ] Code (c)"
     };
     buf.set_string(x, y, code_label, code_style);
-    x += code_label.len() as u16 + 3;
+    x += code_label.len() as u16 + 2;
 
-    // Documents toggle
+    // Documents toggle with keybinding hint
     let docs_style = if self.state.search_documents {
       Style::default().fg(Theme::REFLECTIVE).bold()
     } else {
       Style::default().fg(Theme::MUTED)
     };
     let docs_label = if self.state.search_documents {
-      "[✓] Documents"
+      "[✓] Docs (d)"
     } else {
-      "[ ] Documents"
+      "[ ] Docs (d)"
     };
     buf.set_string(x, y, docs_label, docs_style);
+    x += docs_label.len() as u16 + 3;
+
+    // Filter indicator
+    if self.state.filter_active {
+      let filter_label = format!("│ Filter: \"{}\"", self.state.filter_text);
+      buf.set_string(x, y, &filter_label, Style::default().fg(Theme::ACCENT));
+    }
   }
 
   fn render_results_list(&self, area: Rect, buf: &mut Buffer) {
+    let display_results = self.state.display_results();
     let (mem_count, code_count, doc_count) = self.state.count_by_type();
-    let title = format!(
-      "RESULTS ({} total: {} mem, {} code, {} doc)",
-      self.state.results.len(),
-      mem_count,
-      code_count,
-      doc_count
-    );
+
+    // Build title with filter info if active
+    let title = if self.state.filter_active {
+      format!(
+        "RESULTS ({}/{} filtered: {} mem, {} code, {} doc)",
+        display_results.len(),
+        self.state.results.len(),
+        mem_count,
+        code_count,
+        doc_count
+      )
+    } else {
+      format!(
+        "RESULTS ({} total: {} mem, {} code, {} doc)",
+        display_results.len(),
+        mem_count,
+        code_count,
+        doc_count
+      )
+    };
 
     let border_color = if self.focused && !self.state.input_active {
       Theme::ACCENT
@@ -263,13 +438,15 @@ impl SearchView<'_> {
     let inner = block.inner(area);
     block.render(area, buf);
 
-    if self.state.results.is_empty() {
+    if display_results.is_empty() {
       let msg = if self.state.loading {
         "Searching..."
       } else if let Some(ref err) = self.state.error {
         err
       } else if self.state.query.is_empty() {
         "Enter a search query"
+      } else if self.state.filter_active {
+        "No results match filter"
       } else {
         "No results found"
       };
@@ -277,7 +454,7 @@ impl SearchView<'_> {
       return;
     }
 
-    // Render grouped results
+    // Render grouped results using filtered/display results
     let visible_height = inner.height as usize;
     let start = if self.state.selected >= visible_height {
       self.state.selected - visible_height + 1
@@ -285,7 +462,7 @@ impl SearchView<'_> {
       0
     };
 
-    for (i, result) in self.state.results.iter().enumerate().skip(start).take(visible_height) {
+    for (i, result) in display_results.iter().enumerate().skip(start).take(visible_height) {
       let y = inner.y + (i - start) as u16;
       if y >= inner.y + inner.height {
         break;
@@ -400,6 +577,19 @@ impl SearchView<'_> {
 
   fn render_memory_detail(&self, data: &Value, area: Rect, buf: &mut Buffer) {
     let mut y = area.y;
+
+    // ID (full ID for copy/paste)
+    if let Some(id) = data.get("id").and_then(|i| i.as_str()) {
+      buf.set_string(area.x, y, "ID: ", Style::default().fg(Theme::SUBTEXT));
+      let max_id_width = area.width.saturating_sub(4) as usize;
+      let display_id = if id.len() > max_id_width {
+        format!("{}...", &id[..max_id_width.saturating_sub(3)])
+      } else {
+        id.to_string()
+      };
+      buf.set_string(area.x + 4, y, &display_id, Style::default().fg(Theme::TEXT));
+      y += 1;
+    }
 
     // Sector
     if let Some(sector) = data.get("sector").and_then(|s| s.as_str()) {
@@ -525,6 +715,19 @@ impl SearchView<'_> {
 
   fn render_document_detail(&self, data: &Value, area: Rect, buf: &mut Buffer) {
     let mut y = area.y;
+
+    // Document ID (full ID for copy/paste)
+    if let Some(id) = data.get("document_id").and_then(|i| i.as_str()) {
+      buf.set_string(area.x, y, "ID: ", Style::default().fg(Theme::SUBTEXT));
+      let max_id_width = area.width.saturating_sub(4) as usize;
+      let display_id = if id.len() > max_id_width {
+        format!("{}...", &id[..max_id_width.saturating_sub(3)])
+      } else {
+        id.to_string()
+      };
+      buf.set_string(area.x + 4, y, &display_id, Style::default().fg(Theme::TEXT));
+      y += 1;
+    }
 
     // Title
     if let Some(title) = data.get("title").and_then(|t| t.as_str()) {

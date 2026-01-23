@@ -250,10 +250,12 @@ async fn test_scheduler_configuration() {
     max_session_age_hours: 2,
     checkpoint_interval_secs: 10,
     decay_batch_size: 1000,
+    log_retention_days: 14,
   };
   assert_eq!(custom.decay_interval_hours, 24);
   assert_eq!(custom.session_cleanup_hours, 1);
   assert_eq!(custom.decay_batch_size, 1000);
+  assert_eq!(custom.log_retention_days, 14);
 }
 
 /// Test accumulator extraction triggers

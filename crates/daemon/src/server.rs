@@ -15,6 +15,8 @@ pub enum ServerError {
   Json(#[from] serde_json::Error),
   #[error("Server shutdown")]
   Shutdown,
+  #[error("Connection error: {0}")]
+  Connection(String),
 }
 
 /// Get the default socket path
@@ -118,8 +120,19 @@ pub struct ShutdownHandle {
 }
 
 impl ShutdownHandle {
+  /// Trigger shutdown
   pub fn shutdown(&self) {
     let _ = self.tx.send(());
+  }
+
+  /// Create a ShutdownHandle from a broadcast sender (for testing)
+  pub fn from_sender(tx: broadcast::Sender<()>) -> Self {
+    Self { tx }
+  }
+
+  /// Subscribe to shutdown signals
+  pub fn subscribe(&self) -> broadcast::Receiver<()> {
+    self.tx.subscribe()
   }
 }
 

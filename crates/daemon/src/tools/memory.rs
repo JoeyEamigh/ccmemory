@@ -1,14 +1,35 @@
 //! Memory tool methods
 
-use super::ranking::{rank_memories, RankingWeights};
 use super::ToolHandler;
+use super::ranking::{RankingWeights, rank_memories};
 use crate::router::{Request, Response};
 use chrono::Utc;
-use engram_core::{Memory, MemoryId, MemoryType, Sector};
-use extract::{content_hash, extract_concepts, extract_files, simhash, DuplicateChecker, DuplicateMatch};
+use db::ProjectDb;
+use engram_core::{Memory, MemoryType, Sector};
+use extract::{DuplicateChecker, DuplicateMatch, content_hash, extract_concepts, extract_files, simhash};
 use serde::Deserialize;
 use std::path::PathBuf;
 use tracing::debug;
+
+/// Helper to resolve a memory by ID or prefix
+///
+/// Tries exact match first, then falls back to prefix matching.
+/// Returns an appropriate error response for not found, ambiguous, or invalid prefixes.
+async fn resolve_memory(db: &ProjectDb, id_or_prefix: &str, request_id: Option<serde_json::Value>) -> Result<Memory, Response> {
+  match db.get_memory_by_id_or_prefix(id_or_prefix).await {
+    Ok(Some(memory)) => Ok(memory),
+    Ok(None) => Err(Response::error(request_id, -32000, &format!("Memory not found: {}", id_or_prefix))),
+    Err(db::DbError::AmbiguousPrefix { prefix, count }) => {
+      Err(Response::error(
+        request_id,
+        -32000,
+        &format!("Ambiguous prefix '{}' matches {} memories. Use more characters.", prefix, count),
+      ))
+    }
+    Err(db::DbError::InvalidInput(msg)) => Err(Response::error(request_id, -32602, &msg)),
+    Err(e) => Err(Response::error(request_id, -32000, &format!("Database error: {}", e))),
+  }
+}
 
 impl ToolHandler {
   pub async fn memory_search(&self, request: Request) -> Response {
@@ -401,22 +422,14 @@ impl ToolHandler {
       Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
     };
 
-    // Parse memory ID
-    let memory_id: MemoryId = match args.memory_id.parse() {
-      Ok(id) => id,
-      Err(_) => return Response::error(request.id, -32602, "Invalid memory_id format"),
-    };
-
-    // Get the memory
-    let memory: Memory = match db.get_memory(&memory_id).await {
-      Ok(Some(m)) => m,
-      Ok(None) => return Response::error(request.id, -32000, "Memory not found"),
-      Err(e) => return Response::error(request.id, -32000, &format!("Database error: {}", e)),
+    // Get the memory by ID or prefix
+    let mut memory = match resolve_memory(&db, &args.memory_id, request.id.clone()).await {
+      Ok(m) => m,
+      Err(response) => return response,
     };
 
     // Reinforce
     let amount = args.amount.unwrap_or(0.1);
-    let mut memory = memory;
     memory.reinforce(amount, Utc::now());
 
     // Update in database
@@ -458,22 +471,14 @@ impl ToolHandler {
       Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
     };
 
-    // Parse memory ID
-    let memory_id: MemoryId = match args.memory_id.parse() {
-      Ok(id) => id,
-      Err(_) => return Response::error(request.id, -32602, "Invalid memory_id format"),
-    };
-
-    // Get the memory
-    let memory: Memory = match db.get_memory(&memory_id).await {
-      Ok(Some(m)) => m,
-      Ok(None) => return Response::error(request.id, -32000, "Memory not found"),
-      Err(e) => return Response::error(request.id, -32000, &format!("Database error: {}", e)),
+    // Get the memory by ID or prefix
+    let mut memory = match resolve_memory(&db, &args.memory_id, request.id.clone()).await {
+      Ok(m) => m,
+      Err(response) => return response,
     };
 
     // Deemphasize
     let amount = args.amount.unwrap_or(0.2);
-    let mut memory = memory;
     memory.deemphasize(amount, Utc::now());
 
     // Update in database
@@ -515,20 +520,20 @@ impl ToolHandler {
       Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
     };
 
-    // Parse memory ID
-    let memory_id: MemoryId = match args.memory_id.parse() {
-      Ok(id) => id,
-      Err(_) => return Response::error(request.id, -32602, "Invalid memory_id format"),
+    // Resolve memory by ID or prefix (needed for both hard and soft delete)
+    let memory = match resolve_memory(&db, &args.memory_id, request.id.clone()).await {
+      Ok(m) => m,
+      Err(response) => return response,
     };
 
     let hard = args.hard.unwrap_or(false);
 
     if hard {
-      match db.delete_memory(&memory_id).await {
+      match db.delete_memory(&memory.id).await {
         Ok(_) => Response::success(
           request.id,
           serde_json::json!({
-              "id": args.memory_id,
+              "id": memory.id.to_string(),
               "hard_delete": true,
               "message": "Memory permanently deleted"
           }),
@@ -536,24 +541,19 @@ impl ToolHandler {
         Err(e) => Response::error(request.id, -32000, &format!("Delete failed: {}", e)),
       }
     } else {
-      // Soft delete - get memory, mark as deleted, update
-      match db.get_memory(&memory_id).await {
-        Ok(Some(mut memory)) => {
-          memory.delete(Utc::now());
-          match db.update_memory(&memory, None).await {
-            Ok(_) => Response::success(
-              request.id,
-              serde_json::json!({
-                  "id": args.memory_id,
-                  "hard_delete": false,
-                  "message": "Memory soft deleted"
-              }),
-            ),
-            Err(e) => Response::error(request.id, -32000, &format!("Update failed: {}", e)),
-          }
-        }
-        Ok(None) => Response::error(request.id, -32000, "Memory not found"),
-        Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
+      // Soft delete - mark as deleted, update
+      let mut memory = memory;
+      memory.delete(Utc::now());
+      match db.update_memory(&memory, None).await {
+        Ok(_) => Response::success(
+          request.id,
+          serde_json::json!({
+              "id": memory.id.to_string(),
+              "hard_delete": false,
+              "message": "Memory soft deleted"
+          }),
+        ),
+        Err(e) => Response::error(request.id, -32000, &format!("Update failed: {}", e)),
       }
     }
   }
@@ -582,41 +582,27 @@ impl ToolHandler {
       Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
     };
 
-    // Parse IDs
-    let old_memory_id: MemoryId = match args.old_memory_id.parse() {
-      Ok(id) => id,
-      Err(_) => return Response::error(request.id, -32602, "Invalid old_memory_id format"),
+    // Resolve old memory by ID or prefix
+    let mut old_memory = match resolve_memory(&db, &args.old_memory_id, request.id.clone()).await {
+      Ok(m) => m,
+      Err(response) => return response,
     };
 
-    let new_memory_id: MemoryId = match args.new_memory_id.parse() {
-      Ok(id) => id,
-      Err(_) => return Response::error(request.id, -32602, "Invalid new_memory_id format"),
-    };
-
-    // Get the old memory
-    let old_memory: Memory = match db.get_memory(&old_memory_id).await {
-      Ok(Some(m)) => m,
-      Ok(None) => return Response::error(request.id, -32000, "Old memory not found"),
-      Err(e) => return Response::error(request.id, -32000, &format!("Database error: {}", e)),
-    };
-
-    // Verify new memory exists
-    match db.get_memory(&new_memory_id).await {
-      Ok(Some(_)) => {}
-      Ok(None) => return Response::error(request.id, -32000, "New memory not found"),
-      Err(e) => return Response::error(request.id, -32000, &format!("Database error: {}", e)),
+    // Resolve new memory by ID or prefix
+    let new_memory = match resolve_memory(&db, &args.new_memory_id, request.id.clone()).await {
+      Ok(m) => m,
+      Err(response) => return response,
     };
 
     // Mark old memory as superseded
-    let mut old_memory = old_memory;
-    old_memory.supersede(new_memory_id, Utc::now());
+    old_memory.supersede(new_memory.id, Utc::now());
 
     match db.update_memory(&old_memory, None).await {
       Ok(_) => Response::success(
         request.id,
         serde_json::json!({
-            "old_memory_id": args.old_memory_id,
-            "new_memory_id": args.new_memory_id,
+            "old_memory_id": old_memory.id.to_string(),
+            "new_memory_id": new_memory.id.to_string(),
             "message": "Memory superseded"
         }),
       ),
@@ -651,17 +637,10 @@ impl ToolHandler {
       Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
     };
 
-    // Parse anchor ID
-    let anchor_id: MemoryId = match args.anchor_id.parse() {
-      Ok(id) => id,
-      Err(_) => return Response::error(request.id, -32602, "Invalid anchor_id format"),
-    };
-
-    // Get the anchor memory
-    let anchor: Memory = match db.get_memory(&anchor_id).await {
-      Ok(Some(m)) => m,
-      Ok(None) => return Response::error(request.id, -32000, "Anchor memory not found"),
-      Err(e) => return Response::error(request.id, -32000, &format!("Database error: {}", e)),
+    // Resolve anchor memory by ID or prefix
+    let anchor = match resolve_memory(&db, &args.anchor_id, request.id.clone()).await {
+      Ok(m) => m,
+      Err(response) => return response,
     };
 
     let depth_before = args.depth_before.unwrap_or(5);
@@ -767,17 +746,10 @@ impl ToolHandler {
       Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
     };
 
-    // Parse memory ID
-    let memory_id: MemoryId = match args.memory_id.parse() {
-      Ok(id) => id,
-      Err(_) => return Response::error(request.id, -32602, "Invalid memory_id format"),
-    };
-
-    // Get the memory
-    let memory: Memory = match db.get_memory(&memory_id).await {
-      Ok(Some(m)) => m,
-      Ok(None) => return Response::error(request.id, -32000, "Memory not found"),
-      Err(e) => return Response::error(request.id, -32000, &format!("Database error: {}", e)),
+    // Resolve memory by ID or prefix
+    let memory = match resolve_memory(&db, &args.memory_id, request.id.clone()).await {
+      Ok(m) => m,
+      Err(response) => return response,
     };
 
     // Build base response
@@ -810,7 +782,7 @@ impl ToolHandler {
 
     // Include relationships if requested
     if args.include_related.unwrap_or(false) {
-      match db.get_all_relationships(&memory_id).await {
+      match db.get_all_relationships(&memory.id).await {
         Ok(relationships) => {
           let rels: Vec<_> = relationships
             .iter()
@@ -819,7 +791,7 @@ impl ToolHandler {
                   "type": r.relationship_type.as_str(),
                   "from_id": r.from_memory_id.to_string(),
                   "to_id": r.to_memory_id.to_string(),
-                  "target_id": if r.from_memory_id == memory_id {
+                  "target_id": if r.from_memory_id == memory.id {
                       r.to_memory_id.to_string()
                   } else {
                       r.from_memory_id.to_string()
@@ -903,6 +875,112 @@ impl ToolHandler {
       Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
     }
   }
+
+  /// Restore a soft-deleted memory
+  pub async fn memory_restore(&self, request: Request) -> Response {
+    #[derive(Deserialize)]
+    struct Args {
+      memory_id: String,
+      #[serde(default)]
+      cwd: Option<String>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => return Response::error(request.id, -32602, &format!("Invalid params: {}", e)),
+    };
+
+    let project_path = args
+      .cwd
+      .map(std::path::PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+
+    let (_, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
+    };
+
+    // Resolve memory by ID or prefix
+    let mut memory = match resolve_memory(&db, &args.memory_id, request.id.clone()).await {
+      Ok(m) => m,
+      Err(response) => return response,
+    };
+
+    // Check if it's actually deleted
+    if !memory.is_deleted {
+      return Response::error(request.id, -32000, "Memory is not deleted");
+    }
+
+    // Restore it
+    memory.restore(Utc::now());
+
+    // Update in database
+    match db.update_memory(&memory, None).await {
+      Ok(_) => Response::success(
+        request.id,
+        serde_json::json!({
+            "id": memory.id.to_string(),
+            "content": memory.content,
+            "sector": memory.sector.as_str(),
+            "memory_type": memory.memory_type.map(|t| t.as_str()),
+            "salience": memory.salience,
+            "message": "Memory restored"
+        }),
+      ),
+      Err(e) => Response::error(request.id, -32000, &format!("Restore failed: {}", e)),
+    }
+  }
+
+  /// List soft-deleted memories
+  pub async fn memory_list_deleted(&self, request: Request) -> Response {
+    #[derive(Deserialize)]
+    struct Args {
+      #[serde(default)]
+      cwd: Option<String>,
+      #[serde(default)]
+      limit: Option<usize>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => return Response::error(request.id, -32602, &format!("Invalid params: {}", e)),
+    };
+
+    let project_path = args
+      .cwd
+      .map(std::path::PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+
+    let (_, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
+    };
+
+    let limit = args.limit.unwrap_or(20);
+
+    // Query deleted memories
+    match db.list_memories(Some("is_deleted = true"), Some(limit)).await {
+      Ok(memories) => {
+        let results: Vec<_> = memories
+          .into_iter()
+          .map(|m| {
+            serde_json::json!({
+                "id": m.id.to_string(),
+                "content": m.content,
+                "sector": m.sector.as_str(),
+                "memory_type": m.memory_type.map(|t| t.as_str()),
+                "salience": m.salience,
+                "deleted_at": m.deleted_at.map(|t| t.to_rfc3339()),
+                "created_at": m.created_at.to_rfc3339(),
+            })
+          })
+          .collect();
+
+        Response::success(request.id, serde_json::json!(results))
+      }
+      Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
+    }
+  }
 }
 
 #[cfg(test)]
@@ -969,17 +1047,18 @@ mod tests {
   async fn test_memory_reinforce_invalid_id() {
     let (_dir, handler) = create_test_handler();
 
+    // Test with too-short prefix (less than 6 chars)
     let request = Request {
       id: Some(serde_json::json!(1)),
       method: "memory_reinforce".to_string(),
       params: serde_json::json!({
-          "memory_id": "invalid-uuid-format"
+          "memory_id": "abc"
       }),
     };
 
     let response = handler.memory_reinforce(request).await;
     assert!(response.error.is_some());
-    assert!(response.error.unwrap().message.contains("Invalid memory_id"));
+    assert!(response.error.unwrap().message.contains("at least 6 characters"));
   }
 
   #[tokio::test]

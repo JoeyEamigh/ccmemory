@@ -38,7 +38,7 @@ pub enum Action {
   ToggleHelp,
   /// Reinforce selected memory
   Reinforce,
-  /// Deemphasize selected memory
+  /// Deemphasize selected memory (or toggle documents scope in Search view)
   Deemphasize,
   /// Cycle sort order
   CycleSort,
@@ -60,6 +60,10 @@ pub enum Action {
   NextPanel,
   /// Refresh current view
   Refresh,
+  /// Toggle search memories scope
+  ToggleSearchMemories,
+  /// Toggle search code scope
+  ToggleSearchCode,
   /// No action
   None,
 }
@@ -124,8 +128,12 @@ pub fn key_to_action(key: KeyEvent, in_input_mode: bool) -> Action {
       KeyCode::Char('s') => Action::CycleSort,
       KeyCode::Char('?') => Action::ToggleHelp,
       KeyCode::Char('r') => Action::Reinforce,
-      KeyCode::Char('d') => Action::Deemphasize,
+      KeyCode::Char('d') => Action::Deemphasize, // Also toggles documents scope in Search view
       KeyCode::Char('R') => Action::Refresh,
+
+      // Search scope toggles (work in Search view)
+      KeyCode::Char('m') => Action::ToggleSearchMemories,
+      KeyCode::Char('c') => Action::ToggleSearchCode,
 
       _ => Action::None,
     }

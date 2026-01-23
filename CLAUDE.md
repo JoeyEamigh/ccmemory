@@ -47,13 +47,13 @@ crates/
 ## Sample Commands
 
 ```bash
-cargo build                              # Build all
-cargo test                               # Run tests
-cargo clippy --all                       # Lint all
-cargo fmt --all                          # Format all
-cargo run -p cli -- daemon               # Run daemon
-cargo run -p cli -- search memories "q"  # Search memories
-cargo run -p cli -- tui                  # Launch TUI
+cargo build                               # Build all
+cargo test                                # Run tests
+cargo clippy --all-targets --all-features # Lint all
+cargo fmt --all                           # Format all
+cargo run -p cli -- daemon                # Run daemon
+cargo run -p cli -- search memories "q"   # Search memories
+cargo run -p cli -- tui                   # Launch TUI
 ```
 
 ## Tool Presets
@@ -63,8 +63,8 @@ cargo run -p cli -- tui                  # Launch TUI
 | Preset | Tools | Description |
 |--------|-------|-------------|
 | **minimal** | `memory_search`, `code_search`, `docs_search` | Read-only (3 tools) |
-| **standard** | Above + `memory_add`, `memory_reinforce`, `memory_deemphasize`, `memory_timeline`, `entity_top`, `project_stats` | Standard (9 tools) |
-| **full** | All 36 tools | Everything |
+| **standard** | Above + `memory_add`, `memory_reinforce`, `memory_deemphasize`, `code_context`, `doc_context`, `memory_timeline`, `entity_top`, `project_stats` | Standard (11 tools) |
+| **full** | All 38 tools | Everything |
 
 Initialize project config:
 
@@ -84,7 +84,9 @@ ccengram agent
 The MemExplore agent has access to:
 - `memory_search` - Search memories
 - `code_search` - Search indexed code
+- `code_context` - Get surrounding lines for a code chunk
 - `docs_search` - Search ingested documents
+- `doc_context` - Get adjacent chunks from a document
 - `memory_timeline` - Get chronological context
 - `entity_top` - Get top mentioned entities
 
@@ -109,9 +111,17 @@ ccengram search memories "query"    # Search memories
 ccengram search code "query"        # Search code
 ccengram search docs "query"        # Search documents
 
+# Context retrieval
+ccengram context <chunk_id>         # Get context (auto-detects code vs doc)
+ccengram context <id> --before 30   # More lines/chunks before
+ccengram context <id> --after 30    # More lines/chunks after
+ccengram context <id> --json        # JSON output
+
 # Memory management
 ccengram memory show <id>           # Show memory details
 ccengram memory delete <id>         # Soft-delete a memory
+ccengram memory restore <id>        # Restore a soft-deleted memory
+ccengram memory deleted             # List soft-deleted memories
 ccengram memory export              # Export memories to file
 ccengram memory archive             # Archive old low-salience memories
 
@@ -131,12 +141,31 @@ ccengram config init                # Create project config (standard preset)
 ccengram config init --preset minimal
 ccengram config reset               # Reset user config to defaults
 
+# Project management
+ccengram projects list              # List all indexed projects
+ccengram projects show <path>       # Show project details
+ccengram projects clean <path>      # Remove a project's data
+ccengram projects clean-all         # Remove all project data
+
+# Logs
+ccengram logs                       # Show last 50 lines of logs
+ccengram logs -f                    # Follow logs in real-time
+ccengram logs -n 100                # Show last 100 lines
+ccengram logs --level error         # Filter by log level
+ccengram logs --open                # Open log directory
+
 # Utilities
 ccengram stats                      # Show statistics
 ccengram health                     # Health check
 ccengram migrate                    # Migrate embeddings
 ccengram update                     # Check for updates
 ccengram agent                      # Generate MemExplore agent
+
+# Shell completions
+ccengram completions bash           # Generate bash completions
+ccengram completions zsh            # Generate zsh completions
+ccengram completions fish           # Generate fish completions
+ccengram completions powershell     # Generate PowerShell completions
 ```
 
 ## Document Indexing

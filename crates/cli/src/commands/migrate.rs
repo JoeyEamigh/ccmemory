@@ -1,23 +1,14 @@
 //! Migrate command for embedding migration
 
 use anyhow::{Context, Result};
-use daemon::{Client, Request, default_socket_path, is_running};
+use daemon::{Request, connect_or_start};
 use tracing::error;
 
 /// Migrate embeddings to new dimensions/model
 pub async fn cmd_migrate(dry_run: bool, force: bool) -> Result<()> {
   use engram_core::Config;
 
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let cwd = std::env::current_dir()
     .map(|p| p.to_string_lossy().to_string())

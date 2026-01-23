@@ -239,6 +239,23 @@ pub fn all_tool_definitions() -> HashMap<&'static str, Value> {
     }),
   );
 
+  tools.insert(
+    "code_context",
+    json!({
+        "name": "code_context",
+        "description": "Get surrounding lines for a code chunk by reading from filesystem. Use after code_search to see more context around a result.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chunk_id": { "type": "string", "description": "Code chunk ID from search results (can use ID prefix)" },
+                "lines_before": { "type": "number", "description": "Lines to include before chunk (default: 20, max: 500)" },
+                "lines_after": { "type": "number", "description": "Lines to include after chunk (default: 20, max: 500)" }
+            },
+            "required": ["chunk_id"]
+        }
+    }),
+  );
+
   // Watch tools
   tools.insert(
     "watch_start",
@@ -306,6 +323,23 @@ pub fn all_tool_definitions() -> HashMap<&'static str, Value> {
                 "content": { "type": "string", "description": "Raw content to ingest" },
                 "title": { "type": "string", "description": "Document title" }
             }
+        }
+    }),
+  );
+
+  tools.insert(
+    "doc_context",
+    json!({
+        "name": "doc_context",
+        "description": "Get adjacent chunks from the same document. Use after docs_search to see more context around a result.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chunk_id": { "type": "string", "description": "Document chunk ID from search results (can use ID prefix)" },
+                "chunks_before": { "type": "number", "description": "Number of chunks before target (default: 1, max: 10)" },
+                "chunks_after": { "type": "number", "description": "Number of chunks after target (default: 1, max: 10)" }
+            },
+            "required": ["chunk_id"]
         }
     }),
   );
@@ -517,7 +551,7 @@ mod tests {
     let filtered = get_filtered_tool_definitions(&config);
     let arr = filtered.as_array().unwrap();
 
-    assert_eq!(arr.len(), 9);
+    assert_eq!(arr.len(), 11);
   }
 
   #[test]

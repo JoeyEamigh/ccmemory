@@ -16,7 +16,7 @@ use embedding::EmbeddingProvider;
 use std::sync::Arc;
 use tracing::warn;
 
-pub use ranking::{rank_memories, RankingWeights};
+pub use ranking::{RankingWeights, rank_memories};
 
 /// Handler for MCP tool calls
 pub struct ToolHandler {

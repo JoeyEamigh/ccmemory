@@ -1,44 +1,110 @@
 //! Administrative commands (stats, health, archive, config)
 
 use anyhow::{Context, Result};
-use daemon::{Client, Request, default_socket_path, is_running};
+use daemon::{Request, connect_or_start, default_socket_path};
 use tracing::error;
 
 /// Show statistics
 pub async fn cmd_stats() -> Result<()> {
-  let socket_path = default_socket_path();
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
-
-  // Get daemon status
-  let status_request = Request {
+  // Get daemon metrics (includes status info plus more)
+  let metrics_request = Request {
     id: Some(serde_json::json!(1)),
-    method: "status".to_string(),
+    method: "metrics".to_string(),
     params: serde_json::json!({}),
   };
 
-  let status_response = client.request(status_request).await.context("Failed to get status")?;
+  let metrics_response = client.request(metrics_request).await.context("Failed to get metrics")?;
 
   println!("CCEngram Statistics");
   println!("===================\n");
 
-  // Print daemon status
-  if let Some(result) = status_response.result {
-    if let Some(version) = result.get("version").and_then(|v| v.as_str()) {
-      println!("Version: {}", version);
+  // Print daemon metrics
+  if let Some(metrics) = metrics_response.result {
+    println!("--- Daemon ---");
+    if let Some(daemon) = metrics.get("daemon") {
+      if let Some(version) = daemon.get("version").and_then(|v| v.as_str()) {
+        println!("Version:        {}", version);
+      }
+      let foreground = daemon.get("foreground").and_then(|v| v.as_bool()).unwrap_or(false);
+      println!(
+        "Mode:           {}",
+        if foreground { "foreground" } else { "background" }
+      );
+      if let Some(uptime_secs) = daemon.get("uptime_seconds").and_then(|v| v.as_u64()) {
+        println!("Uptime:         {}", format_duration(uptime_secs));
+      }
+      if let Some(idle_secs) = daemon.get("idle_seconds").and_then(|v| v.as_u64()) {
+        println!("Idle:           {}", format_duration(idle_secs));
+      }
     }
-    if let Some(status) = result.get("status").and_then(|v| v.as_str()) {
-      println!("Status: {}", status);
+
+    // Requests
+    if let Some(requests) = metrics.get("requests") {
+      let total = requests.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+      let per_sec = requests.get("per_second").and_then(|v| v.as_f64()).unwrap_or(0.0);
+      println!("Requests:       {} total ({:.2}/s)", total, per_sec);
     }
-    if let Some(projects) = result.get("projects").and_then(|v| v.as_u64()) {
-      println!("Active projects: {}", projects);
+
+    // Sessions
+    if let Some(sessions) = metrics.get("sessions") {
+      let active = sessions.get("active").and_then(|v| v.as_u64()).unwrap_or(0);
+      if active > 0 {
+        println!("Sessions:       {} active", active);
+        if let Some(ids) = sessions.get("ids").and_then(|v| v.as_array()) {
+          for id in ids.iter().take(5) {
+            if let Some(s) = id.as_str() {
+              println!("                - {}", s);
+            }
+          }
+          if ids.len() > 5 {
+            println!("                ... and {} more", ids.len() - 5);
+          }
+        }
+      } else {
+        println!("Sessions:       none active");
+      }
+    }
+
+    // Projects
+    if let Some(projects) = metrics.get("projects") {
+      let count = projects.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+      println!("Projects:       {} loaded", count);
+      if let Some(names) = projects.get("names").and_then(|v| v.as_array()) {
+        for name in names.iter().take(5) {
+          if let Some(s) = name.as_str() {
+            println!("                - {}", s);
+          }
+        }
+        if names.len() > 5 {
+          println!("                ... and {} more", names.len() - 5);
+        }
+      }
+    }
+
+    // Embedding provider
+    if let Some(embedding) = metrics.get("embedding")
+      && !embedding.is_null()
+    {
+      println!("\n--- Embedding Provider ---");
+      if let Some(name) = embedding.get("name").and_then(|v| v.as_str()) {
+        println!("Provider:       {}", name);
+      }
+      if let Some(model) = embedding.get("model").and_then(|v| v.as_str()) {
+        println!("Model:          {}", model);
+      }
+      if let Some(dims) = embedding.get("dimensions").and_then(|v| v.as_u64()) {
+        println!("Dimensions:     {}", dims);
+      }
+    }
+
+    // Memory usage
+    if let Some(memory) = metrics.get("memory")
+      && let Some(rss_kb) = memory.get("rss_kb").and_then(|v| v.as_u64())
+    {
+      println!("\n--- Memory ---");
+      println!("RSS:            {}", format_memory(rss_kb));
     }
   }
 
@@ -186,17 +252,17 @@ pub async fn cmd_health() -> Result<()> {
   println!("CCEngram Health Check");
   println!("=====================\n");
 
-  // Check if daemon is running
-  if !is_running(&socket_path) {
-    println!("Daemon:     NOT RUNNING");
-    println!("Socket:     {:?}", socket_path);
-    println!("\nStart the daemon with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  // Try to connect (auto-starting if needed)
+  let mut client = match connect_or_start().await {
+    Ok(c) => c,
+    Err(e) => {
+      println!("Daemon:     NOT RUNNING");
+      println!("Socket:     {:?}", socket_path);
+      println!("Error:      {}", e);
+      println!("\nFailed to auto-start daemon. Check logs for details.");
+      std::process::exit(1);
+    }
+  };
 
   // Ping test
   let ping_request = Request {
@@ -217,6 +283,52 @@ pub async fn cmd_health() -> Result<()> {
     std::process::exit(1);
   }
   println!("Socket:     {:?}", socket_path);
+
+  // Get daemon status info
+  let status_request = Request {
+    id: Some(serde_json::json!(1)),
+    method: "status".to_string(),
+    params: serde_json::json!({}),
+  };
+
+  if let Ok(status_response) = client.request(status_request).await
+    && let Some(status) = status_response.result
+  {
+    println!("\n--- Daemon Status ---");
+    if let Some(version) = status.get("version").and_then(|v| v.as_str()) {
+      println!("Version:    {}", version);
+    }
+    if let Some(sessions) = status.get("active_sessions").and_then(|v| v.as_u64()) {
+      println!("Sessions:   {} active", sessions);
+    }
+    if let Some(idle_secs) = status.get("idle_seconds").and_then(|v| v.as_u64()) {
+      if idle_secs < 60 {
+        println!("Idle:       {} seconds", idle_secs);
+      } else if idle_secs < 3600 {
+        println!("Idle:       {} minutes", idle_secs / 60);
+      } else {
+        println!("Idle:       {} hours", idle_secs / 3600);
+      }
+    }
+    if let Some(uptime_secs) = status.get("uptime_seconds").and_then(|v| v.as_u64()) {
+      if uptime_secs < 60 {
+        println!("Uptime:     {} seconds", uptime_secs);
+      } else if uptime_secs < 3600 {
+        println!("Uptime:     {} minutes", uptime_secs / 60);
+      } else {
+        println!("Uptime:     {} hours", uptime_secs / 3600);
+      }
+    }
+    let auto_shutdown = status.get("auto_shutdown").and_then(|v| v.as_bool()).unwrap_or(true);
+    println!(
+      "Auto-shutdown: {}",
+      if auto_shutdown {
+        "enabled"
+      } else {
+        "disabled (foreground mode)"
+      }
+    );
+  }
 
   // Get comprehensive health status
   let cwd = std::env::current_dir()
@@ -296,16 +408,7 @@ pub async fn cmd_health() -> Result<()> {
 
 /// Archive old low-salience memories
 pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) -> Result<()> {
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let cwd = std::env::current_dir()
     .map(|p| p.to_string_lossy().to_string())
@@ -389,8 +492,11 @@ pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) ->
   println!();
 
   for (id, salience, summary) in &candidates {
-    println!("  [{:.2}] {} - {}", salience, &id[..8], summary.replace('\n', " "));
+    let short_id = if id.len() > 8 { &id[..8] } else { id };
+    println!("  [{:.2}] {}... - {}", salience, short_id, summary.replace('\n', " "));
   }
+  println!();
+  println!("Note: You can use the ID prefix (8+ characters) to reference memories.");
   println!();
 
   if dry_run {
@@ -513,4 +619,38 @@ pub async fn cmd_config_reset() -> Result<()> {
   }
 
   Ok(())
+}
+
+/// Format duration in human-readable form
+fn format_duration(seconds: u64) -> String {
+  if seconds < 60 {
+    format!("{} seconds", seconds)
+  } else if seconds < 3600 {
+    let mins = seconds / 60;
+    let secs = seconds % 60;
+    if secs > 0 {
+      format!("{} min {} sec", mins, secs)
+    } else {
+      format!("{} minutes", mins)
+    }
+  } else {
+    let hours = seconds / 3600;
+    let mins = (seconds % 3600) / 60;
+    if mins > 0 {
+      format!("{} hr {} min", hours, mins)
+    } else {
+      format!("{} hours", hours)
+    }
+  }
+}
+
+/// Format memory size in human-readable form
+fn format_memory(kb: u64) -> String {
+  if kb < 1024 {
+    format!("{} KB", kb)
+  } else if kb < 1024 * 1024 {
+    format!("{:.1} MB", kb as f64 / 1024.0)
+  } else {
+    format!("{:.2} GB", kb as f64 / (1024.0 * 1024.0))
+  }
 }

@@ -2,7 +2,7 @@
 
 use crate::IndexCommand;
 use anyhow::{Context, Result};
-use daemon::{Client, Request, default_socket_path, is_running};
+use daemon::{Request, connect_or_start};
 use std::path::Path;
 use tracing::{debug, error, warn};
 
@@ -32,13 +32,6 @@ pub async fn cmd_index(command: Option<IndexCommand>) -> Result<()> {
 pub async fn cmd_index_file(path: &str, title: Option<&str>, _force: bool) -> Result<()> {
   use engram_core::Config;
 
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
   let file_path = std::path::Path::new(path);
   if !file_path.exists() {
     error!("File not found: {}", path);
@@ -54,9 +47,7 @@ pub async fn cmd_index_file(path: &str, title: Option<&str>, _force: bool) -> Re
     .and_then(|e| e.to_str())
     .is_some_and(|ext| config.docs.extensions.iter().any(|e| e == ext));
 
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let abs_path = file_path.canonicalize().context("Failed to resolve path")?;
 
@@ -122,13 +113,6 @@ pub async fn cmd_index_file(path: &str, title: Option<&str>, _force: bool) -> Re
 pub async fn cmd_index_docs_impl(directory: Option<&str>, force: bool, stats: bool) -> Result<()> {
   use engram_core::Config;
 
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
   let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
   let config = Config::load_for_project(&cwd);
 
@@ -152,9 +136,7 @@ pub async fn cmd_index_docs_impl(directory: Option<&str>, force: bool, stats: bo
     std::process::exit(1);
   }
 
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   // Handle --stats
   if stats {
@@ -296,16 +278,7 @@ pub async fn cmd_index_docs_impl(directory: Option<&str>, force: bool, stats: bo
 
 /// Index code files
 pub async fn cmd_index_code(force: bool, stats: bool, export: Option<&str>, load: Option<&str>) -> Result<()> {
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let cwd = std::env::current_dir()
     .map(|p| p.to_string_lossy().to_string())

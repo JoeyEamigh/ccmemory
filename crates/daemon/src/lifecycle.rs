@@ -1,9 +1,12 @@
+use crate::activity_tracker::ActivityTracker;
 use crate::projects::ProjectRegistry;
 use crate::router::Router;
-use crate::scheduler::spawn_scheduler;
+use crate::scheduler::{SchedulerConfig, spawn_scheduler_with_config};
 use crate::server::{Server, ShutdownHandle};
+use crate::session_tracker::SessionTracker;
+use crate::shutdown_watcher::ShutdownWatcher;
 use embedding::{EmbeddingProvider, OllamaProvider, OpenRouterProvider};
-use engram_core::{ConfigEmbeddingProvider, EmbeddingConfig};
+use engram_core::{Config, ConfigEmbeddingProvider, EmbeddingConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
@@ -26,22 +29,50 @@ pub struct DaemonConfig {
   pub socket_path: PathBuf,
   /// Data directory for storage
   pub data_dir: PathBuf,
-  /// Idle timeout in seconds before auto-shutdown
+  /// Idle timeout in seconds before auto-shutdown (0 = immediate after last session)
   pub idle_timeout_secs: u64,
-  /// Whether to daemonize (run in background)
-  pub daemonize: bool,
+  /// Session timeout in seconds - sessions without activity are considered dead
+  pub session_timeout_secs: u64,
+  /// Whether to run in foreground mode (disables auto-shutdown)
+  pub foreground: bool,
   /// Embedding provider configuration
   pub embedding: EmbeddingConfig,
+  /// Log retention in days (0 = keep forever)
+  pub log_retention_days: u64,
 }
 
 impl Default for DaemonConfig {
   fn default() -> Self {
+    // Load from effective config if available
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let config = Config::load_for_project(&cwd);
+
     Self {
       socket_path: crate::server::default_socket_path(),
       data_dir: db::default_data_dir(),
-      idle_timeout_secs: 1800, // 30 minutes
-      daemonize: false,
-      embedding: EmbeddingConfig::default(),
+      idle_timeout_secs: config.daemon.idle_timeout_secs,
+      session_timeout_secs: config.daemon.session_timeout_secs,
+      foreground: false,
+      embedding: config.embedding,
+      log_retention_days: config.daemon.log_retention_days,
+    }
+  }
+}
+
+impl DaemonConfig {
+  /// Create a new config with foreground mode enabled
+  pub fn foreground() -> Self {
+    Self {
+      foreground: true,
+      ..Self::default()
+    }
+  }
+
+  /// Create a new config for background mode (auto-shutdown enabled)
+  pub fn background() -> Self {
+    Self {
+      foreground: false,
+      ..Self::default()
     }
   }
 }
@@ -83,17 +114,25 @@ pub struct Daemon {
   registry: Arc<ProjectRegistry>,
   shutdown: Option<ShutdownHandle>,
   scheduler_shutdown_tx: Option<broadcast::Sender<()>>,
+  /// Session tracker for lifecycle management
+  session_tracker: Arc<SessionTracker>,
+  /// Activity tracker for idle detection
+  activity_tracker: Arc<ActivityTracker>,
 }
 
 impl Daemon {
   pub fn new(config: DaemonConfig) -> Self {
     let registry = Arc::new(ProjectRegistry::with_data_dir(config.data_dir.clone()));
+    let session_tracker = Arc::new(SessionTracker::new(config.session_timeout_secs));
+    let activity_tracker = Arc::new(ActivityTracker::new());
 
     Self {
       config,
       registry,
       shutdown: None,
       scheduler_shutdown_tx: None,
+      session_tracker,
+      activity_tracker,
     }
   }
 
@@ -102,6 +141,14 @@ impl Daemon {
     info!("Starting CCEngram daemon");
     info!("Socket: {:?}", self.config.socket_path);
     info!("Data dir: {:?}", self.config.data_dir);
+    info!(
+      "Mode: {}",
+      if self.config.foreground {
+        "foreground (auto-shutdown disabled)"
+      } else {
+        "background (auto-shutdown enabled)"
+      }
+    );
 
     // Create embedding provider from config
     let embedding = create_embedding_provider(&self.config.embedding);
@@ -128,16 +175,47 @@ impl Daemon {
     let shutdown = server.shutdown_handle();
     self.shutdown = Some(shutdown.clone());
 
-    // Give the router the shutdown handle so it can process shutdown requests
+    // Give the router the shutdown handle and trackers
     router.set_shutdown_handle(shutdown.clone()).await;
+    router.set_session_tracker(Arc::clone(&self.session_tracker)).await;
+    router.set_activity_tracker(Arc::clone(&self.activity_tracker)).await;
 
-    // Create shutdown channel for scheduler
+    // Create shutdown channel for scheduler and watcher
     let (scheduler_shutdown_tx, scheduler_shutdown_rx) = broadcast::channel(1);
     self.scheduler_shutdown_tx = Some(scheduler_shutdown_tx.clone());
 
-    // Spawn the background scheduler for decay and cleanup
-    let _scheduler_handle = spawn_scheduler(Arc::clone(&self.registry), scheduler_shutdown_rx);
-    info!("Started background scheduler");
+    // Spawn the background scheduler for decay and cleanup with log retention config
+    let scheduler_config = SchedulerConfig {
+      log_retention_days: self.config.log_retention_days,
+      ..SchedulerConfig::default()
+    };
+    let _scheduler_handle =
+      spawn_scheduler_with_config(Arc::clone(&self.registry), scheduler_shutdown_rx, scheduler_config);
+    info!(
+      "Started background scheduler (log retention: {} days)",
+      self.config.log_retention_days
+    );
+
+    // Spawn shutdown watcher only in background mode
+    let watcher_handle = if !self.config.foreground {
+      let watcher = ShutdownWatcher::new(
+        Arc::clone(&self.session_tracker),
+        Arc::clone(&self.activity_tracker),
+        shutdown.clone(),
+        self.config.idle_timeout_secs,
+      );
+      let watcher_shutdown_rx = scheduler_shutdown_tx.subscribe();
+      info!(
+        "Auto-shutdown enabled: idle timeout {} seconds",
+        self.config.idle_timeout_secs
+      );
+      Some(tokio::spawn(async move {
+        watcher.run(watcher_shutdown_rx).await;
+      }))
+    } else {
+      info!("Foreground mode: auto-shutdown disabled");
+      None
+    };
 
     // Handle ctrl-c gracefully
     let shutdown_clone = shutdown.clone();
@@ -154,6 +232,11 @@ impl Daemon {
 
     // Run server
     server.run().await?;
+
+    // Cleanup: wait for watcher to stop
+    if let Some(handle) = watcher_handle {
+      let _ = handle.await;
+    }
 
     // Cleanup: stop watchers first, then close connections
     self.registry.stop_all_watchers().await;
@@ -173,6 +256,16 @@ impl Daemon {
   /// Get the project registry
   pub fn registry(&self) -> Arc<ProjectRegistry> {
     Arc::clone(&self.registry)
+  }
+
+  /// Get the session tracker
+  pub fn session_tracker(&self) -> Arc<SessionTracker> {
+    Arc::clone(&self.session_tracker)
+  }
+
+  /// Get the activity tracker
+  pub fn activity_tracker(&self) -> Arc<ActivityTracker> {
+    Arc::clone(&self.activity_tracker)
   }
 }
 
@@ -213,7 +306,24 @@ mod tests {
   fn test_default_config() {
     let config = DaemonConfig::default();
     assert!(!config.socket_path.to_string_lossy().is_empty());
-    assert_eq!(config.idle_timeout_secs, 1800);
+    // Default idle timeout comes from config (5 minutes = 300 seconds)
+    assert_eq!(config.idle_timeout_secs, 300);
+    // Default session timeout is 30 minutes = 1800 seconds
+    assert_eq!(config.session_timeout_secs, 1800);
+    // Default is background mode (not foreground)
+    assert!(!config.foreground);
+  }
+
+  #[test]
+  fn test_foreground_config() {
+    let config = DaemonConfig::foreground();
+    assert!(config.foreground);
+  }
+
+  #[test]
+  fn test_background_config() {
+    let config = DaemonConfig::background();
+    assert!(!config.foreground);
   }
 
   #[test]

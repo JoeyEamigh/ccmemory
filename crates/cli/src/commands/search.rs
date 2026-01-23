@@ -1,8 +1,20 @@
 //! Search commands for memories, code, and documents
 
 use anyhow::{Context, Result};
-use daemon::{Client, Request, default_socket_path, is_running};
+use daemon::{Request, connect_or_start};
 use tracing::error;
+
+/// Format an ID for display
+///
+/// When `long` is false, shows only the first 8 characters with "..." suffix.
+/// When `long` is true or ID is short, shows the full ID.
+fn format_id(id: &str, long: bool) -> String {
+  if long || id.len() <= 12 {
+    id.to_string()
+  } else {
+    format!("{}...", &id[..8])
+  }
+}
 
 /// Search memories
 #[allow(clippy::too_many_arguments)]
@@ -16,18 +28,9 @@ pub async fn cmd_search(
   include_superseded: bool,
   scope: Option<&str>,
   json_output: bool,
+  long_ids: bool,
 ) -> Result<()> {
-  let socket_path = default_socket_path();
-
-  // Ensure daemon is running
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let cwd = project
     .map(|p| p.to_string())
@@ -80,11 +83,12 @@ pub async fn cmd_search(
     } else {
       println!("Found {} memories:\n", memories.len());
       for (i, memory) in memories.iter().enumerate() {
+        let id = memory.get("id").and_then(|v| v.as_str()).unwrap_or("?");
         println!(
           "{}. [{}] {}",
           i + 1,
           memory.get("sector").and_then(|v| v.as_str()).unwrap_or("unknown"),
-          memory.get("id").and_then(|v| v.as_str()).unwrap_or("?")
+          format_id(id, long_ids)
         );
         if let Some(content) = memory.get("content").and_then(|v| v.as_str()) {
           // Print first 200 chars
@@ -99,6 +103,11 @@ pub async fn cmd_search(
           println!("   Similarity: {:.2}", sim);
         }
         println!();
+      }
+
+      // Help message about prefix matching
+      if !long_ids {
+        println!("Tip: Use --long to show full IDs. Prefixes (8+ chars) work in commands.");
       }
     }
   }
@@ -118,16 +127,7 @@ pub async fn cmd_search_code(
   symbol: Option<&str>,
   json_output: bool,
 ) -> Result<()> {
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let cwd = project
     .map(|p| p.to_string())
@@ -205,17 +205,8 @@ pub async fn cmd_search_code(
 }
 
 /// Search documents
-pub async fn cmd_search_docs(query: &str, limit: usize, project: Option<&str>, json_output: bool) -> Result<()> {
-  let socket_path = default_socket_path();
-
-  if !is_running(&socket_path) {
-    error!("Daemon is not running. Start it with: ccengram daemon");
-    std::process::exit(1);
-  }
-
-  let mut client = Client::connect_to(&socket_path)
-    .await
-    .context("Failed to connect to daemon")?;
+pub async fn cmd_search_docs(query: &str, limit: usize, project: Option<&str>, json_output: bool, long_ids: bool) -> Result<()> {
+  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let cwd = project
     .map(|p| p.to_string())
@@ -255,7 +246,7 @@ pub async fn cmd_search_docs(query: &str, limit: usize, project: Option<&str>, j
         let title = chunk.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled");
         let doc_id = chunk.get("document_id").and_then(|v| v.as_str()).unwrap_or("?");
 
-        println!("{}. {} [{}]", i + 1, title, &doc_id[..8.min(doc_id.len())]);
+        println!("{}. {} [{}]", i + 1, title, format_id(doc_id, long_ids));
 
         if let Some(content) = chunk.get("content").and_then(|v| v.as_str()) {
           let preview = if content.len() > 200 {
@@ -270,6 +261,11 @@ pub async fn cmd_search_docs(query: &str, limit: usize, project: Option<&str>, j
           println!("   Similarity: {:.2}", sim);
         }
         println!();
+      }
+
+      // Help message about prefix matching
+      if !long_ids {
+        println!("Tip: Use --long to show full IDs. Prefixes (8+ chars) work in commands.");
       }
     }
   }
