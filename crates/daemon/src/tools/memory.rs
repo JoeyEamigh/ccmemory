@@ -990,6 +990,162 @@ impl ToolHandler {
       Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
     }
   }
+
+  /// Find memories related to a given memory
+  ///
+  /// Uses multiple strategies:
+  /// 1. Explicit relationships (from memory_relationships table)
+  /// 2. Shared entities (co-occurrence)
+  /// 3. Semantic similarity
+  pub async fn memory_related(&self, request: Request) -> Response {
+    #[derive(Deserialize)]
+    struct Args {
+      memory_id: String,
+      #[serde(default)]
+      cwd: Option<String>,
+      #[serde(default)]
+      methods: Option<Vec<String>>,
+      #[serde(default)]
+      limit: Option<usize>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => return Response::error(request.id, -32602, &format!("Invalid params: {}", e)),
+    };
+
+    let project_path = args
+      .cwd
+      .map(PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let (_, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
+    };
+
+    // Resolve the anchor memory
+    let memory = match resolve_memory(&db, &args.memory_id, request.id.clone()).await {
+      Ok(m) => m,
+      Err(response) => return response,
+    };
+
+    let methods: Vec<&str> = args
+      .methods
+      .as_ref()
+      .map(|m| m.iter().map(|s| s.as_str()).collect())
+      .unwrap_or_else(|| vec!["relationships", "entities", "similar"]);
+
+    let limit = args.limit.unwrap_or(10);
+    let mut related: Vec<(Memory, f32, String)> = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+    seen_ids.insert(memory.id); // Exclude the source memory
+
+    for method in methods {
+      match method {
+        "relationships" => {
+          // Get explicit relationships
+          if let Ok(relationships) = db.get_all_relationships(&memory.id).await {
+            for rel in relationships {
+              // Get the related memory
+              let related_id = if rel.from_memory_id == memory.id {
+                rel.to_memory_id
+              } else {
+                rel.from_memory_id
+              };
+
+              if seen_ids.insert(related_id)
+                && let Ok(Some(related_mem)) = db.get_memory(&related_id).await
+              {
+                let score = rel.confidence;
+                related.push((related_mem, score, format!("relationship:{}", rel.relationship_type.as_str())));
+              }
+            }
+          }
+        }
+        "entities" => {
+          // Find memories that share concepts with this one
+          for concept in &memory.concepts {
+            let filter = format!(
+              "is_deleted = false AND concepts LIKE '%{}%'",
+              concept.replace('\'', "''")
+            );
+            if let Ok(matches) = db.list_memories(Some(&filter), Some(5)).await {
+              for m in matches {
+                if seen_ids.insert(m.id) {
+                  related.push((m, 0.6, format!("entity:{}", concept)));
+                }
+              }
+            }
+          }
+        }
+        "similar" => {
+          // Semantic similarity search
+          if let Some(query_vec) = self.get_embedding(&memory.content).await
+            && let Ok(similar) = db.search_memories(&query_vec, limit, Some("is_deleted = false")).await
+          {
+            for (m, distance) in similar {
+              if seen_ids.insert(m.id) {
+                let similarity = 1.0 - distance.min(1.0);
+                related.push((m, similarity, "similar".to_string()));
+              }
+            }
+          }
+        }
+        "supersedes" => {
+          // Find memories in the supersession chain
+          if let Some(superseded_by) = memory.superseded_by
+            && seen_ids.insert(superseded_by)
+            && let Ok(Some(superseding)) = db.get_memory(&superseded_by).await
+          {
+            related.push((superseding, 1.0, "superseded_by".to_string()));
+          }
+
+          // Find memories this one supersedes
+          let filter = format!("superseded_by = '{}'", memory.id);
+          if let Ok(superseded) = db.list_memories(Some(&filter), Some(5)).await {
+            for m in superseded {
+              if seen_ids.insert(m.id) {
+                related.push((m, 0.9, "supersedes".to_string()));
+              }
+            }
+          }
+        }
+        _ => {}
+      }
+    }
+
+    // Sort by score descending and truncate
+    related.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    related.truncate(limit);
+
+    let results: Vec<_> = related
+      .into_iter()
+      .map(|(m, score, relationship)| {
+        serde_json::json!({
+          "id": m.id.to_string(),
+          "content": m.content,
+          "summary": m.summary,
+          "memory_type": m.memory_type.map(|t| t.as_str()),
+          "sector": m.sector.as_str(),
+          "salience": m.salience,
+          "score": score,
+          "relationship": relationship,
+          "created_at": m.created_at.to_rfc3339(),
+        })
+      })
+      .collect();
+
+    Response::success(
+      request.id,
+      serde_json::json!({
+        "memory_id": memory.id.to_string(),
+        "content": memory.content,
+        "related": results,
+        "count": results.len()
+      }),
+    )
+  }
 }
 
 #[cfg(test)]

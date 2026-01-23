@@ -11,6 +11,7 @@ engram-core = { workspace = true }
 db = { workspace = true }
 embedding = { workspace = true }
 index = { workspace = true }
+parser = { workspace = true }
 extract = { workspace = true }
 llm = { workspace = true }
 tokio = { workspace = true, features = ["net", "signal"] }

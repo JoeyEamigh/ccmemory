@@ -2,11 +2,43 @@
 
 use super::ToolHandler;
 use crate::router::{Request, Response};
-use db::{CheckpointType, IndexCheckpoint};
+use db::{CheckpointType, IndexCheckpoint, ProjectDb};
+use engram_core::{CodeChunk, MemoryType};
 use index::{Chunker, Scanner, compute_gitignore_hash};
+use parser::import_matches_file;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tracing::{debug, warn};
+
+/// Helper to resolve a code chunk by ID or prefix
+///
+/// Tries exact match first, then falls back to prefix matching.
+/// Returns an appropriate error response for not found, ambiguous, or invalid prefixes.
+async fn resolve_code_chunk(
+  db: &ProjectDb,
+  id_or_prefix: &str,
+  request_id: Option<serde_json::Value>,
+) -> Result<CodeChunk, Response> {
+  match db.get_code_chunk_by_id_or_prefix(id_or_prefix).await {
+    Ok(Some(chunk)) => Ok(chunk),
+    Ok(None) => Err(Response::error(
+      request_id,
+      -32000,
+      &format!("Code chunk not found: {}", id_or_prefix),
+    )),
+    Err(db::DbError::AmbiguousPrefix { prefix, count }) => Err(Response::error(
+      request_id,
+      -32000,
+      &format!(
+        "Ambiguous prefix '{}' matches {} chunks. Use more characters.",
+        prefix, count
+      ),
+    )),
+    Err(db::DbError::InvalidInput(msg)) => Err(Response::error(request_id, -32602, &msg)),
+    Err(e) => Err(Response::error(request_id, -32000, &format!("Database error: {}", e))),
+  }
+}
 
 impl ToolHandler {
   pub async fn code_search(&self, request: Request) -> Response {
@@ -617,6 +649,673 @@ impl ToolHandler {
           }
         },
         "total_file_lines": total_lines
+      }),
+    )
+  }
+
+  /// Get memories (decisions, gotchas, patterns) related to code
+  ///
+  /// Queries memories by:
+  /// 1. File path match (files array, scope_path)
+  /// 2. Semantic similarity to code content
+  pub async fn code_memories(&self, request: Request) -> Response {
+    #[derive(Deserialize)]
+    struct Args {
+      #[serde(default)]
+      chunk_id: Option<String>,
+      #[serde(default)]
+      file_path: Option<String>,
+      #[serde(default)]
+      cwd: Option<String>,
+      #[serde(default)]
+      limit: Option<usize>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => return Response::error(request.id, -32602, &format!("Invalid params: {}", e)),
+    };
+
+    let project_path = args
+      .cwd
+      .map(PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let (_, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
+    };
+
+    let limit = args.limit.unwrap_or(10);
+
+    // Resolve the file path - either from chunk_id or direct file_path
+    let (file_path, chunk_content) = if let Some(ref chunk_id) = args.chunk_id {
+      let chunk = match resolve_code_chunk(&db, chunk_id, request.id.clone()).await {
+        Ok(c) => c,
+        Err(response) => return response,
+      };
+      (chunk.file_path.clone(), Some(chunk.content.clone()))
+    } else if let Some(ref fp) = args.file_path {
+      (fp.clone(), None)
+    } else {
+      return Response::error(request.id, -32602, "Must provide chunk_id or file_path");
+    };
+
+    let mut memories = Vec::new();
+    let mut seen_ids = HashSet::new();
+
+    // Strategy 1: File path match via scope_path
+    let scope_filter = format!(
+      "is_deleted = false AND (scope_path LIKE '{}%' OR scope_path LIKE '%{}%')",
+      file_path.replace('\'', "''"),
+      file_path.replace('\'', "''")
+    );
+    if let Ok(path_matches) = db.list_memories(Some(&scope_filter), Some(limit)).await {
+      for m in path_matches {
+        if seen_ids.insert(m.id) {
+          memories.push((m, 0.8f32, "file_path".to_string()));
+        }
+      }
+    }
+
+    // Strategy 2: Semantic similarity (if chunk content available)
+    if let Some(content) = chunk_content
+      && let Some(query_vec) = self.get_embedding(&content).await
+      && let Ok(similar) = db.search_memories(&query_vec, limit, Some("is_deleted = false")).await
+    {
+      for (m, distance) in similar {
+        if seen_ids.insert(m.id) {
+          let similarity = 1.0 - distance.min(1.0);
+          memories.push((m, similarity, "semantic".to_string()));
+        }
+      }
+    }
+
+    // Sort by memory type priority, then by score
+    memories.sort_by(|a, b| {
+      let type_priority = |m: &engram_core::Memory| match m.memory_type {
+        Some(MemoryType::Decision) => 0,
+        Some(MemoryType::Gotcha) => 1,
+        Some(MemoryType::Pattern) => 2,
+        Some(MemoryType::Codebase) => 3,
+        _ => 4,
+      };
+      let pa = type_priority(&a.0);
+      let pb = type_priority(&b.0);
+      if pa != pb {
+        pa.cmp(&pb)
+      } else {
+        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+      }
+    });
+
+    // Take top results
+    memories.truncate(limit);
+
+    let results: Vec<_> = memories
+      .into_iter()
+      .map(|(m, score, source)| {
+        serde_json::json!({
+          "id": m.id.to_string(),
+          "content": m.content,
+          "summary": m.summary,
+          "memory_type": m.memory_type.map(|t| t.as_str()),
+          "sector": m.sector.as_str(),
+          "salience": m.salience,
+          "score": score,
+          "source": source,
+          "scope_path": m.scope_path,
+          "tags": m.tags,
+          "created_at": m.created_at.to_rfc3339(),
+        })
+      })
+      .collect();
+
+    Response::success(
+      request.id,
+      serde_json::json!({
+        "file_path": file_path,
+        "memories": results
+      }),
+    )
+  }
+
+  /// Find all code that calls a function/method
+  ///
+  /// Essential for understanding impact of changes.
+  pub async fn code_callers(&self, request: Request) -> Response {
+    #[derive(Deserialize)]
+    struct Args {
+      #[serde(default)]
+      chunk_id: Option<String>,
+      #[serde(default)]
+      symbol: Option<String>,
+      #[serde(default)]
+      cwd: Option<String>,
+      #[serde(default)]
+      limit: Option<usize>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => return Response::error(request.id, -32602, &format!("Invalid params: {}", e)),
+    };
+
+    let project_path = args
+      .cwd
+      .map(PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let (_, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
+    };
+
+    let limit = args.limit.unwrap_or(20);
+
+    // Resolve the symbol to search for
+    let symbol = if let Some(ref chunk_id) = args.chunk_id {
+      let chunk = match resolve_code_chunk(&db, chunk_id, request.id.clone()).await {
+        Ok(c) => c,
+        Err(response) => return response,
+      };
+      // Use the first symbol from the chunk
+      chunk
+        .symbols
+        .first()
+        .cloned()
+        .ok_or_else(|| Response::error(request.id.clone(), -32000, "Chunk has no symbols"))
+    } else if let Some(ref sym) = args.symbol {
+      Ok(sym.clone())
+    } else {
+      Err(Response::error(request.id.clone(), -32602, "Must provide chunk_id or symbol"))
+    };
+
+    let symbol = match symbol {
+      Ok(s) => s,
+      Err(response) => return response,
+    };
+
+    // Find chunks that call this symbol
+    // Note: LanceDB SQL filter with JSON array contains
+    let filter = format!("calls LIKE '%\"{}%'", symbol.replace('\'', "''"));
+    let callers = match db.list_code_chunks(Some(&filter), Some(limit)).await {
+      Ok(c) => c,
+      Err(e) => return Response::error(request.id, -32000, &format!("Database error: {}", e)),
+    };
+
+    let results: Vec<_> = callers
+      .into_iter()
+      .map(|c| {
+        serde_json::json!({
+          "id": c.id.to_string(),
+          "file_path": c.file_path,
+          "symbols": c.symbols,
+          "start_line": c.start_line,
+          "end_line": c.end_line,
+          "language": format!("{:?}", c.language).to_lowercase(),
+          "chunk_type": format!("{:?}", c.chunk_type).to_lowercase(),
+        })
+      })
+      .collect();
+
+    Response::success(
+      request.id,
+      serde_json::json!({
+        "symbol": symbol,
+        "callers": results,
+        "count": results.len()
+      }),
+    )
+  }
+
+  /// Find functions that a code chunk calls
+  ///
+  /// Returns the calls array and attempts to resolve each call to its definition.
+  pub async fn code_callees(&self, request: Request) -> Response {
+    #[derive(Deserialize)]
+    struct Args {
+      chunk_id: String,
+      #[serde(default)]
+      cwd: Option<String>,
+      #[serde(default)]
+      limit: Option<usize>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => return Response::error(request.id, -32602, &format!("Invalid params: {}", e)),
+    };
+
+    let project_path = args
+      .cwd
+      .map(PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let (_, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
+    };
+
+    let chunk = match resolve_code_chunk(&db, &args.chunk_id, request.id.clone()).await {
+      Ok(c) => c,
+      Err(response) => return response,
+    };
+
+    if chunk.calls.is_empty() {
+      return Response::success(
+        request.id,
+        serde_json::json!({
+          "chunk_id": chunk.id.to_string(),
+          "calls": chunk.calls,
+          "callees": [],
+          "unresolved": []
+        }),
+      );
+    }
+
+    let limit_per_call = args.limit.unwrap_or(3);
+    let mut callees = Vec::new();
+    let mut unresolved = Vec::new();
+    let mut seen_ids = HashSet::new();
+
+    // Try to resolve each call to its definition
+    for call in &chunk.calls {
+      // Search for chunks where symbols contains this call
+      let filter = format!("symbols LIKE '%\"{}%'", call.replace('\'', "''"));
+      match db.list_code_chunks(Some(&filter), Some(limit_per_call)).await {
+        Ok(matches) => {
+          if matches.is_empty() {
+            unresolved.push(call.clone());
+          } else {
+            for m in matches {
+              if seen_ids.insert(m.id) {
+                callees.push(serde_json::json!({
+                  "call": call,
+                  "id": m.id.to_string(),
+                  "file_path": m.file_path,
+                  "symbols": m.symbols,
+                  "start_line": m.start_line,
+                  "end_line": m.end_line,
+                  "language": format!("{:?}", m.language).to_lowercase(),
+                }));
+              }
+            }
+          }
+        }
+        Err(_) => {
+          unresolved.push(call.clone());
+        }
+      }
+    }
+
+    Response::success(
+      request.id,
+      serde_json::json!({
+        "chunk_id": chunk.id.to_string(),
+        "calls": chunk.calls,
+        "callees": callees,
+        "unresolved": unresolved
+      }),
+    )
+  }
+
+  /// Find code related to a chunk via multiple methods
+  ///
+  /// Methods: same_file, shared_imports, similar, callers, callees
+  pub async fn code_related(&self, request: Request) -> Response {
+    #[derive(Deserialize)]
+    struct Args {
+      chunk_id: String,
+      #[serde(default)]
+      methods: Option<Vec<String>>,
+      #[serde(default)]
+      cwd: Option<String>,
+      #[serde(default)]
+      limit: Option<usize>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => return Response::error(request.id, -32602, &format!("Invalid params: {}", e)),
+    };
+
+    let project_path = args
+      .cwd
+      .map(PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let (_, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
+    };
+
+    let chunk = match resolve_code_chunk(&db, &args.chunk_id, request.id.clone()).await {
+      Ok(c) => c,
+      Err(response) => return response,
+    };
+
+    let methods: Vec<&str> = args
+      .methods
+      .as_ref()
+      .map(|m| m.iter().map(|s| s.as_str()).collect())
+      .unwrap_or_else(|| vec!["same_file", "shared_imports", "similar"]);
+
+    let limit = args.limit.unwrap_or(20);
+    let mut related: Vec<(CodeChunk, f32, String)> = Vec::new();
+    let mut seen_ids = HashSet::new();
+    seen_ids.insert(chunk.id); // Exclude the source chunk
+
+    for method in methods {
+      match method {
+        "same_file" => {
+          if let Ok(siblings) = db.get_chunks_for_file(&chunk.file_path).await {
+            for s in siblings {
+              if seen_ids.insert(s.id) {
+                related.push((s, 0.9, "same_file".to_string()));
+              }
+            }
+          }
+        }
+        "shared_imports" => {
+          // For each import in this chunk, find other chunks that import the same thing
+          // Use import resolution to handle NodeNext (.js -> .ts), bundler (extensionless), etc.
+          for import in &chunk.imports {
+            // First try exact match
+            let filter = format!("imports LIKE '%{}%'", import.replace('\'', "''"));
+            if let Ok(matches) = db.list_code_chunks(Some(&filter), Some(10)).await {
+              for m in matches {
+                if seen_ids.insert(m.id) {
+                  related.push((m, 0.7, format!("imports:{}", import)));
+                }
+              }
+            }
+
+            // Also find chunks for files that this import resolves to
+            // This handles the case where ./utils.js resolves to utils.ts
+            if let Ok(all_chunks) = db.list_code_chunks(None, Some(100)).await {
+              for m in all_chunks {
+                if seen_ids.contains(&m.id) {
+                  continue;
+                }
+                // Check if this import resolves to this chunk's file
+                if import_matches_file(import, &m.file_path)
+                  && seen_ids.insert(m.id) {
+                    related.push((m, 0.75, format!("imports:{} -> {}", import, chunk.file_path)));
+                  }
+              }
+            }
+          }
+        }
+        "similar" => {
+          if let Some(query_vec) = self.get_embedding(&chunk.content).await
+            && let Ok(similar) = db.search_code_chunks(&query_vec, 10, None).await
+          {
+            for (c, distance) in similar {
+              if seen_ids.insert(c.id) {
+                let similarity = 1.0 - distance.min(1.0);
+                related.push((c, similarity, "similar".to_string()));
+              }
+            }
+          }
+        }
+        "callers" => {
+          if let Some(symbol) = chunk.symbols.first() {
+            let filter = format!("calls LIKE '%\"{}%'", symbol.replace('\'', "''"));
+            if let Ok(callers) = db.list_code_chunks(Some(&filter), Some(10)).await {
+              for c in callers {
+                if seen_ids.insert(c.id) {
+                  related.push((c, 0.8, "caller".to_string()));
+                }
+              }
+            }
+          }
+        }
+        "callees" => {
+          for call in &chunk.calls {
+            let filter = format!("symbols LIKE '%\"{}%'", call.replace('\'', "''"));
+            if let Ok(matches) = db.list_code_chunks(Some(&filter), Some(5)).await {
+              for m in matches {
+                if seen_ids.insert(m.id) {
+                  related.push((m, 0.8, format!("callee:{}", call)));
+                }
+              }
+            }
+          }
+        }
+        _ => {}
+      }
+    }
+
+    // Sort by score descending and truncate
+    related.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    related.truncate(limit);
+
+    let results: Vec<_> = related
+      .into_iter()
+      .map(|(c, score, relationship)| {
+        serde_json::json!({
+          "id": c.id.to_string(),
+          "file_path": c.file_path,
+          "symbols": c.symbols,
+          "start_line": c.start_line,
+          "end_line": c.end_line,
+          "language": format!("{:?}", c.language).to_lowercase(),
+          "chunk_type": format!("{:?}", c.chunk_type).to_lowercase(),
+          "score": score,
+          "relationship": relationship,
+        })
+      })
+      .collect();
+
+    Response::success(
+      request.id,
+      serde_json::json!({
+        "chunk_id": chunk.id.to_string(),
+        "file_path": chunk.file_path,
+        "symbols": chunk.symbols,
+        "related": results,
+        "count": results.len()
+      }),
+    )
+  }
+
+  /// Get comprehensive context for code in ONE call
+  ///
+  /// Returns: chunk details, callers, callees, sibling functions, related memories, and documentation.
+  pub async fn code_context_full(&self, request: Request) -> Response {
+    #[derive(Deserialize)]
+    struct Args {
+      #[serde(default)]
+      chunk_id: Option<String>,
+      #[serde(default)]
+      file_path: Option<String>,
+      #[serde(default)]
+      symbol: Option<String>,
+      #[serde(default)]
+      cwd: Option<String>,
+      #[serde(default)]
+      limit_per_section: Option<usize>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => return Response::error(request.id, -32602, &format!("Invalid params: {}", e)),
+    };
+
+    let project_path = args
+      .cwd
+      .map(PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let (_, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
+    };
+
+    let limit = args.limit_per_section.unwrap_or(5);
+
+    // Resolve the target chunk
+    let chunk = if let Some(ref chunk_id) = args.chunk_id {
+      match resolve_code_chunk(&db, chunk_id, request.id.clone()).await {
+        Ok(c) => c,
+        Err(response) => return response,
+      }
+    } else if let Some(ref file_path) = args.file_path {
+      // Try to find chunk by file path and optional symbol
+      let file_chunks = match db.get_chunks_for_file(file_path).await {
+        Ok(c) => c,
+        Err(e) => return Response::error(request.id, -32000, &format!("Database error: {}", e)),
+      };
+
+      if file_chunks.is_empty() {
+        return Response::error(request.id, -32000, &format!("No chunks found for file: {}", file_path));
+      }
+
+      if let Some(ref symbol) = args.symbol {
+        // Find chunk containing this symbol
+        match file_chunks.into_iter().find(|c| c.symbols.iter().any(|s| s == symbol)) {
+          Some(chunk) => chunk,
+          None => return Response::error(request.id, -32000, &format!("Symbol '{}' not found in file", symbol)),
+        }
+      } else {
+        // Return first chunk
+        file_chunks.into_iter().next().expect("checked not empty")
+      }
+    } else {
+      return Response::error(request.id, -32602, "Must provide chunk_id or file_path");
+    };
+
+    // Gather all context sections
+    let chunk_id = chunk.id;
+    let file_path = chunk.file_path.clone();
+
+    // 1. Callers - who calls this?
+    let callers: Vec<serde_json::Value> = if let Some(symbol) = chunk.symbols.first() {
+      let filter = format!("calls LIKE '%\"{}%'", symbol.replace('\'', "''"));
+      db.list_code_chunks(Some(&filter), Some(limit))
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| c.id != chunk_id)
+        .map(|c| {
+          serde_json::json!({
+            "id": c.id.to_string(),
+            "file_path": c.file_path,
+            "symbols": c.symbols,
+            "start_line": c.start_line,
+            "end_line": c.end_line,
+          })
+        })
+        .collect()
+    } else {
+      vec![]
+    };
+
+    // 2. Callees - what does this call?
+    let mut callees: Vec<serde_json::Value> = Vec::new();
+    let mut unresolved_calls: Vec<String> = Vec::new();
+    for call in &chunk.calls {
+      let filter = format!("symbols LIKE '%\"{}%'", call.replace('\'', "''"));
+      if let Ok(matches) = db.list_code_chunks(Some(&filter), Some(2)).await {
+        if matches.is_empty() {
+          unresolved_calls.push(call.clone());
+        } else {
+          for m in matches {
+            callees.push(serde_json::json!({
+              "call": call,
+              "id": m.id.to_string(),
+              "file_path": m.file_path,
+              "symbols": m.symbols,
+              "start_line": m.start_line,
+            }));
+          }
+        }
+      }
+    }
+    callees.truncate(limit);
+
+    // 3. Same file siblings
+    let same_file: Vec<serde_json::Value> = db
+      .get_chunks_for_file(&file_path)
+      .await
+      .unwrap_or_default()
+      .into_iter()
+      .filter(|c| c.id != chunk_id)
+      .take(limit)
+      .map(|c| {
+        serde_json::json!({
+          "id": c.id.to_string(),
+          "symbols": c.symbols,
+          "chunk_type": format!("{:?}", c.chunk_type).to_lowercase(),
+          "start_line": c.start_line,
+          "end_line": c.end_line,
+        })
+      })
+      .collect();
+
+    // 4. Related memories
+    let memories: Vec<serde_json::Value> = {
+      let scope_filter = format!(
+        "is_deleted = false AND (scope_path LIKE '{}%' OR scope_path LIKE '%{}%')",
+        file_path.replace('\'', "''"),
+        file_path.replace('\'', "''")
+      );
+      db.list_memories(Some(&scope_filter), Some(limit))
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| {
+          serde_json::json!({
+            "id": m.id.to_string(),
+            "content": m.content,
+            "memory_type": m.memory_type.map(|t| t.as_str()),
+            "salience": m.salience,
+          })
+        })
+        .collect()
+    };
+
+    // 5. Related documentation (semantic search if embedding available)
+    let documentation: Vec<serde_json::Value> = if let Some(query_vec) = self.get_embedding(&chunk.content).await {
+      db.search_documents(&query_vec, limit, None)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(doc, distance): (engram_core::DocumentChunk, f32)| {
+          serde_json::json!({
+            "id": doc.id.to_string(),
+            "title": doc.title,
+            "content": doc.content,
+            "similarity": 1.0 - distance.min(1.0),
+          })
+        })
+        .collect()
+    } else {
+      vec![]
+    };
+
+    Response::success(
+      request.id,
+      serde_json::json!({
+        "chunk": {
+          "id": chunk.id.to_string(),
+          "file_path": chunk.file_path,
+          "content": chunk.content,
+          "language": format!("{:?}", chunk.language).to_lowercase(),
+          "chunk_type": format!("{:?}", chunk.chunk_type).to_lowercase(),
+          "symbols": chunk.symbols,
+          "imports": chunk.imports,
+          "calls": chunk.calls,
+          "start_line": chunk.start_line,
+          "end_line": chunk.end_line,
+        },
+        "callers": callers,
+        "callees": callees,
+        "unresolved_calls": unresolved_calls,
+        "same_file": same_file,
+        "memories": memories,
+        "documentation": documentation,
       }),
     )
   }

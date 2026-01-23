@@ -159,6 +159,27 @@ pub fn all_tool_definitions() -> HashMap<&'static str, Value> {
     }),
   );
 
+  tools.insert(
+    "memory_related",
+    json!({
+        "name": "memory_related",
+        "description": "Find memories related to a given memory via relationship graph, shared entities, semantic similarity, or supersession chain.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "memory_id": { "type": "string", "description": "Memory ID to find related memories for" },
+                "methods": {
+                    "type": "array",
+                    "items": { "type": "string", "enum": ["relationships", "entities", "similar", "supersedes"] },
+                    "description": "Relationship methods to use (default: all)"
+                },
+                "limit": { "type": "number", "description": "Max results (default: 10)" }
+            },
+            "required": ["memory_id"]
+        }
+    }),
+  );
+
   // Code tools
   tools.insert(
     "code_search",
@@ -252,6 +273,92 @@ pub fn all_tool_definitions() -> HashMap<&'static str, Value> {
                 "lines_after": { "type": "number", "description": "Lines to include after chunk (default: 20, max: 500)" }
             },
             "required": ["chunk_id"]
+        }
+    }),
+  );
+
+  tools.insert(
+    "code_memories",
+    json!({
+        "name": "code_memories",
+        "description": "Get memories (decisions, gotchas, patterns) related to code. Use to understand why code is written a certain way before modifying it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chunk_id": { "type": "string", "description": "Code chunk ID" },
+                "file_path": { "type": "string", "description": "File path (alternative to chunk_id)" },
+                "limit": { "type": "number", "description": "Max results (default: 10)" }
+            }
+        }
+    }),
+  );
+
+  tools.insert(
+    "code_callers",
+    json!({
+        "name": "code_callers",
+        "description": "Find all code that calls a function/method. Essential for understanding impact of changes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chunk_id": { "type": "string", "description": "Code chunk ID defining the function" },
+                "symbol": { "type": "string", "description": "Function/method name to search for" },
+                "limit": { "type": "number", "description": "Max results (default: 20)" }
+            }
+        }
+    }),
+  );
+
+  tools.insert(
+    "code_callees",
+    json!({
+        "name": "code_callees",
+        "description": "Find functions that a code chunk calls. Returns resolved definitions and unresolved external calls.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chunk_id": { "type": "string", "description": "Code chunk ID to analyze" },
+                "limit": { "type": "number", "description": "Max results per call (default: 3)" }
+            },
+            "required": ["chunk_id"]
+        }
+    }),
+  );
+
+  tools.insert(
+    "code_related",
+    json!({
+        "name": "code_related",
+        "description": "Find code related to a chunk via multiple methods: same file, shared imports, semantic similarity, callers, callees.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chunk_id": { "type": "string", "description": "Code chunk ID" },
+                "methods": {
+                    "type": "array",
+                    "items": { "type": "string", "enum": ["same_file", "shared_imports", "similar", "callers", "callees"] },
+                    "description": "Relationship methods to use (default: all)"
+                },
+                "limit": { "type": "number", "description": "Max results (default: 20)" }
+            },
+            "required": ["chunk_id"]
+        }
+    }),
+  );
+
+  tools.insert(
+    "code_context_full",
+    json!({
+        "name": "code_context_full",
+        "description": "Get comprehensive context for code in ONE call: the chunk itself, callers, callees, sibling functions, related memories (decisions/gotchas), and documentation. Use this first when examining unfamiliar code.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "chunk_id": { "type": "string", "description": "Code chunk ID" },
+                "file_path": { "type": "string", "description": "File path (alternative)" },
+                "symbol": { "type": "string", "description": "Symbol name (used with file_path)" },
+                "limit_per_section": { "type": "number", "description": "Max items per section (default: 5)" }
+            }
         }
     }),
   );
@@ -536,12 +643,14 @@ mod tests {
     let filtered = get_filtered_tool_definitions(&config);
     let arr = filtered.as_array().unwrap();
 
-    assert_eq!(arr.len(), 3);
+    assert_eq!(arr.len(), 5);
 
     let names: Vec<&str> = arr.iter().filter_map(|t| t.get("name")?.as_str()).collect();
     assert!(names.contains(&"memory_search"));
     assert!(names.contains(&"code_search"));
     assert!(names.contains(&"docs_search"));
+    assert!(names.contains(&"code_memories"));
+    assert!(names.contains(&"code_context_full"));
   }
 
   #[test]
@@ -551,7 +660,7 @@ mod tests {
     let filtered = get_filtered_tool_definitions(&config);
     let arr = filtered.as_array().unwrap();
 
-    assert_eq!(arr.len(), 11);
+    assert_eq!(arr.len(), 17);
   }
 
   #[test]

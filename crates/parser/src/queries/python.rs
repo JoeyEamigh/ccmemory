@@ -44,6 +44,20 @@ const CALLS_QUERY: &str = r#"
   function: (attribute
     object: (call)
     attribute: (identifier) @call))
+
+; Decorators are effectively calls: @decorator, @property
+(decorator
+  (identifier) @call)
+
+; Decorator with call: @decorator(arg)
+(decorator
+  (call
+    function: (identifier) @call))
+
+; Decorator with attribute: @module.decorator
+(decorator
+  (attribute
+    attribute: (identifier) @call))
 "#;
 
 /// Definition extraction query for Python

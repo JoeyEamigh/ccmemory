@@ -22,6 +22,7 @@ pub const ALL_TOOLS: &[&str] = &[
   "memory_delete",
   "memory_supersede",
   "memory_timeline",
+  "memory_related",
   // Code tools
   "code_search",
   "code_context",
@@ -29,6 +30,11 @@ pub const ALL_TOOLS: &[&str] = &[
   "code_list",
   "code_import_chunk",
   "code_stats",
+  "code_memories",
+  "code_callers",
+  "code_callees",
+  "code_related",
+  "code_context_full",
   // Watch tools
   "watch_start",
   "watch_stop",
@@ -54,8 +60,14 @@ pub const ALL_TOOLS: &[&str] = &[
 /// Internal tools that are always available but not exposed in tool lists
 pub const INTERNAL_TOOLS: &[&str] = &["hook", "ping", "status"];
 
-/// Minimal preset: just search tools
-pub const PRESET_MINIMAL: &[&str] = &["memory_search", "code_search", "docs_search"];
+/// Minimal preset: search tools plus high-value code understanding tools
+pub const PRESET_MINIMAL: &[&str] = &[
+  "memory_search",
+  "code_search",
+  "docs_search",
+  "code_memories",
+  "code_context_full",
+];
 
 /// Standard preset: recommended daily driver set
 pub const PRESET_STANDARD: &[&str] = &[
@@ -63,8 +75,14 @@ pub const PRESET_STANDARD: &[&str] = &[
   "memory_add",
   "memory_reinforce",
   "memory_deemphasize",
+  "memory_related",
   "code_search",
   "code_context",
+  "code_memories",
+  "code_callers",
+  "code_callees",
+  "code_related",
+  "code_context_full",
   "docs_search",
   "doc_context",
   "memory_timeline",
@@ -769,21 +787,29 @@ mod tests {
       ..Default::default()
     };
     let tools = config.enabled_tool_set();
-    assert_eq!(tools.len(), 3);
+    assert_eq!(tools.len(), 5);
     assert!(tools.contains("memory_search"));
     assert!(tools.contains("code_search"));
     assert!(tools.contains("docs_search"));
+    assert!(tools.contains("code_memories"));
+    assert!(tools.contains("code_context_full"));
   }
 
   #[test]
   fn test_preset_standard() {
     let config = Config::default();
     let tools = config.enabled_tool_set();
-    assert_eq!(tools.len(), 11);
+    assert_eq!(tools.len(), 17);
     assert!(tools.contains("memory_search"));
     assert!(tools.contains("memory_add"));
+    assert!(tools.contains("memory_related"));
     assert!(tools.contains("code_search"));
     assert!(tools.contains("code_context"));
+    assert!(tools.contains("code_memories"));
+    assert!(tools.contains("code_callers"));
+    assert!(tools.contains("code_callees"));
+    assert!(tools.contains("code_related"));
+    assert!(tools.contains("code_context_full"));
     assert!(tools.contains("doc_context"));
     assert!(!tools.contains("memory_delete")); // Not in standard
   }

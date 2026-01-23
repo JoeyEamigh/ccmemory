@@ -225,6 +225,7 @@ impl Router {
       "memory_delete" => self.tool_handler.memory_delete(request).await,
       "memory_supersede" => self.tool_handler.memory_supersede(request).await,
       "memory_timeline" => self.tool_handler.memory_timeline(request).await,
+      "memory_related" => self.tool_handler.memory_related(request).await,
 
       // Code tools
       "code_search" => self.tool_handler.code_search(request).await,
@@ -233,6 +234,11 @@ impl Router {
       "code_list" => self.tool_handler.code_list(request).await,
       "code_import_chunk" => self.tool_handler.code_import_chunk(request).await,
       "code_stats" => self.tool_handler.code_stats(request).await,
+      "code_memories" => self.tool_handler.code_memories(request).await,
+      "code_callers" => self.tool_handler.code_callers(request).await,
+      "code_callees" => self.tool_handler.code_callees(request).await,
+      "code_related" => self.tool_handler.code_related(request).await,
+      "code_context_full" => self.tool_handler.code_context_full(request).await,
 
       // Watch tools
       "watch_start" => self.tool_handler.watch_start(request).await,

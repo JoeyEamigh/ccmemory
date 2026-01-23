@@ -1646,6 +1646,7 @@ dependencies = [
  "index",
  "libc",
  "llm",
+ "parser",
  "reqwest 0.13.1",
  "serde",
  "serde_json",

@@ -15,7 +15,7 @@ const IMPORTS_QUERY: &str = r#"
 (use_declaration
   argument: (scoped_identifier) @import)
 
-; Use list: use foo::{bar, baz};
+; Use list: use foo::{bar, baz}; - capture each item in the list
 (use_declaration
   argument: (use_list
     (identifier) @import))
@@ -23,13 +23,19 @@ const IMPORTS_QUERY: &str = r#"
   argument: (use_list
     (scoped_identifier) @import))
 
-; Scoped use list: use foo::bar::{baz, qux};
-(use_declaration
-  argument: (scoped_use_list
-    path: (identifier) @import))
-(use_declaration
-  argument: (scoped_use_list
-    path: (scoped_identifier) @import))
+; Scoped use list: use foo::bar::{baz, qux}; - capture items inside the list
+(scoped_use_list
+  list: (use_list
+    (identifier) @import))
+(scoped_use_list
+  list: (use_list
+    (scoped_identifier) @import))
+
+; Also capture aliased items in use lists: use foo::{bar as b, baz};
+(scoped_use_list
+  list: (use_list
+    (use_as_clause
+      path: (identifier) @import)))
 
 ; Use wildcard: use foo::*;
 (use_declaration
@@ -59,6 +65,17 @@ const CALLS_QUERY: &str = r#"
 (call_expression
   function: (scoped_identifier
     name: (identifier) @call))
+
+; Generic/turbofish function calls: parse::<Type>(data)
+(call_expression
+  function: (generic_function
+    function: (identifier) @call))
+
+; Generic scoped calls: Vec::<u8>::with_capacity(100)
+(call_expression
+  function: (generic_function
+    function: (scoped_identifier
+      name: (identifier) @call)))
 
 ; Macro invocations: println!()
 (macro_invocation
@@ -133,13 +150,26 @@ use serde::{Deserialize, Serialize};
     let mut parser = TreeSitterParser::new();
     let imports = parser.extract_imports(content, Language::Rust);
 
+    // Simple scoped use
     assert!(
       imports.contains(&"std::collections::HashMap".to_string()),
       "imports: {:?}",
       imports
     );
-    assert!(imports.contains(&"crate::db".to_string()), "imports: {:?}", imports);
+    // Individual items from use lists
+    assert!(imports.contains(&"ProjectDb".to_string()), "imports: {:?}", imports);
+    assert!(imports.contains(&"Memory".to_string()), "imports: {:?}", imports);
+    // Simple identifier use
     assert!(imports.contains(&"super::utils".to_string()), "imports: {:?}", imports);
+    // Wildcard
+    assert!(
+      imports.contains(&"self::helpers::*".to_string()),
+      "imports: {:?}",
+      imports
+    );
+    // Items from serde use list
+    assert!(imports.contains(&"Deserialize".to_string()), "imports: {:?}", imports);
+    assert!(imports.contains(&"Serialize".to_string()), "imports: {:?}", imports);
   }
 
   #[test]
