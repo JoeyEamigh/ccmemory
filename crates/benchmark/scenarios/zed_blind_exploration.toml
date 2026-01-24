@@ -1,37 +1,31 @@
-# Blind Exploration Scenario: Understanding an unfamiliar codebase
+# True Blind Exploration Scenario: Understanding an unfamiliar codebase
 #
-# This scenario tests exploration from a position of zero knowledge.
-# The queries are generic - the kind an agent would ask when landing
-# in a completely new codebase.
+# This scenario tests REAL exploration from zero knowledge.
+# Unlike other scenarios, this one has NO expected files or symbols.
+# Success is measured ONLY by whether the exploration enables understanding,
+# evaluated by LLM comprehension questions.
 #
-# Success is measured by whether the agent discovers key abstractions
-# and entry points organically, without being given specific terms.
+# This tests what matters for agents: Can they learn enough about a codebase
+# to answer questions and make changes, starting with nothing?
 
 [scenario]
 id = "zed-blind-exploration"
-name = "Blind Exploration of Zed Editor"
+name = "True Blind Exploration of Zed Editor"
 repo = "zed"
 difficulty = "hard"
+description = "Explore Zed starting with zero codebase knowledge. Success = understanding, not finding specific files."
 
 [task]
-prompt = "Understand the high-level architecture of this editor codebase"
+prompt = "Understand the high-level architecture of this editor codebase well enough to answer questions about it"
 intent = "architectural_discovery"
 
 [expected]
-# These are what we HOPE the agent discovers, not what it's told to find
-must_find_files = [
-    "**/app.rs",
-    "**/workspace/**",
-    "**/editor/**",
-    "**/gpui/**",
-]
-must_find_symbols = [
-    "App",
-    "Workspace",
-    "Editor",
-    "View",
-    "Model",
-]
+# INTENTIONALLY EMPTY - This is blind exploration.
+# We don't specify what to find because we're testing discovery itself.
+# The agent should organically discover important abstractions.
+must_find_files = []
+must_find_symbols = []
+# Noise patterns still help measure result quality
 noise_patterns = [
     "**/tests/**",
     "**/test/**",
@@ -43,31 +37,29 @@ noise_patterns = [
 # Step 1: Start with the most generic question possible
 [[steps]]
 query = "What is the main entry point of this application?"
-expected_results = 3
-max_noise_ratio = 0.3
 scope = "code"
-expand_top = 3
+expand_top = 4
 
 # Step 2: Try to understand the architecture without knowing terms
 [[steps]]
 query = "How is the user interface organized?"
 depends_on_previous = true
-expected_results = 3
 scope = "code"
+expand_top = 4
 
 # Step 3: Follow up on what we found using adaptive templates
 [[steps]]
 query = "What does {{previous.symbol}} do and how is it used?"
 depends_on_previous = true
-expected_results = 3
 scope = "code"
+expand_top = 3
 
 # Step 4: Try to understand data flow
 [[steps]]
 query = "How does data flow between components?"
 depends_on_previous = true
-expected_results = 3
 scope = "code"
+expand_top = 3
 
 # Step 5: Drill into a specific discovered component
 [[steps]]
@@ -75,36 +67,57 @@ query = "Show me the implementation of {{previous.symbol}}"
 depends_on_previous = true
 scope = "code"
 context_ids = ["{{previous.id}}"]
+expand_top = 3
+
+# Step 6: Ask about adding functionality (tests if understanding is actionable)
+[[steps]]
+query = "Where would I add a new UI panel or view?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
 
 [success]
-min_discovery_score = 0.5       # Lower threshold for blind exploration
-max_noise_ratio = 0.35          # Allow more noise since we're exploring blindly
-max_steps_to_core = 4           # May take longer without guidance
-min_convergence_rate = 0.5      # May be more spread out
-max_context_bloat = 0.4         # May need more context calls
-min_navigation_efficiency = 0.3 # May take less efficient paths
-min_suggestion_quality = 0.3    # Suggestions may be less targeted
-max_dead_end_ratio = 0.35       # May hit more dead ends
+# Discovery score is 0.0 since we have no expected items
+# Success is determined by LLM comprehension and exploration quality
+min_discovery_score = 0.0
+max_noise_ratio = 0.35
+max_steps_to_core = 6           # N/A for blind, but keep for consistency
+min_convergence_rate = 0.4      # May be spread out - that's ok for blind
+max_context_bloat = 0.45        # Allow more exploration
+min_navigation_efficiency = 0.2 # May take winding paths - that's ok
+min_suggestion_quality = 0.3
+max_dead_end_ratio = 0.4        # Some dead ends expected when blind
 
 # LLM-as-judge comprehension evaluation
+# This is the PRIMARY success metric for blind exploration
 # Run with --llm-judge to enable
 [llm_judge]
-min_comprehension_score = 0.5   # Lower threshold for blind exploration
+min_comprehension_score = 0.5   # Must pass comprehension to succeed
 
+# Core architecture question
 [[llm_judge.comprehension_questions]]
-question = "What is the core UI framework used by this editor?"
-expected_concepts = ["GPUI", "View", "Model", "Element"]
-wrong_concepts = ["React", "Vue", "Electron"]
+question = "What is the core UI framework used by this editor and how does it work?"
+expected_concepts = ["GPUI", "View", "Model", "Element", "render"]
+wrong_concepts = ["React", "Vue", "Electron", "Qt"]
+weight = 2.0
+
+# Command system understanding
+[[llm_judge.comprehension_questions]]
+question = "How would you add a new keyboard shortcut or command?"
+expected_concepts = ["Action", "Keymap", "dispatch", "register"]
+wrong_concepts = ["Redux", "event listener"]
 weight = 1.5
 
+# Component relationships
 [[llm_judge.comprehension_questions]]
-question = "How are editor commands and keybindings organized?"
-expected_concepts = ["Action", "Keymap", "dispatch"]
-wrong_concepts = ["Redux", "Vuex"]
-weight = 1.0
-
-[[llm_judge.comprehension_questions]]
-question = "What is the relationship between Workspace and Editor components?"
-expected_concepts = ["Workspace", "Editor", "pane", "buffer"]
+question = "What is the relationship between Workspace, Pane, and Editor?"
+expected_concepts = ["Workspace", "Pane", "Editor", "buffer", "contains"]
 wrong_concepts = []
+weight = 1.5
+
+# Practical application question
+[[llm_judge.comprehension_questions]]
+question = "Based on what you found, where would you start to add a new sidebar panel?"
+expected_concepts = ["View", "Panel", "Workspace", "register"]
+wrong_concepts = ["main.rs", "config"]
 weight = 1.0

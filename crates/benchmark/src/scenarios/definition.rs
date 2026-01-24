@@ -25,6 +25,9 @@ pub enum TaskIntent {
   FlowTracing,
   BugInvestigation,
   FeatureExploration,
+  /// Task completion: Evaluate if exploration enables completing a specific task
+  /// (e.g., "add a new command", "fix this bug type")
+  TaskCompletion,
 }
 
 /// Scenario metadata.
@@ -52,6 +55,66 @@ pub struct Task {
   /// Intent of the task
   #[serde(default)]
   pub intent: TaskIntent,
+}
+
+/// Requirements for task-completion scenarios.
+///
+/// Instead of specifying exact files/symbols, these requirements describe
+/// what the exploration needs to achieve for the task to be completable.
+/// This is more realistic - agents need to find enough context to act,
+/// not necessarily specific known items.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskRequirements {
+  /// Must identify at least one location where code can be modified
+  #[serde(default)]
+  pub must_identify_modification_points: bool,
+
+  /// Must find at least one example of similar existing functionality
+  #[serde(default)]
+  pub must_find_example: bool,
+
+  /// Related concerns that must be discovered (e.g., ["action definition", "keybinding", "handler"])
+  /// These are conceptual - evaluation checks if exploration covered these areas
+  #[serde(default)]
+  pub must_find_related_concerns: Vec<String>,
+
+  /// Patterns or types that indicate a modification point was found
+  /// (e.g., ["register", "impl Action", "add_command"])
+  #[serde(default)]
+  pub modification_point_indicators: Vec<String>,
+
+  /// Patterns that indicate an example was found
+  /// (e.g., existing commands, similar features)
+  #[serde(default)]
+  pub example_indicators: Vec<String>,
+
+  /// Mapping of related concerns to their indicators
+  /// Key: concern name (e.g., "action definition")
+  /// Value: patterns that indicate this concern was found
+  #[serde(default)]
+  pub concern_indicators: std::collections::HashMap<String, Vec<String>>,
+}
+
+/// Result of evaluating task requirements.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskRequirementsResult {
+  /// Whether a modification point was identified
+  pub modification_point_found: bool,
+  /// The modification points found (file:line or symbol)
+  pub modification_points: Vec<String>,
+
+  /// Whether an example was found
+  pub example_found: bool,
+  /// The examples found
+  pub examples: Vec<String>,
+
+  /// Related concerns and whether each was found
+  pub concerns_found: std::collections::HashMap<String, bool>,
+  /// Evidence for each concern
+  pub concern_evidence: std::collections::HashMap<String, Vec<String>>,
+
+  /// Overall success rate (% of requirements met)
+  pub success_rate: f64,
 }
 
 /// Expected results for a scenario.
@@ -315,6 +378,10 @@ pub struct Scenario {
   /// Expected results
   #[serde(default)]
   pub expected: Expected,
+  /// Task requirements for task_completion intent scenarios
+  /// These define what the exploration needs to achieve, not specific items to find
+  #[serde(default)]
+  pub task_requirements: TaskRequirements,
   /// Multi-step exploration steps
   #[serde(default)]
   pub steps: Vec<Step>,
@@ -376,6 +443,7 @@ impl Scenario {
         intent: TaskIntent::ArchitecturalDiscovery,
       },
       expected: Expected::default(),
+      task_requirements: TaskRequirements::default(),
       steps: vec![Step {
         query: "test query".to_string(),
         expected_results: None,

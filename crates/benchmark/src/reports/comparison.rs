@@ -370,6 +370,7 @@ mod tests {
           rabbit_hole_ratio: 0.0,
           time_to_first_relevant_ms: Some(150),
           avg_file_diversity_top5: 0.8,
+          diagnostics: None,
           files_found: vec![],
           files_missed: vec![],
           symbols_found: vec![],
@@ -379,6 +380,7 @@ mod tests {
         errors: vec![],
         total_duration_ms: 500,
         comprehension: None,
+        task_requirements_result: None,
       }],
     }
   }

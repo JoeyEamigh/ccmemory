@@ -120,13 +120,14 @@ Both are editor codebases with complex architectural discovery scenarios.
 
 | Scenario | Repo | Pattern | Difficulty | Description |
 |----------|------|---------|------------|-------------|
-| `zed-blind-exploration` | zed | Blind | hard | Explore from zero knowledge |
+| `zed-blind-exploration` | zed | True Blind | hard | Explore from zero knowledge (LLM-judged) |
+| `zed-add-command-task` | zed | Task Completion | medium | Find everything to add a new command |
 | `zed-command-system` | zed | Architectural | hard | Command/action system discovery |
 | `zed-lsp-integration` | zed | Architectural | hard | LSP integration patterns |
 | `zed-feature-exploration` | zed | Feature | medium | "How does file saving work?" |
 | `zed-location-exploration` | zed | Location | medium | "Where to add new commands?" |
 | `zed-pattern-exploration` | zed | Pattern | hard | HTTP/external service patterns |
-| `vscode-blind-exploration` | vscode | Blind | hard | Explore from zero knowledge |
+| `vscode-blind-exploration` | vscode | True Blind | hard | Explore from zero knowledge (LLM-judged) |
 | `vscode-editor-core` | vscode | Architectural | hard | Core editor discovery |
 | `vscode-extension-system` | vscode | Architectural | hard | Extension API patterns |
 
@@ -134,6 +135,54 @@ Run specific scenarios with glob patterns:
 ```bash
 cargo run -p benchmark -- run --scenarios "zed-feature*"
 cargo run -p benchmark -- run --scenarios "*blind*"
+```
+
+## Scenario Types
+
+The benchmark supports three types of scenarios, each measuring different aspects of exploration:
+
+### 1. Recall-Based Scenarios (Traditional)
+
+Measure whether exploration finds specific expected files and symbols. Good for regression testing.
+
+```toml
+[expected]
+must_find_files = ["**/commands.rs", "**/actions.rs"]
+must_find_symbols = ["Action", "dispatch"]
+```
+
+### 2. True Blind Exploration Scenarios
+
+Measure understanding without specifying expected items. Success is determined by LLM comprehension questions.
+
+```toml
+[expected]
+# INTENTIONALLY EMPTY - this is blind exploration
+must_find_files = []
+must_find_symbols = []
+
+[llm_judge]
+min_comprehension_score = 0.5  # PRIMARY success metric
+
+[[llm_judge.comprehension_questions]]
+question = "What is the core UI framework?"
+expected_concepts = ["GPUI", "View", "Model"]
+```
+
+### 3. Task-Completion Scenarios
+
+Measure whether exploration enables completing a specific task (e.g., "add a new command").
+
+```toml
+[task]
+intent = "task_completion"
+
+[task_requirements]
+must_identify_modification_points = true
+must_find_example = true
+must_find_related_concerns = ["action definition", "keybinding"]
+modification_point_indicators = ["impl_actions", "register_action"]
+example_indicators = ["SelectAll", "Copy"]
 ```
 
 ## Scenario Definition Format
@@ -498,13 +547,14 @@ crates/benchmark/
 ├── scenarios/                # Built-in scenarios
 │   ├── zed_commands.toml
 │   ├── zed_lsp.toml
-│   ├── zed_blind_exploration.toml
+│   ├── zed_blind_exploration.toml      # True blind (LLM-judged)
+│   ├── zed_add_command_task.toml       # Task-completion scenario
 │   ├── zed_feature_exploration.toml
 │   ├── zed_location_exploration.toml
 │   ├── zed_pattern_exploration.toml
 │   ├── vscode_extensions.toml
 │   ├── vscode_editor.toml
-│   └── vscode_blind_exploration.toml
+│   └── vscode_blind_exploration.toml   # True blind (LLM-judged)
 └── annotations/              # Optional ground truth
     ├── zed/
     │   └── zed-command-system.json
@@ -690,6 +740,133 @@ weight = 1.0
 | `max_time_to_first_relevant_ms` | int | Max ms to first useful result |
 | `min_file_diversity` | float | Min unique files / top-5 results |
 
+## Diagnostic Breakdowns
+
+When exploration metrics fall below thresholds, the benchmark automatically generates diagnostic breakdowns explaining **why** and providing actionable recommendations. This transforms metrics from pass/fail indicators into debugging tools.
+
+### Convergence Diagnosis
+
+Generated when `convergence_rate < threshold` (default 0.7):
+
+```json
+{
+  "convergence": {
+    "empty_steps": [2, 5],
+    "productive_steps": [0, 1, 3, 4],
+    "discovery_pattern": "early_plateau",
+    "query_issues": [
+      { "step": 2, "issue": "too_specific", "query": "Find FooBarBazHandler" },
+      { "step": 5, "issue": "too_broad", "query": "How does everything work?" }
+    ],
+    "recommendation": "Steps 2, 5 found nothing. Try broader queries for step 2 (too_specific) and narrower queries for step 5 (too_broad)."
+  }
+}
+```
+
+**Discovery Patterns:**
+- `front_loaded` - Most discoveries in early steps (good)
+- `back_loaded` - Most discoveries in late steps (slow start)
+- `early_plateau` - Discoveries stop mid-exploration
+- `late_plateau` - Discoveries continue until end (good)
+- `scattered` - Inconsistent discovery pattern
+
+### Bloat Diagnosis
+
+Generated when `context_bloat > threshold` (default 0.3):
+
+```json
+{
+  "bloat": {
+    "redundant_expansion_pct": 0.25,
+    "unhelpful_hints_pct": 0.15,
+    "over_expansion_pct": 0.40,
+    "over_expanded_steps": [
+      { "step": 1, "requested": 5, "useful": 2 }
+    ],
+    "redundant_chunks": ["chunk_abc123", "chunk_def456"],
+    "wasted_bytes": 15000,
+    "recommendation": "Step 1 over-expanded (requested 5, only 2 useful). Consider using expand_top=2 for focused queries."
+  }
+}
+```
+
+**Bloat Categories:**
+- `redundant_expansion_pct` - Context fetched for already-seen chunks
+- `unhelpful_hints_pct` - Callers/callees that led nowhere
+- `over_expansion_pct` - Expanded more results than were useful
+
+### Recall Diagnosis
+
+Generated when `file_recall < threshold` or `symbol_recall < threshold` (default 0.7):
+
+```json
+{
+  "recall": {
+    "in_index_not_retrieved": ["crates/gpui/src/action.rs"],
+    "not_in_index": [],
+    "retrieved_low_rank": [
+      ["crates/editor/src/actions.rs", 8]
+    ],
+    "files_found": ["crates/commands.rs", "crates/dispatch.rs"],
+    "symbols_found": ["dispatch", "ActionRegistry"],
+    "category_breakdown": {
+      "core_files_found": 2,
+      "core_files_missed": 1,
+      "peripheral_files_found": 3,
+      "symbols_in_found_files": 4,
+      "symbols_in_missed_files": 1
+    },
+    "recommendation": "1/3 core files missed. action.rs was indexed but not retrieved - may need better query terms."
+  }
+}
+```
+
+**Recall Categories:**
+- `in_index_not_retrieved` - Files exist in index but queries didn't surface them
+- `not_in_index` - Files not indexed (glob pattern issue or file too new)
+- `retrieved_low_rank` - Files found but ranked too low to be useful
+
+### Using Diagnostics
+
+Diagnostics appear in JSON reports under each scenario:
+
+```json
+{
+  "scenario_id": "zed-command-system",
+  "passed": false,
+  "accuracy": { ... },
+  "diagnostics": {
+    "convergence": { ... },
+    "bloat": { ... },
+    "recall": { ... },
+    "has_issues": true
+  }
+}
+```
+
+The `has_issues` flag indicates whether any diagnostic was generated. Use this for quick filtering in CI.
+
+## Task Requirements Results
+
+For task-completion scenarios, results include a `task_requirements_result`:
+
+```json
+{
+  "scenario_id": "zed-add-command-task",
+  "task_requirements_result": {
+    "modification_points_found": true,
+    "example_found": true,
+    "concerns_found": ["action definition", "keybinding"],
+    "concerns_missed": ["command registration"],
+    "modification_point_evidence": ["impl_actions! macro in actions.rs:42"],
+    "example_evidence": ["SelectAll action in editor/actions.rs:156"],
+    "passed": false
+  }
+}
+```
+
+This tells you exactly what the exploration discovered vs what it missed for completing the task.
+
 ## Troubleshooting
 
 ### "Daemon not running" error
@@ -714,12 +891,39 @@ cargo run -p benchmark -- index --repos zed --force
 
 ### Low recall scores
 
-1. Check if expected files use correct glob patterns
-2. Verify the daemon has indexed the repository
-3. Review noise patterns - may be too aggressive
+1. Check the recall diagnosis in the JSON report:
+   - `in_index_not_retrieved` - Files are indexed but queries don't surface them (improve query terms)
+   - `not_in_index` - Files aren't indexed (check glob patterns, run re-index)
+   - `retrieved_low_rank` - Files found but ranked too low (ranking issue)
+2. Review `category_breakdown` to see if core vs peripheral files are the issue
+3. Verify the daemon has indexed the repository
 
 ### High noise ratio
 
 1. Add more specific noise patterns to scenario
 2. Check if test files are being returned as top results
 3. Consider adjusting ranking weights in the daemon
+
+### Low convergence rate
+
+1. Check the convergence diagnosis for `empty_steps` - which steps found nothing?
+2. Review `query_issues` for specific problems:
+   - `too_specific` - Query uses terms not in codebase
+   - `too_broad` - Query returns too many irrelevant results
+   - `too_similar` - Query overlaps with previous step
+3. Look at `discovery_pattern` - `back_loaded` suggests slow start, `early_plateau` suggests giving up too soon
+
+### High context bloat
+
+1. Check `over_expanded_steps` - reduce `expand_top` for those steps
+2. Look at `redundant_chunks` - same content fetched multiple times
+3. Review `unhelpful_hints_pct` - callers/callees leading nowhere suggests navigation hints need tuning
+
+### Task completion scenarios failing
+
+1. Check `task_requirements_result` for what's missing:
+   - `modification_points_found: false` - Exploration didn't find where to make changes
+   - `example_found: false` - No similar code to follow
+   - `concerns_missed` - Related concepts not discovered
+2. Review the indicators in the scenario definition - are they too specific?
+3. Consider adding more indicator patterns

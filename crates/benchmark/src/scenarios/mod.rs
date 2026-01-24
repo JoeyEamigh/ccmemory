@@ -8,7 +8,7 @@ mod runner;
 
 pub use definition::{
   ComprehensionQuestion, Expected, LlmJudgeConfig, PreviousStepResults, Scenario, ScenarioMetadata, Step,
-  SuccessCriteria, Task,
+  SuccessCriteria, Task, TaskIntent, TaskRequirements, TaskRequirementsResult,
 };
 pub use runner::{ScenarioResult, ScenarioRunner, StepResult, run_scenarios_parallel};
 

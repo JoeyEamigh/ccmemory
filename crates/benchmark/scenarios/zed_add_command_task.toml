@@ -1,0 +1,141 @@
+# Task-Completion Scenario: Add a New Command
+#
+# This scenario tests whether exploration enables completing a specific task:
+# Adding a new editor command to Zed.
+#
+# Unlike recall-based scenarios, this measures whether the exploration found
+# enough context to actually implement the feature - modification points,
+# examples to follow, and related concerns like keybindings.
+#
+# This is what agents actually need: enough understanding to make changes.
+
+[scenario]
+id = "zed-add-command-task"
+name = "Task: Add a New Editor Command"
+repo = "zed"
+difficulty = "medium"
+description = "Explore to find everything needed to add a new editor command"
+
+[task]
+prompt = "Find everything needed to add a new 'Hello World' command that shows a notification"
+intent = "task_completion"
+
+[expected]
+# For task_completion scenarios, expected is minimal - we use task_requirements instead
+must_find_files = []
+must_find_symbols = []
+noise_patterns = [
+    "**/tests/**",
+    "**/test/**",
+    "test_*",
+    "Mock*",
+]
+
+# Task requirements define what exploration needs to achieve
+[task_requirements]
+# Must identify where to add/modify code
+must_identify_modification_points = true
+# Must find an existing command as an example to follow
+must_find_example = true
+# Must discover these related concerns
+must_find_related_concerns = [
+    "action definition",
+    "command registration",
+    "keybinding",
+]
+
+# Patterns that indicate a modification point
+modification_point_indicators = [
+    "impl_actions",
+    "register_action",
+    "actions.rs",
+    "Action trait",
+]
+
+# Patterns that indicate a good example
+example_indicators = [
+    "ToggleLineNumbers",
+    "SelectAll",
+    "Copy",
+    "Paste",
+    "action!",
+]
+
+# Map concerns to their indicator patterns
+[task_requirements.concern_indicators]
+"action definition" = ["Action", "impl_actions", "actions!", "derive(Action)"]
+"command registration" = ["register", "ActionRegistry", "dispatch"]
+"keybinding" = ["keymap", "KeyBinding", "bindings", "ctrl", "cmd"]
+
+# Step 1: Find how commands work
+[[steps]]
+query = "How do editor commands work?"
+scope = "code"
+expand_top = 4
+
+# Step 2: Find existing command examples
+[[steps]]
+query = "Show me an example of an existing editor command"
+depends_on_previous = true
+scope = "code"
+expand_top = 4
+
+# Step 3: Understand the Action system
+[[steps]]
+query = "What is the Action trait and how do I implement it?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 4: Find where to register commands
+[[steps]]
+query = "Where do commands get registered?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 5: Find keybinding configuration
+[[steps]]
+query = "How do I add a keybinding for a command?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 6: Specific drill-down
+[[steps]]
+query = "Show me the implementation of {{previous.symbol}}"
+depends_on_previous = true
+scope = "code"
+context_ids = ["{{previous.id}}"]
+expand_top = 2
+
+[success]
+# Lower discovery score since we're not specifying expected items
+min_discovery_score = 0.0
+max_noise_ratio = 0.35
+max_steps_to_core = 4
+min_convergence_rate = 0.5
+max_context_bloat = 0.4
+max_dead_end_ratio = 0.35
+
+# LLM comprehension validates that understanding is actionable
+[llm_judge]
+min_comprehension_score = 0.6
+
+[[llm_judge.comprehension_questions]]
+question = "Based on what you found, what files would you create or modify to add a new command?"
+expected_concepts = ["Action", "impl_actions", "register", "keymap"]
+wrong_concepts = ["main.rs only", "config file only"]
+weight = 2.0
+
+[[llm_judge.comprehension_questions]]
+question = "What are the steps to implement a new command in Zed?"
+expected_concepts = ["define Action", "implement", "register", "keybinding"]
+wrong_concepts = ["plugin", "extension"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "How would you make your command show a notification to the user?"
+expected_concepts = ["notification", "workspace", "cx"]
+wrong_concepts = ["alert", "console.log"]
+weight = 1.0

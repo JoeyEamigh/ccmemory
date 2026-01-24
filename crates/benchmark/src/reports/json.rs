@@ -317,6 +317,7 @@ mod tests {
         rabbit_hole_ratio: 0.0,
         time_to_first_relevant_ms: Some(150),
         avg_file_diversity_top5: 0.8,
+        diagnostics: None,
         files_found: vec!["found.rs".to_string()],
         files_missed: vec!["missed.rs".to_string()],
         symbols_found: vec!["Found".to_string()],
@@ -326,6 +327,7 @@ mod tests {
       errors: vec![],
       total_duration_ms: 500,
       comprehension: None,
+      task_requirements_result: None,
     }
   }
 

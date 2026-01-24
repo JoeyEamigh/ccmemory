@@ -1,6 +1,6 @@
 //! Scenario execution against the daemon.
 
-use super::{Expected, PreviousStepResults, Scenario, Step};
+use super::{Expected, PreviousStepResults, Scenario, Step, TaskIntent, TaskRequirementsResult};
 use crate::ground_truth::load_scenario_annotations;
 use crate::llm_judge::{ComprehensionResult, LlmJudge};
 use crate::metrics::{AccuracyMetrics, PerformanceMetrics, ResourceMonitor};
@@ -35,6 +35,9 @@ pub struct ScenarioResult {
   /// LLM comprehension evaluation (if enabled)
   #[serde(skip_serializing_if = "Option::is_none")]
   pub comprehension: Option<ComprehensionResult>,
+  /// Task requirements evaluation (for task_completion scenarios)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub task_requirements_result: Option<TaskRequirementsResult>,
 }
 
 /// Result of a single step execution.
@@ -215,16 +218,44 @@ impl ScenarioRunner {
     performance.peak_memory_bytes = Some(resource_monitor.peak_memory());
     performance.avg_cpu_percent = Some(resource_monitor.avg_cpu());
 
-    let accuracy =
+    let mut accuracy =
       session.compute_accuracy_metrics_with_paths(&expected, &scenario.success_criteria, &exploration_paths);
 
+    // Compute diagnostics for actionable insights when metrics are poor
+    let convergence_threshold = scenario.success_criteria.min_convergence_rate.unwrap_or(0.7);
+    let bloat_threshold = scenario.success_criteria.max_context_bloat.unwrap_or(0.3);
+    let recall_threshold = scenario.success_criteria.min_discovery_score;
+
+    let diagnostics =
+      session.compute_diagnostics(&expected, &accuracy, convergence_threshold, bloat_threshold, recall_threshold);
+
+    if diagnostics.has_issues {
+      accuracy.diagnostics = Some(diagnostics);
+    }
+
+    // Evaluate task requirements for task_completion scenarios
+    let task_requirements_result = if scenario.task.intent == TaskIntent::TaskCompletion {
+      let result = session.evaluate_task_requirements(&scenario.task_requirements);
+      Some(result)
+    } else {
+      None
+    };
+
     // Determine if scenario passed (before LLM judge)
-    let passed = errors.is_empty()
+    let mut passed = errors.is_empty()
       && accuracy.file_recall >= scenario.success_criteria.min_discovery_score
       && accuracy.noise_ratio <= scenario.success_criteria.max_noise_ratio
       && accuracy
         .steps_to_core
         .is_none_or(|s| s <= scenario.success_criteria.max_steps_to_core);
+
+    // For task_completion scenarios, also check task requirements
+    if let Some(ref req_result) = task_requirements_result {
+      // Require at least 50% of requirements to be met
+      if req_result.success_rate < 0.5 {
+        passed = false;
+      }
+    }
 
     // Build preliminary result for LLM judge evaluation
     let mut result = ScenarioResult {
@@ -237,6 +268,7 @@ impl ScenarioRunner {
       errors,
       total_duration_ms: total_duration.as_millis() as u64,
       comprehension: None,
+      task_requirements_result,
     };
 
     // Run LLM judge evaluation if enabled and scenario has comprehension questions

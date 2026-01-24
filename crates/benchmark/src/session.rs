@@ -16,8 +16,11 @@
 //! - **Context budget**: Cumulative bytes returned vs useful bytes
 
 use crate::ground_truth::{CallGraph, ExplorationPath, NoisePatterns};
-use crate::metrics::{AccuracyMetrics, LatencyTracker, PerformanceMetrics, StepMetrics};
-use crate::scenarios::{Expected, SuccessCriteria};
+use crate::metrics::{
+  AccuracyMetrics, BloatDiagnosis, ConvergenceDiagnosis, DiscoveryPattern, ExplorationDiagnostics, LatencyTracker,
+  OverExpandedStep, PerformanceMetrics, RecallCategoryBreakdown, RecallDiagnosis, StepMetrics,
+};
+use crate::scenarios::{Expected, SuccessCriteria, TaskRequirements, TaskRequirementsResult};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -850,6 +853,404 @@ impl ExplorationSession {
   /// Get step metrics.
   pub fn step_metrics(&self) -> &[StepMetrics] {
     &self.step_metrics
+  }
+
+  /// Compute exploration diagnostics for actionable insights.
+  ///
+  /// Returns diagnostics only when metrics indicate problems:
+  /// - Convergence diagnosis when convergence_rate < threshold
+  /// - Bloat diagnosis when context_bloat > threshold
+  /// - Recall diagnosis when file_recall or symbol_recall < threshold
+  ///
+  /// These diagnostics explain WHY metrics are poor and suggest fixes.
+  pub fn compute_diagnostics(
+    &self,
+    expected: &Expected,
+    accuracy: &AccuracyMetrics,
+    convergence_threshold: f64,
+    bloat_threshold: f64,
+    recall_threshold: f64,
+  ) -> ExplorationDiagnostics {
+    let mut diagnostics = ExplorationDiagnostics::default();
+
+    // Compute convergence diagnosis if needed
+    if accuracy.convergence_rate < convergence_threshold {
+      diagnostics.convergence = Some(self.diagnose_convergence(expected));
+      diagnostics.has_issues = true;
+    }
+
+    // Compute bloat diagnosis if needed
+    if accuracy.context_bloat > bloat_threshold {
+      diagnostics.bloat = Some(self.diagnose_bloat());
+      diagnostics.has_issues = true;
+    }
+
+    // Compute recall diagnosis if needed
+    if accuracy.file_recall < recall_threshold || accuracy.symbol_recall < recall_threshold {
+      diagnostics.recall = Some(self.diagnose_recall(expected, accuracy));
+      diagnostics.has_issues = true;
+    }
+
+    diagnostics
+  }
+
+  /// Diagnose why convergence is low.
+  fn diagnose_convergence(&self, _expected: &Expected) -> ConvergenceDiagnosis {
+    let mut diagnosis = ConvergenceDiagnosis::default();
+
+    // Find empty and productive steps
+    for discovery in &self.step_discoveries {
+      if discovery.new_files == 0 && discovery.new_symbols == 0 {
+        diagnosis.empty_steps.push(discovery.step);
+      } else {
+        diagnosis.productive_steps.push(discovery.step);
+      }
+    }
+
+    // Determine discovery pattern
+    let total_steps = self.step_discoveries.len();
+    if total_steps == 0 || diagnosis.productive_steps.is_empty() {
+      diagnosis.discovery_pattern = DiscoveryPattern::NoDiscoveries;
+      diagnosis.recommendation =
+        "No discoveries were made. Try broader initial queries or check if the index is populated.".to_string();
+    } else {
+      // Calculate weighted position of discoveries
+      let total_discoveries: usize = self.step_discoveries.iter().map(|d| d.new_files + d.new_symbols).sum();
+
+      let mut weighted_position = 0.0;
+      for discovery in &self.step_discoveries {
+        let step_discoveries = discovery.new_files + discovery.new_symbols;
+        if step_discoveries > 0 {
+          weighted_position += (discovery.step as f64 / total_steps as f64) * (step_discoveries as f64);
+        }
+      }
+      weighted_position /= total_discoveries as f64;
+
+      diagnosis.discovery_pattern = if weighted_position < 0.35 {
+        DiscoveryPattern::FrontLoaded
+      } else if weighted_position > 0.65 {
+        DiscoveryPattern::BackLoaded
+      } else {
+        DiscoveryPattern::EvenlySpread
+      };
+
+      // Generate recommendation based on pattern
+      diagnosis.recommendation = match diagnosis.discovery_pattern {
+        DiscoveryPattern::FrontLoaded => "Discoveries are front-loaded (good). Consider fewer steps.".to_string(),
+        DiscoveryPattern::EvenlySpread => {
+          "Discoveries spread evenly. Earlier queries may be too narrow - try broader initial queries.".to_string()
+        }
+        DiscoveryPattern::BackLoaded => {
+          "Most discoveries happen late. Initial queries are too narrow or missing key terms. \
+           Try starting with broader architectural questions."
+            .to_string()
+        }
+        DiscoveryPattern::NoDiscoveries => {
+          "No discoveries were made. Check index population and try different query terms.".to_string()
+        }
+      };
+    }
+
+    diagnosis
+  }
+
+  /// Diagnose why context bloat is high.
+  fn diagnose_bloat(&self) -> BloatDiagnosis {
+    let mut diagnosis = BloatDiagnosis::default();
+
+    if self.context_calls.is_empty() {
+      diagnosis.recommendation = "No context calls were made. Bloat may be from explore results.".to_string();
+      return diagnosis;
+    }
+
+    // Count redundant expansions (same chunk expanded multiple times)
+    let mut seen_chunks: HashSet<&str> = HashSet::new();
+    let mut redundant_count = 0;
+    let mut unhelpful_count = 0;
+
+    for call in &self.context_calls {
+      if seen_chunks.contains(call.chunk_id.as_str()) {
+        redundant_count += 1;
+        diagnosis.redundant_chunks.push(call.chunk_id.clone());
+      } else {
+        seen_chunks.insert(&call.chunk_id);
+      }
+
+      if call.new_files == 0 && call.new_symbols == 0 {
+        unhelpful_count += 1;
+      }
+    }
+
+    let total_calls = self.context_calls.len();
+    diagnosis.redundant_expansion_pct = redundant_count as f64 / total_calls as f64;
+    diagnosis.unhelpful_hints_pct = unhelpful_count as f64 / total_calls as f64;
+
+    // Calculate wasted bytes
+    diagnosis.wasted_bytes = self
+      .context_calls
+      .iter()
+      .filter(|c| c.new_files == 0 && c.new_symbols == 0)
+      .map(|c| c.bytes_returned)
+      .sum();
+
+    // Identify over-expanded steps by comparing expand_top to useful expansions
+    // For now, we track steps where context calls yielded nothing
+    for (step, calls_in_step) in self.context_calls.iter().fold(
+      std::collections::HashMap::<usize, Vec<&ContextCallRecord>>::new(),
+      |mut acc, call| {
+        acc.entry(call.step).or_default().push(call);
+        acc
+      },
+    ) {
+      let useful = calls_in_step
+        .iter()
+        .filter(|c| c.new_files > 0 || c.new_symbols > 0)
+        .count();
+      let total = calls_in_step.len();
+      if total > 2 && useful < total / 2 {
+        diagnosis.over_expanded_steps.push(OverExpandedStep {
+          step,
+          expand_top_used: total,
+          useful_expansions: useful,
+        });
+      }
+    }
+
+    diagnosis.over_expansion_pct = if !diagnosis.over_expanded_steps.is_empty() {
+      diagnosis.over_expanded_steps.len() as f64 / self.step_discoveries.len().max(1) as f64
+    } else {
+      0.0
+    };
+
+    // Generate recommendation
+    let mut issues = Vec::new();
+    if diagnosis.redundant_expansion_pct > 0.1 {
+      issues.push("redundant expansions (same chunk expanded multiple times)");
+    }
+    if diagnosis.unhelpful_hints_pct > 0.3 {
+      issues.push("unhelpful context calls (callers/callees not relevant)");
+    }
+    if diagnosis.over_expansion_pct > 0.2 {
+      issues.push("over-expansion (expand_top too high for query specificity)");
+    }
+
+    diagnosis.recommendation = if issues.is_empty() {
+      "Context bloat is marginal. Consider reducing expand_top for narrow queries.".to_string()
+    } else {
+      format!(
+        "Bloat caused by: {}. Consider: reducing expand_top, caching expanded chunks, or improving hint relevance scoring.",
+        issues.join(", ")
+      )
+    };
+
+    diagnosis
+  }
+
+  /// Diagnose why recall is low.
+  fn diagnose_recall(&self, expected: &Expected, accuracy: &AccuracyMetrics) -> RecallDiagnosis {
+    let mut diagnosis = RecallDiagnosis {
+      // Copy found/missed items
+      files_found: accuracy.files_found.clone(),
+      symbols_found: accuracy.symbols_found.clone(),
+      ..Default::default()
+    };
+
+    // Categorize missed items
+    // For now, we can't distinguish between "not in index" and "not retrieved"
+    // without access to the index. We'll mark all as "not retrieved" and let
+    // the user investigate further.
+
+    for missed_file in &accuracy.files_missed {
+      // Check if any discovered file partially matches (could indicate ranking issue)
+      let partial_match = self.discovered_files.iter().any(|f| {
+        f.contains(missed_file.trim_start_matches("**/"))
+          || missed_file.contains(f.split('/').next_back().unwrap_or(""))
+      });
+
+      if partial_match {
+        // Found something similar - likely a ranking or specificity issue
+        diagnosis.in_index_not_retrieved.push(missed_file.clone());
+      } else {
+        // Completely missed - could be indexing or query issue
+        diagnosis.not_in_index.push(missed_file.clone());
+      }
+    }
+
+    for missed_symbol in &accuracy.symbols_missed {
+      // Check if discovered symbols contain partial matches
+      let partial_match = self
+        .discovered_symbols
+        .iter()
+        .any(|s| s.contains(missed_symbol) || missed_symbol.contains(s));
+
+      if partial_match {
+        diagnosis.in_index_not_retrieved.push(missed_symbol.clone());
+      } else {
+        diagnosis.not_in_index.push(missed_symbol.clone());
+      }
+    }
+
+    // Calculate category breakdown
+    let total_missed = expected.must_find_files.len() + expected.must_find_symbols.len()
+      - accuracy.files_found.len()
+      - accuracy.symbols_found.len();
+
+    if total_missed > 0 {
+      let not_retrieved = diagnosis.in_index_not_retrieved.len();
+      let not_indexed = diagnosis.not_in_index.len();
+      let low_ranked = diagnosis.retrieved_low_rank.len();
+
+      diagnosis.category_breakdown = RecallCategoryBreakdown {
+        indexing_issues_pct: not_indexed as f64 / total_missed as f64,
+        retrieval_issues_pct: not_retrieved as f64 / total_missed as f64,
+        ranking_issues_pct: low_ranked as f64 / total_missed.max(1) as f64,
+      };
+    }
+
+    // Generate recommendation
+    let mut recommendations: Vec<String> = Vec::new();
+
+    if diagnosis.category_breakdown.indexing_issues_pct > 0.3 {
+      recommendations.push("Check if expected files are being indexed (file patterns, gitignore)".to_string());
+    }
+    if diagnosis.category_breakdown.retrieval_issues_pct > 0.3 {
+      recommendations.push("Queries may not match expected items semantically - try different phrasings".to_string());
+    }
+    if !diagnosis.not_in_index.is_empty() {
+      recommendations.push(format!(
+        "These items weren't found at all: {}",
+        diagnosis.not_in_index.join(", ")
+      ));
+    }
+
+    diagnosis.recommendation = if recommendations.is_empty() {
+      "Recall issues are minor. Consider adding more exploration steps.".to_string()
+    } else {
+      recommendations.join(". ")
+    };
+
+    diagnosis
+  }
+
+  /// Evaluate task requirements against discoveries.
+  ///
+  /// For task_completion scenarios, this evaluates whether the exploration
+  /// discovered enough to complete the specified task, using pattern matching
+  /// against discovered files and symbols.
+  pub fn evaluate_task_requirements(&self, requirements: &TaskRequirements) -> TaskRequirementsResult {
+    let mut result = TaskRequirementsResult::default();
+    let mut requirements_met = 0;
+    let mut total_requirements = 0;
+
+    // Check modification points
+    if requirements.must_identify_modification_points {
+      total_requirements += 1;
+
+      for indicator in &requirements.modification_point_indicators {
+        // Check if any discovered file or symbol matches the indicator
+        let matching_files: Vec<_> = self
+          .discovered_files
+          .iter()
+          .filter(|f| f.to_lowercase().contains(&indicator.to_lowercase()))
+          .cloned()
+          .collect();
+
+        let matching_symbols: Vec<_> = self
+          .discovered_symbols
+          .iter()
+          .filter(|s| s.to_lowercase().contains(&indicator.to_lowercase()))
+          .cloned()
+          .collect();
+
+        result.modification_points.extend(matching_files);
+        result.modification_points.extend(matching_symbols);
+      }
+
+      result.modification_point_found = !result.modification_points.is_empty();
+      if result.modification_point_found {
+        requirements_met += 1;
+      }
+    }
+
+    // Check examples
+    if requirements.must_find_example {
+      total_requirements += 1;
+
+      for indicator in &requirements.example_indicators {
+        let matching_files: Vec<_> = self
+          .discovered_files
+          .iter()
+          .filter(|f| f.to_lowercase().contains(&indicator.to_lowercase()))
+          .cloned()
+          .collect();
+
+        let matching_symbols: Vec<_> = self
+          .discovered_symbols
+          .iter()
+          .filter(|s| s.to_lowercase().contains(&indicator.to_lowercase()))
+          .cloned()
+          .collect();
+
+        result.examples.extend(matching_files);
+        result.examples.extend(matching_symbols);
+      }
+
+      result.example_found = !result.examples.is_empty();
+      if result.example_found {
+        requirements_met += 1;
+      }
+    }
+
+    // Check related concerns
+    for concern in &requirements.must_find_related_concerns {
+      total_requirements += 1;
+
+      let indicators = requirements
+        .concern_indicators
+        .get(concern)
+        .cloned()
+        .unwrap_or_default();
+      let mut evidence = Vec::new();
+
+      for indicator in &indicators {
+        let matching: Vec<_> = self
+          .discovered_files
+          .iter()
+          .chain(self.discovered_symbols.iter())
+          .filter(|item| item.to_lowercase().contains(&indicator.to_lowercase()))
+          .cloned()
+          .collect();
+        evidence.extend(matching);
+      }
+
+      // Also check if the concern itself appears in discovered items
+      let concern_lower = concern.to_lowercase();
+      let direct_matches: Vec<_> = self
+        .discovered_files
+        .iter()
+        .chain(self.discovered_symbols.iter())
+        .filter(|item| item.to_lowercase().contains(&concern_lower))
+        .cloned()
+        .collect();
+      evidence.extend(direct_matches);
+
+      let found = !evidence.is_empty();
+      result.concerns_found.insert(concern.clone(), found);
+      result.concern_evidence.insert(concern.clone(), evidence);
+
+      if found {
+        requirements_met += 1;
+      }
+    }
+
+    // Calculate success rate
+    result.success_rate = if total_requirements > 0 {
+      requirements_met as f64 / total_requirements as f64
+    } else {
+      1.0 // No requirements = automatic success
+    };
+
+    result
   }
 }
 

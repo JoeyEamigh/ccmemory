@@ -1,34 +1,29 @@
-# Blind Exploration Scenario: Understanding VSCode architecture
+# True Blind Exploration Scenario: Understanding VSCode architecture
 #
-# This scenario tests exploration from a position of zero knowledge.
-# The queries are generic - the kind an agent would ask when landing
-# in a completely new codebase.
+# This scenario tests REAL exploration from zero knowledge.
+# Unlike other scenarios, this one has NO expected files or symbols.
+# Success is measured ONLY by whether the exploration enables understanding,
+# evaluated by LLM comprehension questions.
+#
+# VSCode is a larger, more complex codebase - this tests scalability.
 
 [scenario]
 id = "vscode-blind-exploration"
-name = "Blind Exploration of VSCode"
+name = "True Blind Exploration of VSCode"
 repo = "vscode"
 difficulty = "hard"
+description = "Explore VSCode starting with zero knowledge. Success = understanding the architecture."
 
 [task]
-prompt = "Understand the high-level architecture of this code editor"
+prompt = "Understand the high-level architecture of this code editor well enough to answer questions about it"
 intent = "architectural_discovery"
 
 [expected]
-# These are what we HOPE the agent discovers organically
-must_find_files = [
-    "**/workbench/**",
-    "**/editor/**",
-    "**/services/**",
-    "**/platform/**",
-]
-must_find_symbols = [
-    "IWorkbench",
-    "IEditorService",
-    "ITextModel",
-    "registerService",
-    "createInstance",
-]
+# INTENTIONALLY EMPTY - This is blind exploration.
+# We don't specify what to find because we're testing discovery itself.
+must_find_files = []
+must_find_symbols = []
+# Noise patterns still help measure result quality
 noise_patterns = [
     "**/test/**",
     "**/tests/**",
@@ -40,30 +35,29 @@ noise_patterns = [
 # Step 1: Generic entry point question
 [[steps]]
 query = "Where is the main entry point of this application?"
-expected_results = 3
-max_noise_ratio = 0.3
 scope = "code"
+expand_top = 4
 
 # Step 2: Architecture question without knowing the terms
 [[steps]]
 query = "How is the application structured into modules or services?"
 depends_on_previous = true
-expected_results = 3
 scope = "code"
+expand_top = 4
 
 # Step 3: Follow discovered term with adaptive template
 [[steps]]
 query = "What is the purpose of {{previous.symbol}}?"
 depends_on_previous = true
-expected_results = 3
 scope = "code"
+expand_top = 3
 
 # Step 4: Understand dependency injection without knowing "DI"
 [[steps]]
 query = "How are components connected or wired together?"
 depends_on_previous = true
-expected_results = 3
 scope = "code"
+expand_top = 3
 
 # Step 5: Drill into discovered file
 [[steps]]
@@ -71,13 +65,69 @@ query = "Show me more details about {{previous.file}}"
 depends_on_previous = true
 scope = "code"
 context_ids = ["{{previous.id}}"]
+expand_top = 3
+
+# Step 6: Ask about extensibility
+[[steps]]
+query = "How does the extension system work?"
+depends_on_previous = true
+scope = "code"
+expand_top = 4
+
+# Step 7: Practical application
+[[steps]]
+query = "Where would I add a new editor feature or command?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
 
 [success]
-min_discovery_score = 0.4       # TypeScript codebase may be harder
-max_noise_ratio = 0.4           # Allow more noise for large codebase
-max_steps_to_core = 5           # May take longer
-min_convergence_rate = 0.4      # May be more spread out
-max_context_bloat = 0.45        # Large files may bloat context
-min_navigation_efficiency = 0.25
+# Discovery score is 0.0 since we have no expected items
+min_discovery_score = 0.0
+max_noise_ratio = 0.40          # Large codebase = more potential noise
+max_steps_to_core = 7           # N/A for blind
+min_convergence_rate = 0.35     # May be spread out - large codebase
+max_context_bloat = 0.50        # Large files may bloat context
+min_navigation_efficiency = 0.2 # May take winding paths
 min_suggestion_quality = 0.25
-max_dead_end_ratio = 0.4
+max_dead_end_ratio = 0.45       # Some dead ends expected
+
+# LLM-as-judge comprehension evaluation
+# This is the PRIMARY success metric for blind exploration
+[llm_judge]
+min_comprehension_score = 0.5
+
+# Core architecture question
+[[llm_judge.comprehension_questions]]
+question = "What architectural pattern does VSCode use for its services and dependency injection?"
+expected_concepts = ["service", "instantiation", "decorator", "inject", "register"]
+wrong_concepts = ["Redux", "MVC", "Angular"]
+weight = 2.0
+
+# Workbench understanding
+[[llm_judge.comprehension_questions]]
+question = "What is the Workbench and what role does it play?"
+expected_concepts = ["IWorkbench", "workbench", "layout", "parts", "container"]
+wrong_concepts = []
+weight = 1.5
+
+# Editor model
+[[llm_judge.comprehension_questions]]
+question = "How does the editor handle text and models?"
+expected_concepts = ["ITextModel", "editor", "model", "buffer", "piece tree"]
+wrong_concepts = ["DOM", "innerHTML"]
+weight = 1.5
+
+# Extension system
+[[llm_judge.comprehension_questions]]
+question = "How does the extension system work at a high level?"
+expected_concepts = ["extension", "host", "API", "activate", "contribute"]
+wrong_concepts = ["plugin.xml", "manifest.json only"]
+weight = 1.5
+
+# Practical question
+[[llm_judge.comprehension_questions]]
+question = "Based on what you found, how would you start implementing a new language feature?"
+expected_concepts = ["service", "register", "provider", "extension"]
+wrong_concepts = ["hardcode", "modify core directly"]
+weight = 1.0
