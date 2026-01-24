@@ -111,6 +111,10 @@ pub struct WatcherStatus {
   pub pending_changes: usize,
   pub files_indexed: usize,
   pub last_error: Option<String>,
+  /// Whether a startup scan is in progress
+  pub scanning: bool,
+  /// Startup scan progress (processed, total)
+  pub scan_progress: Option<(usize, usize)>,
 }
 
 /// Active watcher task handle with cancellation
@@ -124,10 +128,14 @@ pub struct ProjectRegistry {
   data_dir: PathBuf,
   projects: RwLock<HashMap<String, Arc<ProjectDb>>>,
   metadata: RwLock<HashMap<String, ProjectInfo>>,
-  watcher_status: RwLock<HashMap<String, WatcherStatus>>,
+  watcher_status: Arc<RwLock<HashMap<String, WatcherStatus>>>,
   watcher_tasks: RwLock<HashMap<String, WatcherTask>>,
   /// Coordinator for multi-instance watcher locking
   coordinator: WatcherCoordinator,
+  /// Cache for file contents to enable incremental parsing
+  file_content_cache: Arc<crate::cache::FileContentCache>,
+  /// Scan states for each project (for blocking searches during startup scan)
+  scan_states: Arc<RwLock<HashMap<String, Arc<crate::startup_scan::ScanState>>>>,
 }
 
 impl ProjectRegistry {
@@ -140,10 +148,17 @@ impl ProjectRegistry {
       data_dir: data_dir.clone(),
       projects: RwLock::new(HashMap::new()),
       metadata: RwLock::new(HashMap::new()),
-      watcher_status: RwLock::new(HashMap::new()),
+      watcher_status: Arc::new(RwLock::new(HashMap::new())),
       watcher_tasks: RwLock::new(HashMap::new()),
       coordinator: WatcherCoordinator::with_locks_dir(data_dir.join("watchers")),
+      file_content_cache: Arc::new(crate::cache::FileContentCache::new()),
+      scan_states: Arc::new(RwLock::new(HashMap::new())),
     }
+  }
+
+  /// Get the file content cache (for testing/diagnostics)
+  pub fn file_content_cache(&self) -> &Arc<crate::cache::FileContentCache> {
+    &self.file_content_cache
   }
 
   /// Get the data directory
@@ -249,11 +264,27 @@ impl ProjectRegistry {
   // Watcher management
 
   /// Start a file watcher for a project with actual file system watching
+  ///
+  /// If the project was previously indexed and startup_scan is enabled in config,
+  /// this will run a startup scan to reconcile the database with the filesystem.
   pub async fn start_watcher(
     &self,
     id: &str,
     root: &Path,
     embedding: Option<Arc<dyn EmbeddingProvider>>,
+  ) -> Result<(), ProjectError> {
+    self.start_watcher_with_scan_config(id, root, embedding, None).await
+  }
+
+  /// Start a file watcher with explicit startup scan configuration
+  ///
+  /// If `scan_config` is None, settings from the project config will be used.
+  pub async fn start_watcher_with_scan_config(
+    &self,
+    id: &str,
+    root: &Path,
+    embedding: Option<Arc<dyn EmbeddingProvider>>,
+    scan_config: Option<crate::startup_scan::StartupScanConfig>,
   ) -> Result<(), ProjectError> {
     // Check if already running in this process
     {
@@ -289,9 +320,135 @@ impl ProjectRegistry {
       None => return Err(ProjectError::NotFound(id.to_string())),
     };
 
-    // Load config for debounce settings
+    // Load config
     let config = Config::load_for_project(root);
     let debounce_ms = config.index.watcher_debounce_ms;
+
+    // Use provided scan config or load from project config
+    let scan_config = scan_config.unwrap_or_else(|| crate::startup_scan::StartupScanConfig::from_config(&config));
+
+    // Check if project was previously indexed (only run startup scan if so)
+    let chunk_count = db.count_code_chunks(None).await.unwrap_or(0);
+    let was_previously_indexed = chunk_count > 0;
+
+    // Determine if we should run startup scan
+    let should_scan = was_previously_indexed && scan_config.enabled;
+
+    // Create scan state if scanning
+    let scan_state = if should_scan {
+      let state = Arc::new(crate::startup_scan::ScanState::new());
+      {
+        let mut scan_states = self.scan_states.write().await;
+        scan_states.insert(id.to_string(), Arc::clone(&state));
+      }
+      Some(state)
+    } else {
+      None
+    };
+
+    // Update initial status
+    {
+      let mut status_map = self.watcher_status.write().await;
+      status_map.insert(
+        id.to_string(),
+        WatcherStatus {
+          running: true,
+          root: Some(root.to_path_buf()),
+          pending_changes: 0,
+          files_indexed: 0,
+          last_error: None,
+          scanning: should_scan,
+          scan_progress: None,
+        },
+      );
+    }
+
+    // Run startup scan if needed
+    if should_scan {
+      let scanner = crate::startup_scan::StartupScanner::new(scan_config.clone());
+
+      if scan_config.blocking {
+        // Blocking mode: run scan before starting watcher
+        info!("Running blocking startup scan for project {} ({} indexed chunks)", id, chunk_count);
+
+        match scanner.scan(&db, root).await {
+          Ok(result) => {
+            if !result.is_empty() {
+              info!(
+                "Startup scan found {} deleted, {} added, {} modified files",
+                result.deleted.len(),
+                result.added.len(),
+                result.modified.len()
+              );
+
+              // Apply changes
+              if let Err(e) = scanner.apply(&result, &db, root, embedding.clone(), &config).await {
+                warn!("Failed to apply startup scan results: {}", e);
+              }
+            } else {
+              info!("Startup scan complete: no changes detected");
+            }
+          }
+          Err(e) => {
+            warn!("Startup scan failed: {}", e);
+          }
+        }
+
+        // Clear scanning state
+        if let Some(state) = &scan_state {
+          state.finish();
+        }
+        {
+          let mut status_map = self.watcher_status.write().await;
+          if let Some(status) = status_map.get_mut(id) {
+            status.scanning = false;
+          }
+        }
+      } else {
+        // Non-blocking mode: start scan in background
+        info!("Starting background startup scan for project {} ({} indexed chunks)", id, chunk_count);
+
+        let db_clone = Arc::clone(&db);
+        let root_clone = root.to_path_buf();
+        let config_clone = config.clone();
+        let embedding_clone = embedding.clone();
+        let id_clone = id.to_string();
+        let scan_states_clone = Arc::clone(&self.scan_states);
+        let watcher_status_clone = Arc::clone(&self.watcher_status);
+
+        tokio::spawn(async move {
+          match scanner.scan(&db_clone, &root_clone).await {
+            Ok(result) => {
+              if !result.is_empty() {
+                info!(
+                  "Background startup scan found {} deleted, {} added, {} modified files",
+                  result.deleted.len(),
+                  result.added.len(),
+                  result.modified.len()
+                );
+
+                if let Err(e) = scanner.apply(&result, &db_clone, &root_clone, embedding_clone, &config_clone).await {
+                  warn!("Failed to apply startup scan results: {}", e);
+                }
+              } else {
+                info!("Background startup scan complete: no changes detected");
+              }
+            }
+            Err(e) => {
+              warn!("Background startup scan failed: {}", e);
+            }
+          }
+
+          // Clear scanning state
+          if let Some(state) = scan_states_clone.write().await.get(&id_clone) {
+            state.finish();
+          }
+          if let Some(status) = watcher_status_clone.write().await.get_mut(&id_clone) {
+            status.scanning = false;
+          }
+        });
+      }
+    }
 
     // Create the debounced watcher
     let debounce_config = DebounceConfig {
@@ -312,6 +469,7 @@ impl ProjectRegistry {
     let id_owned = id.to_string();
     let root_owned = root.to_path_buf();
     let registry_data_dir = self.data_dir.clone();
+    let content_cache = Arc::clone(&self.file_content_cache);
 
     // Spawn the watcher task
     let handle = tokio::task::spawn_blocking(move || {
@@ -323,6 +481,7 @@ impl ProjectRegistry {
         &id_owned,
         &root_owned,
         registry_data_dir,
+        content_cache,
       );
     });
 
@@ -330,21 +489,6 @@ impl ProjectRegistry {
     {
       let mut tasks = self.watcher_tasks.write().await;
       tasks.insert(id.to_string(), WatcherTask { handle, cancel });
-    }
-
-    // Update status
-    {
-      let mut status_map = self.watcher_status.write().await;
-      status_map.insert(
-        id.to_string(),
-        WatcherStatus {
-          running: true,
-          root: Some(root.to_path_buf()),
-          pending_changes: 0,
-          files_indexed: 0,
-          last_error: None,
-        },
-      );
     }
 
     info!("Started file watcher for project {} at {:?}", id, root);
@@ -424,290 +568,562 @@ impl ProjectRegistry {
       let _ = self.stop_watcher(&id).await;
     }
   }
+
+  /// Check if a startup scan is in progress for a project
+  pub async fn is_scanning(&self, id: &str) -> bool {
+    let scan_states = self.scan_states.read().await;
+    scan_states
+      .get(id)
+      .map(|state| state.is_in_progress())
+      .unwrap_or(false)
+  }
+
+  /// Wait for the startup scan to complete for a project
+  ///
+  /// Returns immediately if no scan is in progress.
+  /// This should be called before executing searches to ensure results are consistent.
+  pub async fn wait_for_scan(&self, id: &str, timeout: Duration) -> bool {
+    let state = {
+      let scan_states = self.scan_states.read().await;
+      scan_states.get(id).cloned()
+    };
+
+    let Some(state) = state else {
+      return true; // No scan state means no scan in progress
+    };
+
+    if !state.is_in_progress() {
+      return true;
+    }
+
+    // Poll until scan completes or timeout
+    let start = std::time::Instant::now();
+    let poll_interval = Duration::from_millis(100);
+
+    while start.elapsed() < timeout {
+      if !state.is_in_progress() {
+        return true;
+      }
+      tokio::time::sleep(poll_interval).await;
+    }
+
+    // Timeout reached
+    warn!("Timed out waiting for scan to complete for project {}", id);
+    false
+  }
+
+  /// Get scan progress for a project
+  pub async fn scan_progress(&self, id: &str) -> Option<(usize, usize)> {
+    let scan_states = self.scan_states.read().await;
+    scan_states.get(id).map(|state| state.progress())
+  }
 }
 
 /// Holds context for processing a file change
-struct FileChangeContext {
-  change_path: PathBuf,
-  relative_path: String,
-  is_doc_file: bool,
-  is_delete: bool,
+pub(crate) struct FileChangeContext {
+  pub change_path: PathBuf,
+  pub relative_path: String,
+  pub is_doc_file: bool,
+  pub is_delete: bool,
+  /// Cached old content for incremental parsing (None if not available or delete)
+  pub old_content: Option<Arc<String>>,
 }
 
-/// Process a single file change (async, for parallel processing)
-async fn process_file_change(
+/// Prepared code file data (parsed, ready for embedding)
+struct PreparedCodeFile {
+  relative_path: String,
+  chunks: Vec<engram_core::CodeChunk>,
+  /// Existing embeddings that can be reused (content_hash -> embedding)
+  existing_embeddings: HashMap<String, Vec<f32>>,
+  /// Indices of chunks that need new embeddings
+  chunks_needing_embeddings: Vec<usize>,
+  /// New file content (for cache update)
+  content: String,
+}
+
+/// Prepared document file data (parsed, ready for embedding)
+struct PreparedDocFile {
+  relative_path: String,
+  chunks: Vec<DocumentChunk>,
+}
+
+/// Result of preparing a file for indexing
+enum PreparedFile {
+  Code(PreparedCodeFile),
+  Doc(PreparedDocFile),
+  Delete { relative_path: String, is_doc: bool },
+  Skip,
+}
+
+/// Text needing embedding with source info for routing back
+struct EmbeddingRequest {
+  /// Index into the PreparedFile list
+  file_idx: usize,
+  /// For code: chunk index; for doc: chunk index
+  chunk_idx: usize,
+  /// The text to embed
+  text: String,
+}
+
+/// Phase 1: Prepare a file for indexing (read, parse, identify what needs embedding)
+/// This runs in parallel for all files and doesn't do any embedding.
+async fn prepare_file_change(
   ctx: FileChangeContext,
+  db: Arc<ProjectDb>,
+  root: PathBuf,
+  docs_config: engram_core::DocsConfig,
+  project_id: String,
+) -> PreparedFile {
+  if ctx.is_delete {
+    return PreparedFile::Delete {
+      relative_path: ctx.relative_path,
+      is_doc: ctx.is_doc_file,
+    };
+  }
+
+  // Handle create/modify
+  if ctx.is_doc_file {
+    // Prepare document file
+    let content = match tokio::fs::read_to_string(&ctx.change_path).await {
+      Ok(c) => c,
+      Err(_) => return PreparedFile::Skip,
+    };
+
+    if content.len() > docs_config.max_file_size {
+      debug!("Skipping large doc file: {:?}", ctx.change_path);
+      return PreparedFile::Skip;
+    }
+
+    let title = ctx
+      .change_path
+      .file_name()
+      .and_then(|n| n.to_str())
+      .unwrap_or("Untitled")
+      .to_string();
+
+    // Delete existing document if any
+    let filter = format!("source = '{}'", ctx.relative_path.replace('\'', "''"));
+    if let Ok(chunks) = db.list_document_chunks(Some(&filter), Some(1)).await
+      && let Some(chunk) = chunks.first()
+    {
+      let doc_id = chunk.document_id;
+      let _ = db.delete_document(&doc_id).await;
+    }
+
+    // Chunk the document
+    let params = ChunkParams::default();
+    let text_chunks = chunk_text(&content, &params);
+    let total_chunks = text_chunks.len();
+
+    if total_chunks == 0 {
+      return PreparedFile::Skip;
+    }
+
+    let document_id = DocumentId::new();
+    let project_uuid = uuid::Uuid::parse_str(&project_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
+
+    // Create all chunks
+    let chunks: Vec<DocumentChunk> = text_chunks
+      .into_iter()
+      .enumerate()
+      .map(|(i, (chunk_content, char_offset))| {
+        DocumentChunk::new(
+          document_id,
+          project_uuid,
+          chunk_content,
+          title.clone(),
+          ctx.relative_path.clone(),
+          DocumentSource::File,
+          i,
+          total_chunks,
+          char_offset,
+        )
+      })
+      .collect();
+
+    PreparedFile::Doc(PreparedDocFile {
+      relative_path: ctx.relative_path,
+      chunks,
+    })
+  } else {
+    // Prepare code file
+    let scanner = Scanner::new();
+    let scanned = match scanner.scan_file(&ctx.change_path, &root) {
+      Some(s) => s,
+      None => return PreparedFile::Skip,
+    };
+
+    let content = match tokio::fs::read_to_string(&ctx.change_path).await {
+      Ok(c) => c,
+      Err(_) => return PreparedFile::Skip,
+    };
+
+    let mut chunker = Chunker::default();
+
+    // Use incremental parsing if old content is available (much faster for small edits)
+    let old_content_ref = ctx.old_content.as_deref().map(|s| s.as_str());
+    let new_chunks = chunker.chunk_incremental(
+      &content,
+      &ctx.relative_path,
+      scanned.language,
+      &scanned.checksum,
+      old_content_ref,
+    );
+
+    if new_chunks.is_empty() {
+      return PreparedFile::Skip;
+    }
+
+    // Get existing chunks with their embeddings for differential re-indexing
+    let existing_chunks = db
+      .get_chunks_with_embeddings_for_file(&ctx.relative_path)
+      .await
+      .unwrap_or_default();
+
+    // Build a map of content_hash -> embedding from existing chunks
+    let existing_embeddings: HashMap<String, Vec<f32>> = existing_chunks
+      .into_iter()
+      .filter_map(|(chunk, embedding)| {
+        let hash = chunk.content_hash?;
+        let emb = embedding?;
+        Some((hash, emb))
+      })
+      .collect();
+
+    // Delete old chunks (after we've captured their embeddings)
+    if let Err(e) = db.delete_chunks_for_file(&ctx.relative_path).await {
+      warn!("Failed to delete old chunks for {}: {}", ctx.relative_path, e);
+    }
+
+    // Determine which chunks need new embeddings
+    let mut chunks_needing_embeddings: Vec<usize> = Vec::new();
+    let mut reused_count = 0;
+
+    for (i, chunk) in new_chunks.iter().enumerate() {
+      if let Some(ref hash) = chunk.content_hash {
+        if !existing_embeddings.contains_key(hash) {
+          chunks_needing_embeddings.push(i);
+        } else {
+          reused_count += 1;
+        }
+      } else {
+        chunks_needing_embeddings.push(i);
+      }
+    }
+
+    if reused_count > 0 {
+      debug!(
+        "Reusing {} embeddings for {} (need {} new)",
+        reused_count,
+        ctx.relative_path,
+        chunks_needing_embeddings.len()
+      );
+    }
+
+    PreparedFile::Code(PreparedCodeFile {
+      relative_path: ctx.relative_path,
+      chunks: new_chunks,
+      existing_embeddings,
+      chunks_needing_embeddings,
+      content,
+    })
+  }
+}
+
+#[allow(clippy::too_many_arguments)]
+/// Phase 3: Finalize a prepared file by inserting with embeddings
+async fn finalize_file_change(
+  prepared: PreparedFile,
+  db: Arc<ProjectDb>,
+  root: PathBuf,
+  project_id: String,
+  content_cache: Arc<crate::cache::FileContentCache>,
+  embeddings: &HashMap<(usize, usize), Vec<f32>>,
+  file_idx: usize,
+  dim: usize,
+) -> (bool, bool) {
+  match prepared {
+    PreparedFile::Delete { relative_path, is_doc } => {
+      content_cache.remove(&root, &relative_path);
+
+      if is_doc {
+        let filter = format!("source = '{}'", relative_path.replace('\'', "''"));
+        if let Ok(chunks) = db.list_document_chunks(Some(&filter), Some(1)).await
+          && let Some(chunk) = chunks.first()
+        {
+          let doc_id = chunk.document_id;
+          if let Err(e) = db.delete_document(&doc_id).await {
+            warn!("Failed to delete document {}: {}", relative_path, e);
+          }
+        }
+      } else if let Err(e) = db.delete_chunks_for_file(&relative_path).await {
+        warn!("Failed to delete chunks for {}: {}", relative_path, e);
+      }
+      (false, false)
+    }
+
+    PreparedFile::Doc(doc) => {
+      // Build vectors from cross-file embeddings
+      let vectors: Vec<Option<Vec<f32>>> = doc
+        .chunks
+        .iter()
+        .enumerate()
+        .map(|(chunk_idx, _)| embeddings.get(&(file_idx, chunk_idx)).cloned())
+        .collect();
+
+      if let Err(e) = db.add_document_chunks(&doc.chunks, &vectors).await {
+        warn!("Failed to batch insert document chunks for {}: {}", doc.relative_path, e);
+        (false, false)
+      } else {
+        debug!("Batch inserted {} document chunks for {}", doc.chunks.len(), doc.relative_path);
+        (false, true)
+      }
+    }
+
+    PreparedFile::Code(code) => {
+      // Update content cache for future incremental parsing
+      content_cache.insert(&root, &code.relative_path, code.content);
+
+      // Build vectors - reuse existing or use new from cross-file batch
+      let chunks_with_vectors: Vec<_> = code
+        .chunks
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+          let vector = if let Some(ref hash) = chunk.content_hash {
+            // Try to reuse existing embedding
+            code
+              .existing_embeddings
+              .get(hash)
+              .cloned()
+              .or_else(|| embeddings.get(&(file_idx, i)).cloned())
+              .unwrap_or_else(|| vec![0.0f32; dim])
+          } else {
+            embeddings
+              .get(&(file_idx, i))
+              .cloned()
+              .unwrap_or_else(|| vec![0.0f32; dim])
+          };
+          (chunk, vector)
+        })
+        .collect();
+
+      if let Err(e) = db.add_code_chunks(&chunks_with_vectors).await {
+        warn!("Failed to batch insert chunks for {}: {}", code.relative_path, e);
+        return (false, false);
+      }
+
+      debug!(
+        "Batch inserted {} chunks for {}",
+        chunks_with_vectors.len(),
+        code.relative_path
+      );
+
+      // Extract and store references for efficient caller/callee lookups
+      let references: Vec<CodeReference> = chunks_with_vectors
+        .iter()
+        .flat_map(|(chunk, _)| {
+          chunk
+            .calls
+            .iter()
+            .map(|call| CodeReference::from_call(&project_id, &chunk.id.to_string(), call))
+        })
+        .collect();
+
+      if !references.is_empty() {
+        let chunk_ids: Vec<String> = chunks_with_vectors.iter().map(|(c, _)| c.id.to_string()).collect();
+        if let Err(e) = db.delete_references_for_chunks(&chunk_ids).await {
+          warn!("Failed to delete old references for {}: {}", code.relative_path, e);
+        }
+
+        if let Err(e) = db.insert_references(&references).await {
+          warn!("Failed to insert references for {}: {}", code.relative_path, e);
+        } else {
+          debug!("Inserted {} references for {}", references.len(), code.relative_path);
+        }
+      }
+
+      (true, false)
+    }
+
+    PreparedFile::Skip => (false, false),
+  }
+}
+
+/// Process multiple file changes with cross-file embedding batching.
+///
+/// This is the main optimization: instead of each file making its own embedding API call,
+/// we collect all texts that need embedding across ALL files, make ONE batch call,
+/// then distribute the embeddings back.
+///
+/// For example: 10 files with 3 chunks each = 1 API call instead of 10.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn process_file_changes_batched(
+  file_contexts: Vec<FileChangeContext>,
   db: Arc<ProjectDb>,
   embedding: Option<Arc<dyn EmbeddingProvider>>,
   project_id: String,
   root: PathBuf,
   docs_config: engram_core::DocsConfig,
-) -> Result<(bool, bool), ()> {
-  // Returns (is_code_file_indexed, is_doc_indexed)
-  let mut code_indexed = false;
-  let mut doc_indexed = false;
+  content_cache: Arc<crate::cache::FileContentCache>,
+  parallel_files: usize,
+) -> (usize, usize) {
+  use tokio::sync::Semaphore;
 
-  if ctx.is_delete {
-    // Handle deletes
-    if ctx.is_doc_file {
-      let filter = format!("source = '{}'", ctx.relative_path.replace('\'', "''"));
-      if let Ok(chunks) = db.list_document_chunks(Some(&filter), Some(1)).await
-        && let Some(chunk) = chunks.first()
-      {
-        let doc_id = chunk.document_id;
-        if let Err(e) = db.delete_document(&doc_id).await {
-          warn!("Failed to delete document {}: {}", ctx.relative_path, e);
-        }
-      }
-    } else if let Err(e) = db.delete_chunks_for_file(&ctx.relative_path).await {
-      warn!("Failed to delete chunks for {}: {}", ctx.relative_path, e);
-    }
-    return Ok((false, false));
+  let num_files = file_contexts.len();
+
+  // Phase 1: Prepare all files in parallel (read, parse, identify what needs embedding)
+  let semaphore = Arc::new(Semaphore::new(parallel_files));
+  let mut prepare_tasks = Vec::with_capacity(num_files);
+
+  for ctx in file_contexts {
+    let db_clone = Arc::clone(&db);
+    let root_clone = root.clone();
+    let docs_config_clone = docs_config.clone();
+    let project_id_clone = project_id.clone();
+    let sem_clone = Arc::clone(&semaphore);
+
+    prepare_tasks.push(async move {
+      let _permit = sem_clone.acquire().await.ok()?;
+      Some(prepare_file_change(ctx, db_clone, root_clone, docs_config_clone, project_id_clone).await)
+    });
   }
 
-  // Handle create/modify
-  if ctx.is_doc_file {
-    // Index as document
-    if let Ok(content) = tokio::fs::read_to_string(&ctx.change_path).await {
-      if content.len() > docs_config.max_file_size {
-        debug!("Skipping large doc file: {:?}", ctx.change_path);
-        return Ok((false, false));
-      }
+  let prepared_files: Vec<PreparedFile> = futures::future::join_all(prepare_tasks)
+    .await
+    .into_iter()
+    .flatten()
+    .collect();
 
-      let title = ctx
-        .change_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("Untitled")
-        .to_string();
+  if prepared_files.is_empty() {
+    return (0, 0);
+  }
 
-      // Delete existing document if any
-      let filter = format!("source = '{}'", ctx.relative_path.replace('\'', "''"));
-      if let Ok(chunks) = db.list_document_chunks(Some(&filter), Some(1)).await
-        && let Some(chunk) = chunks.first()
-      {
-        let doc_id = chunk.document_id;
-        let _ = db.delete_document(&doc_id).await;
-      }
+  // Phase 2: Collect all texts needing embedding across ALL files
+  let mut embedding_requests: Vec<EmbeddingRequest> = Vec::new();
 
-      // Chunk the document
-      let params = ChunkParams::default();
-      let text_chunks = chunk_text(&content, &params);
-      let total_chunks = text_chunks.len();
-
-      if total_chunks == 0 {
-        return Ok((false, false));
-      }
-
-      let document_id = DocumentId::new();
-      let project_uuid = uuid::Uuid::parse_str(&project_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
-
-      // Create all chunks
-      let chunks: Vec<DocumentChunk> = text_chunks
-        .into_iter()
-        .enumerate()
-        .map(|(i, (chunk_content, char_offset))| {
-          DocumentChunk::new(
-            document_id,
-            project_uuid,
-            chunk_content,
-            title.clone(),
-            ctx.relative_path.clone(),
-            DocumentSource::File,
-            i,
-            total_chunks,
-            char_offset,
-          )
-        })
-        .collect();
-
-      // Batch embed all chunks
-      let vectors: Vec<Option<Vec<f32>>> = if let Some(ref emb) = embedding {
-        let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
-        match emb.embed_batch(&texts).await {
-          Ok(vecs) => vecs.into_iter().map(Some).collect(),
-          Err(e) => {
-            warn!(
-              "Batch embedding failed for doc {}: {}, using no vectors",
-              ctx.relative_path, e
-            );
-            chunks.iter().map(|_| None).collect()
+  for (file_idx, prepared) in prepared_files.iter().enumerate() {
+    match prepared {
+      PreparedFile::Code(code) => {
+        for &chunk_idx in &code.chunks_needing_embeddings {
+          if let Some(chunk) = code.chunks.get(chunk_idx) {
+            embedding_requests.push(EmbeddingRequest {
+              file_idx,
+              chunk_idx,
+              text: chunk.content.clone(),
+            });
           }
         }
-      } else {
-        chunks.iter().map(|_| None).collect()
-      };
-
-      // Batch insert all chunks
-      if let Err(e) = db.add_document_chunks(&chunks, &vectors).await {
-        warn!(
-          "Failed to batch insert document chunks for {}: {}",
-          ctx.relative_path, e
-        );
-      } else {
-        debug!(
-          "Batch inserted {} document chunks for {}",
-          chunks.len(),
-          ctx.relative_path
-        );
-        doc_indexed = true;
       }
+      PreparedFile::Doc(doc) => {
+        // All doc chunks need embedding (no reuse mechanism for docs currently)
+        for (chunk_idx, chunk) in doc.chunks.iter().enumerate() {
+          embedding_requests.push(EmbeddingRequest {
+            file_idx,
+            chunk_idx,
+            text: chunk.content.clone(),
+          });
+        }
+      }
+      _ => {}
+    }
+  }
+
+  // Phase 2b: Single batch embedding call for ALL texts
+  let dim = embedding.as_ref().map(|e| e.dimensions()).unwrap_or(4096);
+  let embeddings: HashMap<(usize, usize), Vec<f32>> = if !embedding_requests.is_empty() {
+    if let Some(ref emb) = embedding {
+      let texts: Vec<&str> = embedding_requests.iter().map(|r| r.text.as_str()).collect();
+
+      debug!(
+        "Cross-file batch embedding: {} texts from {} files",
+        texts.len(),
+        prepared_files.len()
+      );
+
+      match emb.embed_batch(&texts).await {
+        Ok(vectors) => {
+          // Map vectors back to (file_idx, chunk_idx)
+          embedding_requests
+            .iter()
+            .zip(vectors.into_iter())
+            .map(|(req, vec)| ((req.file_idx, req.chunk_idx), vec))
+            .collect()
+        }
+        Err(e) => {
+          warn!("Cross-file batch embedding failed: {}, using zero vectors", e);
+          embedding_requests
+            .iter()
+            .map(|req| ((req.file_idx, req.chunk_idx), vec![0.0f32; dim]))
+            .collect()
+        }
+      }
+    } else {
+      HashMap::new()
     }
   } else {
-    // Index as code
-    let scanner = Scanner::new();
-    if let Some(scanned) = scanner.scan_file(&ctx.change_path, &root) {
-      // Read and chunk the file
-      if let Ok(content) = tokio::fs::read_to_string(&ctx.change_path).await {
-        let mut chunker = Chunker::default();
-        let new_chunks = chunker.chunk(&content, &ctx.relative_path, scanned.language, &scanned.checksum);
+    HashMap::new()
+  };
 
-        if new_chunks.is_empty() {
-          return Ok((false, false));
-        }
+  // Phase 3: Finalize all files in parallel (insert with embeddings)
+  let embeddings = Arc::new(embeddings);
+  let mut finalize_tasks = Vec::with_capacity(prepared_files.len());
 
-        // Get existing chunks with their embeddings for differential re-indexing
-        let existing_chunks = db
-          .get_chunks_with_embeddings_for_file(&ctx.relative_path)
-          .await
-          .unwrap_or_default();
+  for (file_idx, prepared) in prepared_files.into_iter().enumerate() {
+    let db_clone = Arc::clone(&db);
+    let root_clone = root.clone();
+    let project_id_clone = project_id.clone();
+    let cache_clone = Arc::clone(&content_cache);
+    let embeddings_clone = Arc::clone(&embeddings);
+    let sem_clone = Arc::clone(&semaphore);
 
-        // Build a map of content_hash -> embedding from existing chunks
-        let existing_embeddings: HashMap<String, Vec<f32>> = existing_chunks
-          .into_iter()
-          .filter_map(|(chunk, embedding)| {
-            let hash = chunk.content_hash?;
-            let emb = embedding?;
-            Some((hash, emb))
-          })
-          .collect();
+    finalize_tasks.push(async move {
+      let _permit = sem_clone.acquire().await.ok()?;
+      Some(
+        finalize_file_change(
+          prepared,
+          db_clone,
+          root_clone,
+          project_id_clone,
+          cache_clone,
+          &embeddings_clone,
+          file_idx,
+          dim,
+        )
+        .await,
+      )
+    });
+  }
 
-        // Delete old chunks (after we've captured their embeddings)
-        if let Err(e) = db.delete_chunks_for_file(&ctx.relative_path).await {
-          warn!("Failed to delete old chunks for {}: {}", ctx.relative_path, e);
-        }
+  let results: Vec<(bool, bool)> = futures::future::join_all(finalize_tasks)
+    .await
+    .into_iter()
+    .flatten()
+    .collect();
 
-        // Determine which chunks need new embeddings
-        let mut chunks_needing_embeddings: Vec<(usize, &str)> = Vec::new();
-        let mut reused_count = 0;
-
-        for (i, chunk) in new_chunks.iter().enumerate() {
-          if let Some(ref hash) = chunk.content_hash {
-            if !existing_embeddings.contains_key(hash) {
-              // Need new embedding
-              chunks_needing_embeddings.push((i, chunk.content.as_str()));
-            } else {
-              reused_count += 1;
-            }
-          } else {
-            // No hash, need new embedding
-            chunks_needing_embeddings.push((i, chunk.content.as_str()));
-          }
-        }
-
-        if reused_count > 0 {
-          debug!(
-            "Reusing {} embeddings for {} (generating {} new)",
-            reused_count,
-            ctx.relative_path,
-            chunks_needing_embeddings.len()
-          );
-        }
-
-        // Generate embeddings only for chunks that need them
-        let new_embeddings: HashMap<usize, Vec<f32>> = if !chunks_needing_embeddings.is_empty() {
-          if let Some(ref emb) = embedding {
-            let texts: Vec<&str> = chunks_needing_embeddings.iter().map(|(_, t)| *t).collect();
-            match emb.embed_batch(&texts).await {
-              Ok(vecs) => chunks_needing_embeddings
-                .iter()
-                .map(|(i, _)| *i)
-                .zip(vecs.into_iter())
-                .collect(),
-              Err(e) => {
-                warn!(
-                  "Batch embedding failed for {}: {}, using zero vectors",
-                  ctx.relative_path, e
-                );
-                let dim = emb.dimensions();
-                chunks_needing_embeddings
-                  .iter()
-                  .map(|(i, _)| (*i, vec![0.0f32; dim]))
-                  .collect()
-              }
-            }
-          } else {
-            HashMap::new()
-          }
-        } else {
-          HashMap::new()
-        };
-
-        // Prepare batch data for insert - reuse existing embeddings where possible
-        let dim = embedding.as_ref().map(|e| e.dimensions()).unwrap_or(4096);
-        let chunks_with_vectors: Vec<_> = new_chunks
-          .into_iter()
-          .enumerate()
-          .map(|(i, chunk)| {
-            let vector = if let Some(ref hash) = chunk.content_hash {
-              // Try to reuse existing embedding
-              existing_embeddings
-                .get(hash)
-                .cloned()
-                .or_else(|| new_embeddings.get(&i).cloned())
-                .unwrap_or_else(|| vec![0.0f32; dim])
-            } else {
-              new_embeddings.get(&i).cloned().unwrap_or_else(|| vec![0.0f32; dim])
-            };
-            (chunk, vector)
-          })
-          .collect();
-
-        // Batch insert all chunks
-        if let Err(e) = db.add_code_chunks(&chunks_with_vectors).await {
-          warn!("Failed to batch insert chunks for {}: {}", ctx.relative_path, e);
-        } else {
-          debug!(
-            "Batch inserted {} chunks for {}",
-            chunks_with_vectors.len(),
-            ctx.relative_path
-          );
-          code_indexed = true;
-
-          // Extract and store references for efficient caller/callee lookups
-          // This replaces the expensive LIKE queries on JSON columns
-          let references: Vec<CodeReference> = chunks_with_vectors
-            .iter()
-            .flat_map(|(chunk, _)| {
-              chunk
-                .calls
-                .iter()
-                .map(|call| CodeReference::from_call(&project_id, &chunk.id.to_string(), call))
-            })
-            .collect();
-
-          if !references.is_empty() {
-            // Delete old references for chunks in this file (by chunk IDs)
-            let chunk_ids: Vec<String> = chunks_with_vectors.iter().map(|(c, _)| c.id.to_string()).collect();
-            if let Err(e) = db.delete_references_for_chunks(&chunk_ids).await {
-              warn!("Failed to delete old references for {}: {}", ctx.relative_path, e);
-            }
-
-            // Insert new references
-            if let Err(e) = db.insert_references(&references).await {
-              warn!("Failed to insert references for {}: {}", ctx.relative_path, e);
-            } else {
-              debug!("Inserted {} references for {}", references.len(), ctx.relative_path);
-            }
-          }
-        }
-      }
+  // Count indexed files
+  let mut code_count = 0;
+  let mut doc_count = 0;
+  for (is_code, is_doc) in results {
+    if is_code {
+      code_count += 1;
+    }
+    if is_doc {
+      doc_count += 1;
     }
   }
 
-  Ok((code_indexed, doc_indexed))
+  if code_count > 0 || doc_count > 0 {
+    debug!(
+      "Batch processed {} files: {} code, {} docs",
+      num_files, code_count, doc_count
+    );
+  }
+
+  (code_count, doc_count)
 }
 
+#[allow(clippy::too_many_arguments)]
 /// Run the file watcher loop (blocking, runs in spawn_blocking)
 fn run_watcher_loop(
   mut watcher: DebouncedWatcher,
@@ -717,10 +1133,9 @@ fn run_watcher_loop(
   project_id: &str,
   root: &Path,
   _data_dir: PathBuf,
+  content_cache: Arc<crate::cache::FileContentCache>,
 ) {
   let mut config = Config::load_for_project(root);
-
-  let poll_interval = Duration::from_millis(config.index.watcher_debounce_ms.max(100));
   let mut files_indexed = 0;
   let mut docs_indexed = 0;
 
@@ -740,6 +1155,9 @@ fn run_watcher_loop(
     info!("Watching docs directory: {:?}", dir);
   }
 
+  // Maximum time to wait for events before checking cancellation
+  let max_wait = Duration::from_secs(5);
+
   loop {
     // Check for cancellation
     if cancel.load(Ordering::SeqCst) {
@@ -747,8 +1165,19 @@ fn run_watcher_loop(
       break;
     }
 
-    // Poll for changes
-    let changes = watcher.collect_ready();
+    // Wait for changes (blocks efficiently, no busy-polling)
+    let changes = match watcher.wait_ready(max_wait) {
+      Ok(c) => c,
+      Err(e) => {
+        warn!("Watcher error: {}", e);
+        continue;
+      }
+    };
+
+    // No changes (timeout) - loop to check cancellation
+    if changes.is_empty() {
+      continue;
+    }
 
     // Check for gitignore changes
     if watcher.check_gitignore_change() {
@@ -780,7 +1209,7 @@ fn run_watcher_loop(
       }
     }
 
-    // Collect and filter changes
+    // Collect and filter changes into FileChangeContext
     let mut file_contexts: Vec<FileChangeContext> = Vec::new();
 
     for change in changes {
@@ -817,65 +1246,44 @@ fn run_watcher_loop(
 
       let is_delete = matches!(change.kind, ChangeKind::Deleted);
 
+      // Get cached old content for incremental parsing (skip for deletes and docs)
+      let old_content = if !is_delete && !is_doc_file {
+        let root_buf = root.to_path_buf();
+        content_cache.get(&root_buf, &relative_path).map(|c| c.content)
+      } else {
+        None
+      };
+
       file_contexts.push(FileChangeContext {
         change_path: change.path,
         relative_path,
         is_doc_file,
         is_delete,
+        old_content,
       });
     }
 
-    // Process file changes in parallel (P1)
+    // Process file changes with cross-file embedding batching
     if !file_contexts.is_empty()
       && let Ok(rt) = tokio::runtime::Handle::try_current()
     {
-      let results: Vec<Option<(bool, bool)>> = rt.block_on(async {
-        use std::sync::Arc as StdArc;
-        use tokio::sync::Semaphore;
-
-        let semaphore = StdArc::new(Semaphore::new(parallel_files));
-        let mut tasks = Vec::with_capacity(file_contexts.len());
-
-        for ctx in file_contexts {
-          let db_clone = Arc::clone(&db);
-          let emb_clone = embedding.clone();
-          let project_id_clone = project_id.to_string();
-          let root_clone = root.to_path_buf();
-          let docs_config_clone = config.docs.clone();
-          let sem_clone = StdArc::clone(&semaphore);
-
-          tasks.push(async move {
-            // Acquire semaphore permit to limit concurrency
-            let _permit = sem_clone.acquire().await.ok()?;
-            process_file_change(
-              ctx,
-              db_clone,
-              emb_clone,
-              project_id_clone,
-              root_clone,
-              docs_config_clone,
-            )
-            .await
-            .ok()
-          });
-        }
-
-        futures::future::join_all(tasks).await
+      let results = rt.block_on(async {
+        process_file_changes_batched(
+          file_contexts,
+          Arc::clone(&db),
+          embedding.clone(),
+          project_id.to_string(),
+          root.to_path_buf(),
+          config.docs.clone(),
+          Arc::clone(&content_cache),
+          parallel_files,
+        )
+        .await
       });
 
-      // Count indexed files
-      for result in results.into_iter().flatten() {
-        if result.0 {
-          files_indexed += 1;
-        }
-        if result.1 {
-          docs_indexed += 1;
-        }
-      }
+      files_indexed += results.0;
+      docs_indexed += results.1;
     }
-
-    // Sleep before next poll
-    std::thread::sleep(poll_interval);
   }
 
   info!(

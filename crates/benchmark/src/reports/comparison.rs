@@ -321,6 +321,10 @@ mod tests {
           avg_suggestion_quality: 0.6,
           avg_context_bloat: 0.15,
           avg_dead_end_ratio: 0.1,
+          avg_time_to_first_relevant_ms: Some(150.0),
+          avg_file_diversity_top5: 0.8,
+          avg_comprehension_score: None,
+          comprehension_scenarios_count: 0,
         },
         total_time_ms: 500,
       },
@@ -364,6 +368,8 @@ mod tests {
           max_consecutive_failures: 1,
           rabbit_hole_steps: 0,
           rabbit_hole_ratio: 0.0,
+          time_to_first_relevant_ms: Some(150),
+          avg_file_diversity_top5: 0.8,
           files_found: vec![],
           files_missed: vec![],
           symbols_found: vec![],
@@ -372,6 +378,7 @@ mod tests {
         steps: vec![],
         errors: vec![],
         total_duration_ms: 500,
+        comprehension: None,
       }],
     }
   }

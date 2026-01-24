@@ -39,6 +39,8 @@ pub struct MetricTargets {
   pub context_bloat: f64,
   /// Max dead end ratio (≤20%)
   pub dead_end_ratio: f64,
+  /// File diversity target (≥60%)
+  pub file_diversity: f64,
 }
 
 impl Default for MetricTargets {
@@ -56,6 +58,7 @@ impl Default for MetricTargets {
       navigation_efficiency: 0.50,
       context_bloat: 0.30,
       dead_end_ratio: 0.20,
+      file_diversity: 0.60,
     }
   }
 }

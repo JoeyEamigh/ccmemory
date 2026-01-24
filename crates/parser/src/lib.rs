@@ -21,7 +21,7 @@ mod queries;
 pub mod resolve;
 
 pub use error::ParseError;
-pub use parser::{Definition, DefinitionKind, TreeSitterParser};
+pub use parser::{Definition, DefinitionKind, TextEdit, TreeSitterParser};
 pub use resolve::{import_matches_file, import_to_file_patterns, normalize_import, possible_resolutions};
 
 // Re-export for convenience

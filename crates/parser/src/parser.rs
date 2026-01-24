@@ -1,7 +1,7 @@
 //! TreeSitterParser implementation
 
 use std::collections::{HashMap, HashSet};
-use tree_sitter::{Language as TsLanguage, Parser, Query, QueryCursor, StreamingIterator, Tree};
+use tree_sitter::{InputEdit, Language as TsLanguage, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::queries;
 use engram_core::Language;
@@ -17,6 +17,16 @@ pub struct LanguageQueries {
 struct CachedTree {
   content_hash: u64,
   tree: Tree,
+  /// Store content for incremental parsing diff computation
+  content: String,
+}
+
+/// Edit information from file watcher or editor
+#[derive(Debug, Clone)]
+pub struct TextEdit {
+  pub start_offset: usize,
+  pub end_offset: usize,
+  pub new_text: String,
 }
 
 /// A definition extracted from code
@@ -48,11 +58,16 @@ pub enum DefinitionKind {
 /// Lazily loads parsers and queries for each language as needed.
 /// Supports caching parsed trees to avoid redundant parsing when
 /// processing multiple chunks from the same file.
+///
+/// Reuses a single QueryCursor instance to avoid allocation overhead
+/// when running multiple queries.
 pub struct TreeSitterParser {
   parsers: HashMap<Language, Parser>,
   queries: HashMap<Language, LanguageQueries>,
   /// Cached trees per language (for single-file-at-a-time processing)
   tree_cache: HashMap<Language, CachedTree>,
+  /// Reusable query cursor (avoids allocation per query)
+  query_cursor: QueryCursor,
 }
 
 impl TreeSitterParser {
@@ -62,6 +77,7 @@ impl TreeSitterParser {
       parsers: HashMap::new(),
       queries: HashMap::new(),
       tree_cache: HashMap::new(),
+      query_cursor: QueryCursor::new(),
     }
   }
 
@@ -92,11 +108,165 @@ impl TreeSitterParser {
     };
 
     if let Some(tree) = parser.parse(content, None) {
-      self.tree_cache.insert(lang, CachedTree { content_hash, tree });
+      self.tree_cache.insert(
+        lang,
+        CachedTree {
+          content_hash,
+          tree,
+          content: content.to_string(),
+        },
+      );
       true
     } else {
       false
     }
+  }
+
+  /// Parse with incremental update if old tree available.
+  ///
+  /// This method attempts to reuse the previous parse tree when possible:
+  /// 1. If content is unchanged (hash match), returns immediately
+  /// 2. If explicit edit info is provided, applies it directly
+  /// 3. Otherwise, computes diff between old/new content
+  /// 4. Falls back to full reparse if changes are too large (>50% of file)
+  ///
+  /// Returns true if parsing was successful.
+  pub fn parse_file_incremental(&mut self, content: &str, lang: Language, edit: Option<&TextEdit>) -> bool {
+    self.ensure_loaded(lang);
+
+    let content_hash = Self::hash_content(content);
+
+    // Exact match - no reparse needed
+    if let Some(cached) = self.tree_cache.get(&lang)
+      && cached.content_hash == content_hash
+    {
+      return true;
+    }
+
+    let Some(parser) = self.parsers.get_mut(&lang) else {
+      return false;
+    };
+
+    // Try incremental parse if we have old tree
+    let old_tree = if let Some(cached) = self.tree_cache.get_mut(&lang) {
+      if let Some(edit) = edit {
+        // Apply explicit edit to old tree
+        let input_edit = Self::compute_input_edit(edit, &cached.content);
+        cached.tree.edit(&input_edit);
+        Some(&cached.tree)
+      } else if let Some(input_edit) = Self::diff_content(&cached.content, content) {
+        // Compute diff and apply
+        cached.tree.edit(&input_edit);
+        Some(&cached.tree)
+      } else {
+        None // Content too different, full reparse
+      }
+    } else {
+      None
+    };
+
+    // Parse with old tree if available (incremental), otherwise full parse
+    if let Some(tree) = parser.parse(content, old_tree.map(|t| t as &Tree)) {
+      self.tree_cache.insert(
+        lang,
+        CachedTree {
+          tree,
+          content_hash,
+          content: content.to_string(),
+        },
+      );
+      return true;
+    }
+
+    false
+  }
+
+  /// Compute InputEdit from TextEdit
+  fn compute_input_edit(edit: &TextEdit, old_content: &str) -> InputEdit {
+    let start_byte = edit.start_offset;
+    let old_end_byte = edit.end_offset;
+    let new_end_byte = start_byte + edit.new_text.len();
+
+    let start_position = Self::offset_to_point(old_content, start_byte);
+    let old_end_position = Self::offset_to_point(old_content, old_end_byte);
+
+    // For new end position, compute based on the edit
+    let new_end_position = Self::compute_new_end_position(old_content, edit, start_position);
+
+    InputEdit {
+      start_byte,
+      old_end_byte,
+      new_end_byte,
+      start_position,
+      old_end_position,
+      new_end_position,
+    }
+  }
+
+  /// Convert byte offset to tree-sitter Point (row, column)
+  fn offset_to_point(content: &str, offset: usize) -> Point {
+    let prefix = &content[..offset.min(content.len())];
+    let row = prefix.matches('\n').count();
+    let col = prefix.rfind('\n').map_or(offset, |pos| offset - pos - 1);
+    Point::new(row, col)
+  }
+
+  /// Compute new end position after applying edit
+  fn compute_new_end_position(_old_content: &str, edit: &TextEdit, start_position: Point) -> Point {
+    // Count newlines in the new text
+    let new_text_newlines = edit.new_text.matches('\n').count();
+
+    if new_text_newlines == 0 {
+      // Single line edit - column moves by new text length
+      Point::new(start_position.row, start_position.column + edit.new_text.len())
+    } else {
+      // Multi-line edit - find column after last newline
+      let last_newline_pos = edit.new_text.rfind('\n').unwrap();
+      let col_after_newline = edit.new_text.len() - last_newline_pos - 1;
+      Point::new(start_position.row + new_text_newlines, col_after_newline)
+    }
+  }
+
+  /// Compute InputEdit by diffing old and new content.
+  /// Returns None if changes are too large (>50% of file changed).
+  fn diff_content(old: &str, new: &str) -> Option<InputEdit> {
+    // Find common prefix
+    let prefix_len = old.bytes().zip(new.bytes()).take_while(|(a, b)| a == b).count();
+
+    // Find common suffix (excluding prefix)
+    let old_suffix = &old[prefix_len..];
+    let new_suffix = &new[prefix_len..];
+    let suffix_len = old_suffix
+      .bytes()
+      .rev()
+      .zip(new_suffix.bytes().rev())
+      .take_while(|(a, b)| a == b)
+      .count();
+
+    let start_byte = prefix_len;
+    let old_end_byte = old.len().saturating_sub(suffix_len);
+    let new_end_byte = new.len().saturating_sub(suffix_len);
+
+    // Only use incremental if edit is localized (< 50% of file changed)
+    if !old.is_empty() {
+      let changed_ratio = (old_end_byte.saturating_sub(start_byte)) as f64 / old.len() as f64;
+      if changed_ratio > 0.5 {
+        return None; // Too much changed, full reparse likely faster
+      }
+    }
+
+    let start_position = Self::offset_to_point(old, start_byte);
+    let old_end_position = Self::offset_to_point(old, old_end_byte);
+    let new_end_position = Self::offset_to_point(new, new_end_byte);
+
+    Some(InputEdit {
+      start_byte,
+      old_end_byte,
+      new_end_byte,
+      start_position,
+      old_end_position,
+      new_end_position,
+    })
   }
 
   /// Extract definitions using cached tree (parses if needed).
@@ -118,10 +288,11 @@ impl TreeSitterParser {
       return Vec::new();
     };
 
-    let mut cursor = QueryCursor::new();
     let mut definitions = Vec::new();
 
-    let mut matches = cursor.matches(query, cached.tree.root_node(), content.as_bytes());
+    let mut matches = self
+      .query_cursor
+      .matches(query, cached.tree.root_node(), content.as_bytes());
 
     while let Some(match_) = matches.next() {
       let mut name: Option<String> = None;
@@ -206,8 +377,33 @@ impl TreeSitterParser {
     definitions
   }
 
+  /// Convert 1-based line numbers to byte range in content.
+  /// Returns (start_byte, end_byte) where end_byte is exclusive.
+  fn line_range_to_byte_range(content: &str, start_line: u32, end_line: u32) -> (usize, usize) {
+    let mut current_line = 1u32;
+    let mut start_byte = 0usize;
+    let mut end_byte = content.len();
+    let mut found_start = false;
+
+    for (i, c) in content.char_indices() {
+      if !found_start && current_line >= start_line {
+        start_byte = i;
+        found_start = true;
+      }
+      if c == '\n' {
+        current_line += 1;
+        if current_line > end_line {
+          end_byte = i + 1; // Include the newline
+          break;
+        }
+      }
+    }
+
+    (start_byte, end_byte)
+  }
+
   /// Extract imports and calls from a specific line range using cached tree.
-  /// This is efficient for extracting from multiple chunks of the same file.
+  /// Uses byte range filtering for efficient query execution (avoids full tree traversal).
   pub fn extract_imports_and_calls_in_range(
     &mut self,
     content: &str,
@@ -230,22 +426,22 @@ impl TreeSitterParser {
     let mut imports = Vec::new();
     let mut calls = Vec::new();
 
-    // Helper to check if a node is within the line range
-    let in_range = |node: &tree_sitter::Node| {
-      let node_start = node.start_position().row as u32 + 1;
-      let node_end = node.end_position().row as u32 + 1;
-      node_start >= start_line && node_end <= end_line
-    };
+    // Convert line range to byte range for efficient query filtering
+    let (start_byte, end_byte) = Self::line_range_to_byte_range(content, start_line, end_line);
 
-    // Run imports query
-    if let Some(query) = &queries.imports {
-      let mut cursor = QueryCursor::new();
-      let mut matches = cursor.matches(query, cached.tree.root_node(), content.as_bytes());
+    // Get references to queries and tree before using cursor
+    let imports_query = queries.imports.as_ref();
+    let calls_query = queries.calls.as_ref();
+    let root = cached.tree.root_node();
+
+    // Run imports query with byte range filtering
+    if let Some(query) = imports_query {
+      // Set byte range to limit query to relevant portion of tree
+      self.query_cursor.set_byte_range(start_byte..end_byte);
+      let mut matches = self.query_cursor.matches(query, root, content.as_bytes());
       while let Some(match_) = matches.next() {
         for cap in match_.captures {
-          if in_range(&cap.node)
-            && let Ok(text) = cap.node.utf8_text(content.as_bytes())
-          {
+          if let Ok(text) = cap.node.utf8_text(content.as_bytes()) {
             let cleaned = text.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == '<' || c == '>');
             if !cleaned.is_empty() {
               imports.push(cleaned.to_string());
@@ -255,15 +451,13 @@ impl TreeSitterParser {
       }
     }
 
-    // Run calls query
-    if let Some(query) = &queries.calls {
-      let mut cursor = QueryCursor::new();
-      let mut matches = cursor.matches(query, cached.tree.root_node(), content.as_bytes());
+    // Run calls query with byte range filtering
+    if let Some(query) = calls_query {
+      self.query_cursor.set_byte_range(start_byte..end_byte);
+      let mut matches = self.query_cursor.matches(query, root, content.as_bytes());
       while let Some(match_) = matches.next() {
         for cap in match_.captures {
-          if in_range(&cap.node)
-            && let Ok(text) = cap.node.utf8_text(content.as_bytes())
-          {
+          if let Ok(text) = cap.node.utf8_text(content.as_bytes()) {
             let cleaned = text.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == '<' || c == '>');
             if !cleaned.is_empty() {
               calls.push(cleaned.to_string());
@@ -272,6 +466,9 @@ impl TreeSitterParser {
         }
       }
     }
+
+    // Reset byte range for future queries (0..MAX means no filtering)
+    self.query_cursor.set_byte_range(0..usize::MAX);
 
     // Deduplicate while preserving order
     let mut seen: HashSet<String> = HashSet::new();
@@ -303,15 +500,15 @@ impl TreeSitterParser {
     self.run_query(content, lang, |q| &q.calls)
   }
 
-  /// Extract imports and calls in a single parse (more efficient for per-chunk extraction)
+  /// Extract imports and calls using cached tree (parses if needed).
+  /// Uses the tree cache for efficiency when processing multiple operations on the same file.
   pub fn extract_imports_and_calls(&mut self, content: &str, lang: Language) -> (Vec<String>, Vec<String>) {
-    self.ensure_loaded(lang);
-
-    let Some(parser) = self.parsers.get_mut(&lang) else {
+    // Use cache - parse_file will use cached tree if content unchanged
+    if !self.parse_file(content, lang) {
       return (Vec::new(), Vec::new());
-    };
+    }
 
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(cached) = self.tree_cache.get(&lang) else {
       return (Vec::new(), Vec::new());
     };
 
@@ -322,10 +519,14 @@ impl TreeSitterParser {
     let mut imports = Vec::new();
     let mut calls = Vec::new();
 
-    // Run imports query
-    if let Some(query) = &queries.imports {
-      let mut cursor = QueryCursor::new();
-      let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
+    // Get query references and tree root before using cursor
+    let imports_query = queries.imports.as_ref();
+    let calls_query = queries.calls.as_ref();
+    let root = cached.tree.root_node();
+
+    // Run imports query (reusing cursor)
+    if let Some(query) = imports_query {
+      let mut matches = self.query_cursor.matches(query, root, content.as_bytes());
       while let Some(match_) = matches.next() {
         for cap in match_.captures {
           if let Ok(text) = cap.node.utf8_text(content.as_bytes()) {
@@ -338,10 +539,9 @@ impl TreeSitterParser {
       }
     }
 
-    // Run calls query (reusing the same parse tree)
-    if let Some(query) = &queries.calls {
-      let mut cursor = QueryCursor::new();
-      let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
+    // Run calls query (cursor is reset when matches() is called again)
+    if let Some(query) = calls_query {
+      let mut matches = self.query_cursor.matches(query, root, content.as_bytes());
       while let Some(match_) = matches.next() {
         for cap in match_.captures {
           if let Ok(text) = cap.node.utf8_text(content.as_bytes()) {
@@ -364,128 +564,23 @@ impl TreeSitterParser {
     (imports, calls)
   }
 
-  /// Extract symbol definitions from code
+  /// Extract symbol definitions from code using cached tree (parses if needed).
+  /// This is equivalent to extract_definitions_cached but with a shorter name for convenience.
   pub fn extract_definitions(&mut self, content: &str, lang: Language) -> Vec<Definition> {
-    self.ensure_loaded(lang);
-
-    let Some(parser) = self.parsers.get_mut(&lang) else {
-      return Vec::new();
-    };
-
-    let Some(tree) = parser.parse(content, None) else {
-      return Vec::new();
-    };
-
-    let Some(queries) = self.queries.get(&lang) else {
-      return Vec::new();
-    };
-
-    let Some(query) = &queries.definitions else {
-      return Vec::new();
-    };
-
-    let mut cursor = QueryCursor::new();
-    let mut definitions = Vec::new();
-
-    // Use StreamingIterator's .next() method
-    let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
-
-    while let Some(match_) = matches.next() {
-      // Look for name and kind captures
-      let mut name: Option<String> = None;
-      let mut start_line: Option<u32> = None;
-      let mut end_line: Option<u32> = None;
-      let mut kind = DefinitionKind::Function; // default
-
-      for cap in match_.captures {
-        let cap_name = &query.capture_names()[cap.index as usize];
-        let node = cap.node;
-
-        match *cap_name {
-          "name" => {
-            if let Ok(text) = node.utf8_text(content.as_bytes()) {
-              name = Some(text.to_string());
-            }
-          }
-          "definition.function" | "function" => {
-            kind = DefinitionKind::Function;
-            start_line = Some(node.start_position().row as u32 + 1);
-            end_line = Some(node.end_position().row as u32 + 1);
-          }
-          "definition.method" | "method" => {
-            kind = DefinitionKind::Method;
-            start_line = Some(node.start_position().row as u32 + 1);
-            end_line = Some(node.end_position().row as u32 + 1);
-          }
-          "definition.class" | "class" => {
-            kind = DefinitionKind::Class;
-            start_line = Some(node.start_position().row as u32 + 1);
-            end_line = Some(node.end_position().row as u32 + 1);
-          }
-          "definition.struct" | "struct" => {
-            kind = DefinitionKind::Struct;
-            start_line = Some(node.start_position().row as u32 + 1);
-            end_line = Some(node.end_position().row as u32 + 1);
-          }
-          "definition.interface" | "interface" => {
-            kind = DefinitionKind::Interface;
-            start_line = Some(node.start_position().row as u32 + 1);
-            end_line = Some(node.end_position().row as u32 + 1);
-          }
-          "definition.trait" | "trait" => {
-            kind = DefinitionKind::Trait;
-            start_line = Some(node.start_position().row as u32 + 1);
-            end_line = Some(node.end_position().row as u32 + 1);
-          }
-          "definition.enum" | "enum" => {
-            kind = DefinitionKind::Enum;
-            start_line = Some(node.start_position().row as u32 + 1);
-            end_line = Some(node.end_position().row as u32 + 1);
-          }
-          "definition.module" | "module" => {
-            kind = DefinitionKind::Module;
-            start_line = Some(node.start_position().row as u32 + 1);
-            end_line = Some(node.end_position().row as u32 + 1);
-          }
-          "definition.const" | "const" => {
-            kind = DefinitionKind::Const;
-            start_line = Some(node.start_position().row as u32 + 1);
-            end_line = Some(node.end_position().row as u32 + 1);
-          }
-          "definition.type" | "type" => {
-            kind = DefinitionKind::Type;
-            start_line = Some(node.start_position().row as u32 + 1);
-            end_line = Some(node.end_position().row as u32 + 1);
-          }
-          _ => {}
-        }
-      }
-
-      if let (Some(n), Some(sl), Some(el)) = (name, start_line, end_line) {
-        definitions.push(Definition {
-          name: n,
-          kind,
-          start_line: sl,
-          end_line: el,
-        });
-      }
-    }
-
-    definitions
+    // Use cache - just delegate to the cached version
+    self.extract_definitions_cached(content, lang)
   }
 
   fn run_query<F>(&mut self, content: &str, lang: Language, get_query: F) -> Vec<String>
   where
     F: Fn(&LanguageQueries) -> &Option<Query>,
   {
-    // Ensure parser and queries are loaded for this language
-    self.ensure_loaded(lang);
-
-    let Some(parser) = self.parsers.get_mut(&lang) else {
+    // Use cache - parse_file will use cached tree if content unchanged
+    if !self.parse_file(content, lang) {
       return Vec::new();
-    };
+    }
 
-    let Some(tree) = parser.parse(content, None) else {
+    let Some(cached) = self.tree_cache.get(&lang) else {
       return Vec::new();
     };
 
@@ -497,11 +592,11 @@ impl TreeSitterParser {
       return Vec::new();
     };
 
-    let mut cursor = QueryCursor::new();
     let mut results: Vec<String> = Vec::new();
+    let root = cached.tree.root_node();
 
-    // Use StreamingIterator's .next() method
-    let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
+    // Use reusable cursor
+    let mut matches = self.query_cursor.matches(query, root, content.as_bytes());
 
     while let Some(match_) = matches.next() {
       for cap in match_.captures {
@@ -1411,5 +1506,187 @@ fn example() {
     assert!(rust_imports.contains(&"std::io".to_string()));
     assert!(python_imports.contains(&"os".to_string()));
     assert!(js_imports.contains(&"fs".to_string()));
+  }
+
+  // ============================================================================
+  // INCREMENTAL PARSING TESTS
+  // ============================================================================
+
+  #[test]
+  fn test_incremental_parse_small_edit() {
+    let mut parser = TreeSitterParser::new();
+
+    // Parse original content
+    let original = r#"
+fn main() {
+    println!("hello");
+}
+
+fn helper() {
+    println!("original");
+}
+"#;
+
+    assert!(parser.parse_file(original, Language::Rust));
+
+    // Small edit: change "original" to "modified"
+    let modified = r#"
+fn main() {
+    println!("hello");
+}
+
+fn helper() {
+    println!("modified");
+}
+"#;
+
+    // Incremental parse should succeed
+    assert!(parser.parse_file_incremental(modified, Language::Rust, None));
+
+    // Verify parsing still works correctly
+    let defs = parser.extract_definitions_cached(modified, Language::Rust);
+    assert!(defs.iter().any(|d| d.name == "main"), "should find main");
+    assert!(defs.iter().any(|d| d.name == "helper"), "should find helper");
+  }
+
+  #[test]
+  fn test_incremental_parse_with_explicit_edit() {
+    let mut parser = TreeSitterParser::new();
+
+    let original = "fn foo() { bar(); }";
+    assert!(parser.parse_file(original, Language::Rust));
+
+    // Edit: change "bar" to "baz"
+    let modified = "fn foo() { baz(); }";
+    let edit = super::TextEdit {
+      start_offset: 11, // position of 'b' in 'bar'
+      end_offset: 14,   // position after 'r' in 'bar'
+      new_text: "baz".to_string(),
+    };
+
+    assert!(parser.parse_file_incremental(modified, Language::Rust, Some(&edit)));
+
+    let calls = parser.extract_calls(modified, Language::Rust);
+    assert!(calls.contains(&"baz".to_string()), "calls: {:?}", calls);
+  }
+
+  #[test]
+  fn test_diff_content_finds_single_edit() {
+    let old = "fn main() { hello(); }";
+    let new = "fn main() { goodbye(); }";
+
+    let edit = TreeSitterParser::diff_content(old, new);
+    assert!(edit.is_some(), "should find edit");
+
+    let edit = edit.unwrap();
+    // The edit should be localized to the function name change
+    assert!(
+      edit.start_byte <= 12,
+      "start should be before 'hello': {}",
+      edit.start_byte
+    );
+    assert!(
+      edit.old_end_byte >= 17,
+      "old end should be after 'hello': {}",
+      edit.old_end_byte
+    );
+  }
+
+  #[test]
+  fn test_diff_content_large_change_returns_none() {
+    let old = "fn a() {} fn b() {} fn c() {}";
+    let new = "completely different content here";
+
+    // Large changes (>50% different) should return None
+    let edit = TreeSitterParser::diff_content(old, new);
+    assert!(edit.is_none(), "should return None for large changes");
+  }
+
+  #[test]
+  fn test_offset_to_point_single_line() {
+    let content = "hello world";
+    let point = TreeSitterParser::offset_to_point(content, 6);
+    assert_eq!(point.row, 0);
+    assert_eq!(point.column, 6);
+  }
+
+  #[test]
+  fn test_offset_to_point_multi_line() {
+    let content = "line one\nline two\nline three";
+    // 'l' in "line two" is at offset 9
+    let point = TreeSitterParser::offset_to_point(content, 9);
+    assert_eq!(point.row, 1);
+    assert_eq!(point.column, 0);
+
+    // 't' in "two" is at offset 14
+    let point = TreeSitterParser::offset_to_point(content, 14);
+    assert_eq!(point.row, 1);
+    assert_eq!(point.column, 5);
+  }
+
+  #[test]
+  fn test_incremental_parse_add_function() {
+    let mut parser = TreeSitterParser::new();
+
+    let original = r#"
+fn main() {
+    println!("hello");
+}
+"#;
+
+    assert!(parser.parse_file(original, Language::Rust));
+
+    // Add a new function
+    let modified = r#"
+fn main() {
+    println!("hello");
+}
+
+fn new_function() {
+    println!("new");
+}
+"#;
+
+    assert!(parser.parse_file_incremental(modified, Language::Rust, None));
+
+    let defs = parser.extract_definitions_cached(modified, Language::Rust);
+    assert!(defs.iter().any(|d| d.name == "main"), "should find main");
+    assert!(
+      defs.iter().any(|d| d.name == "new_function"),
+      "should find new_function"
+    );
+  }
+
+  #[test]
+  fn test_incremental_parse_delete_function() {
+    let mut parser = TreeSitterParser::new();
+
+    let original = r#"
+fn main() {
+    println!("hello");
+}
+
+fn to_delete() {
+    println!("bye");
+}
+"#;
+
+    assert!(parser.parse_file(original, Language::Rust));
+
+    // Delete the second function
+    let modified = r#"
+fn main() {
+    println!("hello");
+}
+"#;
+
+    assert!(parser.parse_file_incremental(modified, Language::Rust, None));
+
+    let defs = parser.extract_definitions_cached(modified, Language::Rust);
+    assert!(defs.iter().any(|d| d.name == "main"), "should find main");
+    assert!(
+      !defs.iter().any(|d| d.name == "to_delete"),
+      "should not find deleted function"
+    );
   }
 }

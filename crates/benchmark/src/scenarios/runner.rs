@@ -2,6 +2,7 @@
 
 use super::{Expected, PreviousStepResults, Scenario, Step};
 use crate::ground_truth::load_scenario_annotations;
+use crate::llm_judge::{ComprehensionResult, LlmJudge};
 use crate::metrics::{AccuracyMetrics, PerformanceMetrics, ResourceMonitor};
 use crate::session::{ExplorationSession, HintType};
 use crate::{BenchmarkError, Result};
@@ -31,6 +32,9 @@ pub struct ScenarioResult {
   pub errors: Vec<String>,
   /// Total execution time
   pub total_duration_ms: u64,
+  /// LLM comprehension evaluation (if enabled)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub comprehension: Option<ComprehensionResult>,
 }
 
 /// Result of a single step execution.
@@ -70,6 +74,8 @@ pub struct ScenarioRunner {
   project_path: String,
   /// Optional annotations directory for ground truth
   annotations_dir: Option<PathBuf>,
+  /// Optional LLM judge for comprehension evaluation
+  llm_judge: Option<LlmJudge>,
 }
 
 impl ScenarioRunner {
@@ -79,7 +85,23 @@ impl ScenarioRunner {
       socket_path: socket_path.to_string(),
       project_path: project_path.to_string(),
       annotations_dir,
+      llm_judge: None,
     }
+  }
+
+  /// Enable LLM-as-judge evaluation for comprehension testing.
+  ///
+  /// When enabled, the runner will evaluate understanding of the codebase
+  /// using Claude to answer comprehension questions defined in scenarios.
+  pub fn with_llm_judge(mut self) -> Result<Self> {
+    let judge = LlmJudge::new();
+    if !judge.is_configured() {
+      return Err(BenchmarkError::Execution(
+        "LLM judge requires 'claude' CLI in PATH. Install it or run without --llm-judge.".into(),
+      ));
+    }
+    self.llm_judge = Some(judge);
+    Ok(self)
   }
 
   /// Get the default socket path.
@@ -196,7 +218,7 @@ impl ScenarioRunner {
     let accuracy =
       session.compute_accuracy_metrics_with_paths(&expected, &scenario.success_criteria, &exploration_paths);
 
-    // Determine if scenario passed
+    // Determine if scenario passed (before LLM judge)
     let passed = errors.is_empty()
       && accuracy.file_recall >= scenario.success_criteria.min_discovery_score
       && accuracy.noise_ratio <= scenario.success_criteria.max_noise_ratio
@@ -204,7 +226,8 @@ impl ScenarioRunner {
         .steps_to_core
         .is_none_or(|s| s <= scenario.success_criteria.max_steps_to_core);
 
-    Ok(ScenarioResult {
+    // Build preliminary result for LLM judge evaluation
+    let mut result = ScenarioResult {
       scenario_id: scenario.metadata.id.clone(),
       scenario_name: scenario.metadata.name.clone(),
       passed,
@@ -213,7 +236,36 @@ impl ScenarioRunner {
       steps: step_results,
       errors,
       total_duration_ms: total_duration.as_millis() as u64,
-    })
+      comprehension: None,
+    };
+
+    // Run LLM judge evaluation if enabled and scenario has comprehension questions
+    if let Some(judge) = &self.llm_judge {
+      if !scenario.llm_judge.comprehension_questions.is_empty() {
+        info!("Running LLM comprehension evaluation for {}", scenario.metadata.id);
+
+        match judge.evaluate(&result, &scenario.llm_judge).await {
+          Ok(comprehension_result) => {
+            // Update passed status based on comprehension
+            if !comprehension_result.passed {
+              result.passed = false;
+            }
+            result.comprehension = Some(comprehension_result);
+          }
+          Err(e) => {
+            warn!("LLM judge evaluation failed: {}", e);
+            result.errors.push(format!("LLM judge error: {}", e));
+          }
+        }
+      } else {
+        debug!(
+          "Skipping LLM judge for {} (no comprehension questions defined)",
+          scenario.metadata.id
+        );
+      }
+    }
+
+    Ok(result)
   }
 
   /// Execute a single step.
@@ -229,7 +281,8 @@ impl ScenarioRunner {
     // Check if query uses a previous suggestion
     session.check_suggestion_used(&step.query);
 
-    // Build explore request
+    // Build explore request - use step's expand_top or default to 3
+    let expand_top = step.expand_top.unwrap_or(3);
     let request = serde_json::json!({
         "jsonrpc": "2.0",
         "id": format!("step-{}", index),
@@ -237,7 +290,7 @@ impl ScenarioRunner {
         "params": {
             "query": step.query,
             "scope": step.scope.as_deref().unwrap_or("all"),
-            "expand_top": 3,
+            "expand_top": expand_top,
             "limit": 10,
             "cwd": self.project_path,
         }

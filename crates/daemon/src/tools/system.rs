@@ -195,32 +195,31 @@ impl ToolHandler {
     let mut error_count = 0u64;
     let target_dimensions = embedding.dimensions();
 
-    // Migrate memories
+    // Migrate memories using batch embedding
     // Note: We always re-embed when force is set, otherwise re-embed all
     // (since we can't easily check current dimensions from LanceDB)
     match db.list_memories(Some("is_deleted = false"), None).await {
       Ok(memories) => {
-        for memory in memories {
-          if !args.force {
-            // Without force, skip if we're unsure
-            skipped_count += 1;
-            continue;
-          }
-
-          // Re-embed the content
-          match embedding.embed(&memory.content).await {
-            Ok(new_embedding) => {
-              let new_vec: Vec<f32> = new_embedding.into_iter().collect();
-              if let Err(e) = db.update_memory(&memory, Some(&new_vec)).await {
-                warn!("Failed to update memory {} embedding: {}", memory.id, e);
-                error_count += 1;
-              } else {
-                migrated_count += 1;
+        if !args.force {
+          skipped_count += memories.len() as u64;
+        } else if !memories.is_empty() {
+          // Batch embed all memory contents
+          let texts: Vec<&str> = memories.iter().map(|m| m.content.as_str()).collect();
+          match embedding.embed_batch(&texts).await {
+            Ok(embeddings) => {
+              for (memory, new_embedding) in memories.iter().zip(embeddings.into_iter()) {
+                let new_vec: Vec<f32> = new_embedding.into_iter().collect();
+                if let Err(e) = db.update_memory(memory, Some(&new_vec)).await {
+                  warn!("Failed to update memory {} embedding: {}", memory.id, e);
+                  error_count += 1;
+                } else {
+                  migrated_count += 1;
+                }
               }
             }
             Err(e) => {
-              warn!("Failed to re-embed memory {}: {}", memory.id, e);
-              error_count += 1;
+              warn!("Failed to batch embed memories: {}", e);
+              error_count += memories.len() as u64;
             }
           }
         }
@@ -230,28 +229,28 @@ impl ToolHandler {
       }
     }
 
-    // Migrate code chunks
+    // Migrate code chunks using batch embedding
     match db.list_code_chunks(None, None).await {
       Ok(chunks) => {
-        for chunk in chunks {
-          if !args.force {
-            skipped_count += 1;
-            continue;
-          }
-
-          match embedding.embed(&chunk.content).await {
-            Ok(new_embedding) => {
-              let new_vec: Vec<f32> = new_embedding.into_iter().collect();
-              if let Err(e) = db.update_code_chunk(&chunk, Some(&new_vec)).await {
-                warn!("Failed to update code chunk {} embedding: {}", chunk.id, e);
-                error_count += 1;
-              } else {
-                migrated_count += 1;
+        if !args.force {
+          skipped_count += chunks.len() as u64;
+        } else if !chunks.is_empty() {
+          let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+          match embedding.embed_batch(&texts).await {
+            Ok(embeddings) => {
+              for (chunk, new_embedding) in chunks.iter().zip(embeddings.into_iter()) {
+                let new_vec: Vec<f32> = new_embedding.into_iter().collect();
+                if let Err(e) = db.update_code_chunk(chunk, Some(&new_vec)).await {
+                  warn!("Failed to update code chunk {} embedding: {}", chunk.id, e);
+                  error_count += 1;
+                } else {
+                  migrated_count += 1;
+                }
               }
             }
             Err(e) => {
-              warn!("Failed to re-embed code chunk {}: {}", chunk.id, e);
-              error_count += 1;
+              warn!("Failed to batch embed code chunks: {}", e);
+              error_count += chunks.len() as u64;
             }
           }
         }
@@ -261,28 +260,28 @@ impl ToolHandler {
       }
     }
 
-    // Migrate document chunks
+    // Migrate document chunks using batch embedding
     match db.list_document_chunks(None, None).await {
       Ok(chunks) => {
-        for chunk in chunks {
-          if !args.force {
-            skipped_count += 1;
-            continue;
-          }
-
-          match embedding.embed(&chunk.content).await {
-            Ok(new_embedding) => {
-              let new_vec: Vec<f32> = new_embedding.into_iter().collect();
-              if let Err(e) = db.update_document_chunk(&chunk, Some(&new_vec)).await {
-                warn!("Failed to update doc chunk {} embedding: {}", chunk.id, e);
-                error_count += 1;
-              } else {
-                migrated_count += 1;
+        if !args.force {
+          skipped_count += chunks.len() as u64;
+        } else if !chunks.is_empty() {
+          let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+          match embedding.embed_batch(&texts).await {
+            Ok(embeddings) => {
+              for (chunk, new_embedding) in chunks.iter().zip(embeddings.into_iter()) {
+                let new_vec: Vec<f32> = new_embedding.into_iter().collect();
+                if let Err(e) = db.update_document_chunk(chunk, Some(&new_vec)).await {
+                  warn!("Failed to update doc chunk {} embedding: {}", chunk.id, e);
+                  error_count += 1;
+                } else {
+                  migrated_count += 1;
+                }
               }
             }
             Err(e) => {
-              warn!("Failed to re-embed doc chunk {}: {}", chunk.id, e);
-              error_count += 1;
+              warn!("Failed to batch embed document chunks: {}", e);
+              error_count += chunks.len() as u64;
             }
           }
         }

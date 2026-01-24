@@ -174,69 +174,126 @@ impl OllamaProvider {
     }
   }
 
-  /// Native batch embedding using /api/embed endpoint (single HTTP request)
+  /// Native batch embedding using /api/embed endpoint.
+  ///
+  /// Processes sub-batches concurrently using semaphore-limited parallelism.
+  /// This significantly improves throughput when multiple sub-batches are needed,
+  /// while respecting the server's capacity limits.
   async fn embed_batch_native(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
-    // Split into sub-batches based on max_batch_size
-    let mut all_embeddings = Vec::with_capacity(texts.len());
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
 
-    for chunk in texts.chunks(self.max_batch_size) {
-      let request = BatchEmbeddingRequest {
-        model: &self.model,
-        input: chunk.to_vec(),
-      };
+    let num_batches = texts.len().div_ceil(self.max_batch_size);
 
-      debug!(
-        "Batch embedding {} texts with Ollama (batch size: {})",
-        chunk.len(),
-        self.max_batch_size
-      );
+    // For single batch, no concurrency overhead needed
+    if num_batches <= 1 {
+      return self.embed_single_batch(texts).await;
+    }
 
-      let response = self.client.post(self.embed_url()).json(&request).send().await?;
+    debug!(
+      "Processing {} texts in {} concurrent sub-batches (max batch size: {})",
+      texts.len(),
+      num_batches,
+      self.max_batch_size
+    );
 
-      if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        warn!("Ollama batch embedding failed: {} - {}", status, body);
-        return Err(EmbeddingError::ProviderError(format!(
-          "Ollama returned {}: {}",
-          status, body
-        )));
-      }
+    // Limit concurrent requests to avoid overwhelming the server
+    // Using 4 concurrent requests as a reasonable default
+    let semaphore = Arc::new(Semaphore::new(4));
 
-      let result: BatchEmbeddingResponse = response.json().await?;
-
-      if result.embeddings.len() != chunk.len() {
-        warn!(
-          "Batch size mismatch: got {} embeddings for {} inputs",
-          result.embeddings.len(),
-          chunk.len()
-        );
-        return Err(EmbeddingError::ProviderError(format!(
-          "Batch size mismatch: got {} embeddings for {} inputs",
-          result.embeddings.len(),
-          chunk.len()
-        )));
-      }
-
-      for embedding in result.embeddings {
-        if embedding.len() != self.dimensions {
-          warn!(
-            "Unexpected embedding dimensions: got {}, expected {}",
-            embedding.len(),
-            self.dimensions
-          );
+    // Create indexed sub-batch tasks
+    let futures: Vec<_> = texts
+      .chunks(self.max_batch_size)
+      .enumerate()
+      .map(|(batch_idx, chunk)| {
+        let permit = semaphore.clone();
+        let provider = self.clone();
+        let chunk_owned: Vec<String> = chunk.iter().map(|s| s.to_string()).collect();
+        async move {
+          let _permit = match permit.acquire().await {
+            Ok(permit) => permit,
+            Err(_) => return Err(EmbeddingError::ProviderError("semaphore closed".to_string())),
+          };
+          let chunk_refs: Vec<&str> = chunk_owned.iter().map(|s| s.as_str()).collect();
+          let embeddings = provider.embed_single_batch(&chunk_refs).await?;
+          Ok((batch_idx, embeddings))
         }
-        all_embeddings.push(embedding);
-      }
+      })
+      .collect();
+
+    // Wait for all batches concurrently
+    #[allow(clippy::type_complexity)]
+    let results: Vec<Result<(usize, Vec<Vec<f32>>), EmbeddingError>> = futures::future::join_all(futures).await;
+
+    // Collect and sort results by batch index to maintain order
+    let mut indexed_results: Vec<(usize, Vec<Vec<f32>>)> = Vec::with_capacity(num_batches);
+    for result in results {
+      indexed_results.push(result?);
+    }
+    indexed_results.sort_by_key(|(idx, _)| *idx);
+
+    // Flatten into final result
+    let mut all_embeddings = Vec::with_capacity(texts.len());
+    for (_, embeddings) in indexed_results {
+      all_embeddings.extend(embeddings);
     }
 
     info!(
-      "Batch embedded {} texts in {} sub-batches",
+      "Batch embedded {} texts in {} concurrent sub-batches",
       texts.len(),
-      texts.len().div_ceil(self.max_batch_size)
+      num_batches
     );
 
     Ok(all_embeddings)
+  }
+
+  /// Embed a single batch of texts (used internally by embed_batch_native)
+  async fn embed_single_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+    let request = BatchEmbeddingRequest {
+      model: &self.model,
+      input: texts.to_vec(),
+    };
+
+    debug!("Embedding batch of {} texts with Ollama", texts.len());
+
+    let response = self.client.post(self.embed_url()).json(&request).send().await?;
+
+    if !response.status().is_success() {
+      let status = response.status();
+      let body = response.text().await.unwrap_or_default();
+      warn!("Ollama batch embedding failed: {} - {}", status, body);
+      return Err(EmbeddingError::ProviderError(format!(
+        "Ollama returned {}: {}",
+        status, body
+      )));
+    }
+
+    let result: BatchEmbeddingResponse = response.json().await?;
+
+    if result.embeddings.len() != texts.len() {
+      warn!(
+        "Batch size mismatch: got {} embeddings for {} inputs",
+        result.embeddings.len(),
+        texts.len()
+      );
+      return Err(EmbeddingError::ProviderError(format!(
+        "Batch size mismatch: got {} embeddings for {} inputs",
+        result.embeddings.len(),
+        texts.len()
+      )));
+    }
+
+    for embedding in &result.embeddings {
+      if embedding.len() != self.dimensions {
+        warn!(
+          "Unexpected embedding dimensions: got {}, expected {}",
+          embedding.len(),
+          self.dimensions
+        );
+      }
+    }
+
+    Ok(result.embeddings)
   }
 
   /// Parallel batch embedding (fallback) - uses semaphore to limit concurrency

@@ -270,6 +270,32 @@ impl Default for SearchConfig {
 // Indexing Configuration
 // ============================================================================
 
+/// Startup scan mode determines what changes to detect
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanMode {
+  /// Only detect and remove deleted files (fastest)
+  DeletedOnly,
+  /// Detect deleted and new files
+  DeletedAndNew,
+  /// Full reconciliation: deleted, new, and modified
+  #[default]
+  Full,
+}
+
+impl std::str::FromStr for ScanMode {
+  type Err = String;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s.to_lowercase().as_str() {
+      "deleted_only" | "deletedonly" => Ok(ScanMode::DeletedOnly),
+      "deleted_and_new" | "deletedandnew" => Ok(ScanMode::DeletedAndNew),
+      "full" => Ok(ScanMode::Full),
+      _ => Err(format!("Invalid scan mode: {}", s)),
+    }
+  }
+}
+
 /// Code indexing configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -290,6 +316,28 @@ pub struct IndexConfig {
   /// Higher values use more memory but may be faster on SSDs.
   /// Reduce if experiencing memory pressure.
   pub parallel_files: usize,
+
+  // ---- Startup Scan Settings ----
+
+  /// Enable startup scan when watcher starts (default: true)
+  /// The scan reconciles the database with filesystem state to detect
+  /// files that were added, modified, or deleted while the watcher was stopped.
+  pub startup_scan: bool,
+
+  /// Startup scan mode (default: full)
+  /// - deleted_only: Only detect and remove deleted files (fastest)
+  /// - deleted_and_new: Detect deleted and new files
+  /// - full: Full reconciliation including modified file detection
+  pub startup_scan_mode: ScanMode,
+
+  /// Block watcher startup until scan completes (default: false)
+  /// When false, watcher starts immediately and scan runs in background.
+  /// When true, watcher waits for scan to complete before processing events.
+  pub startup_scan_blocking: bool,
+
+  /// Timeout for startup scan in seconds (default: 300)
+  /// Set to 0 for no timeout.
+  pub startup_scan_timeout_secs: u64,
 }
 
 impl Default for IndexConfig {
@@ -300,6 +348,10 @@ impl Default for IndexConfig {
       max_file_size: 1024 * 1024, // 1MB
       max_chunk_chars: 2000,
       parallel_files: 4,
+      startup_scan: true,
+      startup_scan_mode: ScanMode::Full,
+      startup_scan_blocking: false,
+      startup_scan_timeout_secs: 300,
     }
   }
 }
@@ -757,6 +809,29 @@ max_chunk_chars = 2000
 # Higher values use more memory but may be faster on SSDs
 # Reduce if experiencing memory pressure
 parallel_files = 4
+
+# ---- Startup Scan Settings ----
+
+# Enable startup scan when watcher starts (default: true)
+# Reconciles database with filesystem state to detect files added/modified/deleted
+# while the watcher was stopped. Only runs if project was previously indexed.
+startup_scan = true
+
+# Startup scan mode (default: full)
+#   deleted_only   = Only detect and remove deleted files (fastest)
+#   deleted_and_new = Detect deleted and new files
+#   full           = Full reconciliation including modified file detection
+startup_scan_mode = "full"
+
+# Block watcher startup until scan completes (default: false)
+# When false, watcher starts immediately and scan runs in background.
+# When true, watcher waits for scan to complete before processing events.
+# Note: Searches will block until scan completes regardless of this setting.
+startup_scan_blocking = false
+
+# Timeout for startup scan in seconds (default: 300)
+# Set to 0 for no timeout.
+startup_scan_timeout_secs = 300
 
 # ============================================================================
 # Document Indexing

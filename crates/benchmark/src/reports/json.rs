@@ -87,6 +87,18 @@ pub struct AggregateAccuracy {
   pub avg_context_bloat: f64,
   /// Average dead end ratio
   pub avg_dead_end_ratio: f64,
+  /// Average time to first relevant result in ms (only from scenarios that found one)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub avg_time_to_first_relevant_ms: Option<f64>,
+  /// Average file diversity in top-5 results
+  pub avg_file_diversity_top5: f64,
+
+  // === LLM comprehension metrics ===
+  /// Average comprehension score (only from scenarios with LLM judge enabled)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub avg_comprehension_score: Option<f64>,
+  /// Number of scenarios that had comprehension evaluation
+  pub comprehension_scenarios_count: usize,
 }
 
 impl BenchmarkReport {
@@ -175,10 +187,36 @@ impl BenchmarkReport {
         avg_suggestion_quality: 0.0,
         avg_context_bloat: 0.0,
         avg_dead_end_ratio: 0.0,
+        avg_time_to_first_relevant_ms: None,
+        avg_file_diversity_top5: 1.0,
+        avg_comprehension_score: None,
+        comprehension_scenarios_count: 0,
       };
     }
 
     let n = results.len() as f64;
+
+    // Calculate average time to first relevant (only from scenarios that found one)
+    let times: Vec<u64> = results
+      .iter()
+      .filter_map(|r| r.accuracy.time_to_first_relevant_ms)
+      .collect();
+    let avg_time_to_first_relevant_ms = if times.is_empty() {
+      None
+    } else {
+      Some(times.iter().sum::<u64>() as f64 / times.len() as f64)
+    };
+
+    // Calculate average comprehension score (only from scenarios with LLM judge)
+    let comprehension_scores: Vec<f64> = results
+      .iter()
+      .filter_map(|r| r.comprehension.as_ref().map(|c| c.overall_score))
+      .collect();
+    let avg_comprehension_score = if comprehension_scores.is_empty() {
+      None
+    } else {
+      Some(comprehension_scores.iter().sum::<f64>() / comprehension_scores.len() as f64)
+    };
 
     AggregateAccuracy {
       avg_file_recall: results.iter().map(|r| r.accuracy.file_recall).sum::<f64>() / n,
@@ -190,6 +228,14 @@ impl BenchmarkReport {
       avg_suggestion_quality: results.iter().map(|r| r.accuracy.suggestion_quality).sum::<f64>() / n,
       avg_context_bloat: results.iter().map(|r| r.accuracy.context_bloat).sum::<f64>() / n,
       avg_dead_end_ratio: results.iter().map(|r| r.accuracy.dead_end_ratio).sum::<f64>() / n,
+      avg_time_to_first_relevant_ms,
+      avg_file_diversity_top5: results
+        .iter()
+        .map(|r| r.accuracy.avg_file_diversity_top5)
+        .sum::<f64>()
+        / n,
+      avg_comprehension_score,
+      comprehension_scenarios_count: comprehension_scores.len(),
     }
   }
 
@@ -273,6 +319,8 @@ mod tests {
         max_consecutive_failures: 1,
         rabbit_hole_steps: 0,
         rabbit_hole_ratio: 0.0,
+        time_to_first_relevant_ms: Some(150),
+        avg_file_diversity_top5: 0.8,
         files_found: vec!["found.rs".to_string()],
         files_missed: vec!["missed.rs".to_string()],
         symbols_found: vec!["Found".to_string()],
@@ -281,6 +329,7 @@ mod tests {
       steps: vec![],
       errors: vec![],
       total_duration_ms: 500,
+      comprehension: None,
     }
   }
 

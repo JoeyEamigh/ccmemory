@@ -1,4 +1,5 @@
 pub mod activity_tracker;
+pub mod cache;
 pub mod client;
 pub mod hooks;
 pub mod lifecycle;
@@ -8,17 +9,22 @@ pub mod scheduler;
 pub mod server;
 pub mod session_tracker;
 pub mod shutdown_watcher;
+pub mod startup_scan;
 pub mod tools;
 
 pub use activity_tracker::ActivityTracker;
+pub use cache::{CacheStats, CachedFileContent, FileContentCache};
 pub use client::{connect_or_start, connect_or_start_at, is_daemon_running};
 pub use db::{default_cache_dir, default_config_dir, default_data_dir, default_port};
 pub use hooks::{HookError, HookEvent, HookHandler};
 pub use lifecycle::{Daemon, DaemonConfig, LifecycleError, is_running};
-pub use projects::{ProjectError, ProjectInfo, ProjectRegistry};
+pub use projects::{ProjectError, ProjectInfo, ProjectRegistry, WatcherStatus};
 pub use router::{Request, Response, Router, RpcError};
 pub use scheduler::{Scheduler, SchedulerConfig, spawn_scheduler};
 pub use server::{Client, Server, ServerError, ShutdownHandle, default_socket_path};
 pub use session_tracker::{SessionId, SessionTracker};
 pub use shutdown_watcher::ShutdownWatcher;
+pub use startup_scan::{ApplyResult, ScanError, ScanResult, ScanState, StartupScanConfig, StartupScanner};
+// Re-export ScanMode from engram_core
+pub use engram_core::ScanMode;
 pub use tools::ToolHandler;

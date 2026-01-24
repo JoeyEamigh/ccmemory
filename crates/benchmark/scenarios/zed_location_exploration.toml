@@ -1,0 +1,95 @@
+# Location-Based Exploration Scenario
+#
+# Tests exploration through location-oriented questions.
+# "Where would I add X?" and "Where is Y defined?" are common
+# patterns when agents need to modify or extend functionality.
+
+[scenario]
+id = "zed-location-exploration"
+name = "Location-Based Exploration"
+repo = "zed"
+difficulty = "medium"
+description = "Find where to add a new editor command by asking location-based questions"
+
+[task]
+prompt = "Find where to add a new editor command"
+intent = "architectural_discovery"
+
+[expected]
+must_find_files = [
+    "**/actions.rs",
+    "**/commands/**",
+    "**/keymap/**",
+]
+must_find_symbols = [
+    "register",
+    "Command",
+    "Action",
+    "actions",
+    "impl_actions",
+]
+noise_patterns = [
+    "**/tests/**",
+    "**/test/**",
+    "test_*",
+    "Mock*",
+    "**/fixtures/**",
+]
+
+# Step 1: Ask where commands are defined
+[[steps]]
+query = "Where are editor commands defined?"
+expand_top = 3
+expected_results = 5
+max_noise_ratio = 0.35
+scope = "code"
+
+# Step 2: Ask how to register new commands
+[[steps]]
+query = "How do I register a new command?"
+depends_on_previous = true
+expected_results = 4
+scope = "code"
+
+# Step 3: Follow up on a discovered pattern/symbol
+[[steps]]
+query = "What's the pattern for {{previous.symbol}}?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+
+# Step 4: Understand the full registration flow
+[[steps]]
+query = "Where does {{previous.symbol}} get called from?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+context_ids = ["{{previous.id}}"]
+
+[success]
+min_discovery_score = 0.5
+max_noise_ratio = 0.35
+max_steps_to_core = 3
+min_file_diversity = 0.4
+
+# LLM-as-judge comprehension evaluation
+[llm_judge]
+min_comprehension_score = 0.5
+
+[[llm_judge.comprehension_questions]]
+question = "Where would you add a new editor action in Zed?"
+expected_concepts = ["actions.rs", "impl_actions", "Action trait"]
+wrong_concepts = ["main.rs", "config file"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "How are actions registered with the editor?"
+expected_concepts = ["register", "ActionRegistry", "gpui"]
+wrong_concepts = ["plugin system", "dynamic loading"]
+weight = 1.0
+
+[[llm_judge.comprehension_questions]]
+question = "What files need to change to add a new keybinding?"
+expected_concepts = ["keymap", "default.json", "KeyBinding"]
+wrong_concepts = []
+weight = 1.0

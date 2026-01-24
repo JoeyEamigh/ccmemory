@@ -100,6 +100,9 @@ pub struct Step {
   /// Also supports templates: `{{previous.id}}`, `{{previous.ids[N]}}`
   #[serde(default)]
   pub context_ids: Vec<String>,
+  /// Number of top results to expand with full context (default: 3)
+  #[serde(default)]
+  pub expand_top: Option<usize>,
 }
 
 impl Step {
@@ -262,6 +265,12 @@ pub struct SuccessCriteria {
   /// Maximum dead end ratio (% of steps with no discoveries, target <= 0.2)
   #[serde(default)]
   pub max_dead_end_ratio: Option<f64>,
+  /// Maximum time to first relevant result in milliseconds
+  #[serde(default)]
+  pub max_time_to_first_relevant_ms: Option<u64>,
+  /// Minimum file diversity in top-5 results (e.g., 0.6 = at least 3 unique files in top 5)
+  #[serde(default)]
+  pub min_file_diversity: Option<f64>,
 }
 
 fn default_min_discovery_score() -> f64 {
@@ -289,6 +298,8 @@ impl Default for SuccessCriteria {
       min_navigation_efficiency: None,
       min_suggestion_quality: None,
       max_dead_end_ratio: None,
+      max_time_to_first_relevant_ms: None,
+      min_file_diversity: None,
     }
   }
 }
@@ -372,6 +383,7 @@ impl Scenario {
         depends_on_previous: false,
         scope: None,
         context_ids: vec![],
+        expand_top: None,
       }],
       success_criteria: SuccessCriteria::default(),
       llm_judge: LlmJudgeConfig::default(),
@@ -457,5 +469,49 @@ max_steps_to_core = 3
   #[test]
   fn test_task_intent_default() {
     assert_eq!(TaskIntent::default(), TaskIntent::ArchitecturalDiscovery);
+  }
+
+  #[test]
+  fn test_parse_expand_top() {
+    const EXPAND_TOP_TOML: &str = r#"
+[scenario]
+id = "test-expand-top"
+name = "Test Expand Top"
+repo = "zed"
+
+[task]
+prompt = "Test expand_top configuration"
+
+[[steps]]
+query = "First query"
+expand_top = 5
+
+[[steps]]
+query = "Second query"
+
+[[steps]]
+query = "Third query"
+expand_top = 2
+"#;
+
+    let scenario: Scenario = toml::from_str(EXPAND_TOP_TOML).unwrap();
+    assert!(scenario.validate().is_ok());
+
+    // First step has custom expand_top = 5
+    assert_eq!(scenario.steps[0].expand_top, Some(5));
+
+    // Second step has no expand_top (should default to None, caller uses 3)
+    assert_eq!(scenario.steps[1].expand_top, None);
+
+    // Third step has custom expand_top = 2
+    assert_eq!(scenario.steps[2].expand_top, Some(2));
+  }
+
+  #[test]
+  fn test_expand_top_default() {
+    // Verify that parsing without expand_top works (backward compatible)
+    let scenario: Scenario = toml::from_str(SAMPLE_TOML).unwrap();
+    assert_eq!(scenario.steps[0].expand_top, None);
+    assert_eq!(scenario.steps[1].expand_top, None);
   }
 }

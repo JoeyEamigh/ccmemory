@@ -116,6 +116,26 @@ Options:
 
 Both are editor codebases with complex architectural discovery scenarios.
 
+## Built-in Scenarios
+
+| Scenario | Repo | Pattern | Difficulty | Description |
+|----------|------|---------|------------|-------------|
+| `zed-blind-exploration` | zed | Blind | hard | Explore from zero knowledge |
+| `zed-command-system` | zed | Architectural | hard | Command/action system discovery |
+| `zed-lsp-integration` | zed | Architectural | hard | LSP integration patterns |
+| `zed-feature-exploration` | zed | Feature | medium | "How does file saving work?" |
+| `zed-location-exploration` | zed | Location | medium | "Where to add new commands?" |
+| `zed-pattern-exploration` | zed | Pattern | hard | HTTP/external service patterns |
+| `vscode-blind-exploration` | vscode | Blind | hard | Explore from zero knowledge |
+| `vscode-editor-core` | vscode | Architectural | hard | Core editor discovery |
+| `vscode-extension-system` | vscode | Architectural | hard | Extension API patterns |
+
+Run specific scenarios with glob patterns:
+```bash
+cargo run -p benchmark -- run --scenarios "zed-feature*"
+cargo run -p benchmark -- run --scenarios "*blind*"
+```
+
 ## Scenario Definition Format
 
 Scenarios are defined in TOML files in `crates/benchmark/scenarios/`:
@@ -145,10 +165,12 @@ query = "How does Zed handle editor commands and actions?"
 expected_results = 5
 max_noise_ratio = 0.3
 scope = "code"  # code, memory, docs, all
+expand_top = 3  # Include full context for top N results (default: 3)
 
 [[steps]]
 query = "What is the Action type and how is it dispatched?"
 depends_on_previous = true
+expand_top = 5  # More context when following up
 
 [success]
 min_discovery_score = 0.7       # File recall target
@@ -159,6 +181,8 @@ max_context_bloat = 0.3         # Max % of useless context calls
 min_navigation_efficiency = 0.5 # optimal/actual hops
 min_suggestion_quality = 0.5    # % of useful suggestions
 max_dead_end_ratio = 0.2        # Max % of wasted queries
+max_time_to_first_relevant_ms = 5000  # Max time to first useful result
+min_file_diversity = 0.6        # Min unique files in top-5 results (0.6 = 3/5)
 ```
 
 ## Metrics
@@ -194,6 +218,8 @@ max_dead_end_ratio = 0.2        # Max % of wasted queries
 | **Top-3 Noise** | Noise in top 3 results | <= 10% |
 | **Hint Utility** | % of callers/callees that are relevant | >= 60% |
 | **Suggestion Quality** | % of suggestions leading to useful results | >= 50% |
+| **Time to First Relevant** | Milliseconds until first useful result found | <= 5000ms |
+| **File Diversity (Top-5)** | Unique files / top-5 results (1.0 = all different files) | >= 60% |
 
 ### Exploration Quality Metrics
 
@@ -472,24 +498,115 @@ crates/benchmark/
 ├── scenarios/                # Built-in scenarios
 │   ├── zed_commands.toml
 │   ├── zed_lsp.toml
+│   ├── zed_blind_exploration.toml
+│   ├── zed_feature_exploration.toml
+│   ├── zed_location_exploration.toml
+│   ├── zed_pattern_exploration.toml
 │   ├── vscode_extensions.toml
-│   └── vscode_editor.toml
+│   ├── vscode_editor.toml
+│   └── vscode_blind_exploration.toml
 └── annotations/              # Optional ground truth
     ├── zed/
+    │   └── zed-command-system.json
     └── vscode/
 ```
 
 ## Writing New Scenarios
 
+### Exploration Query Patterns
+
+Different exploration goals require different query patterns. The benchmark includes scenarios for each major pattern:
+
+#### 1. Feature-Based Exploration
+Questions like "How does X work?" - understanding functionality without knowing implementation details.
+
+```toml
+[[steps]]
+query = "How does file saving work?"
+expand_top = 4
+
+[[steps]]
+query = "What triggers a save operation?"
+depends_on_previous = true
+
+[[steps]]
+query = "How are unsaved changes tracked?"
+depends_on_previous = true
+```
+
+**Use when:** Agent needs to understand a feature's behavior and implementation.
+
+#### 2. Location-Based Exploration
+Questions like "Where is X defined?" or "Where would I add Y?" - finding where to modify code.
+
+```toml
+[[steps]]
+query = "Where are editor commands defined?"
+expand_top = 3
+
+[[steps]]
+query = "How do I register a new command?"
+depends_on_previous = true
+
+[[steps]]
+query = "What's the pattern for {{previous.symbol}}?"
+depends_on_previous = true
+```
+
+**Use when:** Agent needs to add or modify functionality.
+
+#### 3. Pattern-Based Exploration
+Questions like "What handles X?" - understanding cross-cutting architectural patterns.
+
+```toml
+[[steps]]
+query = "What makes HTTP requests to external services?"
+expand_top = 5
+
+[[steps]]
+query = "How is authentication handled for external APIs?"
+depends_on_previous = true
+
+[[steps]]
+query = "Where is {{previous.symbol}} configured?"
+depends_on_previous = true
+```
+
+**Use when:** Agent needs to understand how the codebase handles a concern (auth, logging, errors, etc.).
+
+#### 4. Blind Exploration
+Generic questions without codebase-specific terms - testing true discovery capability.
+
+```toml
+[[steps]]
+query = "What is the main entry point of this application?"
+
+[[steps]]
+query = "How is the user interface organized?"
+depends_on_previous = true
+
+[[steps]]
+query = "What does {{previous.symbol}} do?"
+depends_on_previous = true
+```
+
+**Use when:** Testing exploration from zero knowledge.
+
+### Step-by-Step Guide
+
 1. **Identify the exploration goal**: What should an agent discover?
 
-2. **Define expected outcomes**: Which files/symbols are critical?
+2. **Choose a query pattern**: Feature, location, pattern, or blind exploration?
 
-3. **Create multi-step queries**: How would an agent naturally explore?
+3. **Define expected outcomes**: Which files/symbols are critical?
 
-4. **Set realistic thresholds**: Based on difficulty level
+4. **Create multi-step queries**: How would an agent naturally explore?
 
-Example scenario creation:
+5. **Set realistic thresholds**: Based on difficulty level
+
+6. **Tune `expand_top`**: More context (4-5) for broad queries, less (2-3) for focused ones
+
+### Example scenario creation:
 
 ```toml
 # scenarios/my_new_scenario.toml
@@ -499,6 +616,7 @@ id = "my-new-scenario"
 name = "Exploring Feature X"
 repo = "zed"
 difficulty = "medium"
+description = "Explore how feature X is implemented and used"
 
 [task]
 prompt = "How does feature X work?"
@@ -512,10 +630,18 @@ noise_patterns = ["**/tests/**"]
 [[steps]]
 query = "Where is feature X implemented?"
 expected_results = 3
+expand_top = 4  # Get more context for initial broad query
+scope = "code"
 
 [[steps]]
 query = "How is FeatureX initialized?"
 depends_on_previous = true
+expand_top = 3
+
+[[steps]]
+query = "What calls {{previous.symbol}}?"
+depends_on_previous = true
+context_ids = ["{{previous.id}}"]
 
 [success]
 min_discovery_score = 0.6
@@ -523,7 +649,46 @@ max_noise_ratio = 0.3
 max_steps_to_core = 2
 min_convergence_rate = 0.6
 max_context_bloat = 0.35
+min_file_diversity = 0.5
+max_time_to_first_relevant_ms = 3000
+
+# Optional: LLM comprehension testing
+[llm_judge]
+min_comprehension_score = 0.5
+
+[[llm_judge.comprehension_questions]]
+question = "How is feature X structured?"
+expected_concepts = ["FeatureX", "init", "module"]
+wrong_concepts = []
+weight = 1.0
 ```
+
+### Step Configuration Reference
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `query` | string | required | The exploration query |
+| `scope` | string | `"all"` | Search scope: `code`, `memory`, `docs`, `all` |
+| `expand_top` | int | `3` | Include full context for top N results |
+| `expected_results` | int | none | Expected number of results |
+| `max_noise_ratio` | float | none | Max acceptable noise for this step |
+| `depends_on_previous` | bool | `false` | Enable template resolution |
+| `context_ids` | array | none | IDs to fetch context for |
+
+### Success Criteria Reference
+
+| Criterion | Type | Description |
+|-----------|------|-------------|
+| `min_discovery_score` | float | Minimum file recall (0.0-1.0) |
+| `max_noise_ratio` | float | Maximum noise in results |
+| `max_steps_to_core` | int | Max steps to find first core result |
+| `min_convergence_rate` | float | How quickly discoveries plateau |
+| `max_context_bloat` | float | Max % of useless context calls |
+| `min_navigation_efficiency` | float | optimal_hops / actual_hops |
+| `min_suggestion_quality` | float | % of useful suggestions |
+| `max_dead_end_ratio` | float | Max % of wasted queries |
+| `max_time_to_first_relevant_ms` | int | Max ms to first useful result |
+| `min_file_diversity` | float | Min unique files / top-5 results |
 
 ## Troubleshooting
 

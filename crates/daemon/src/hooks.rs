@@ -737,11 +737,29 @@ impl HookHandler {
               }
             };
 
-            for extracted in &result.memories {
-              if extracted.content.len() < 20 {
-                continue;
-              }
+            // Filter valid memories (content length >= 20)
+            let valid_memories: Vec<_> = result.memories.iter().filter(|m| m.content.len() >= 20).collect();
 
+            if valid_memories.is_empty() {
+              debug!("Background extraction: no valid memories after filtering");
+              return;
+            }
+
+            // Batch embed all memory contents
+            let texts: Vec<&str> = valid_memories.iter().map(|m| m.content.as_str()).collect();
+            let embeddings: Vec<Option<Vec<f32>>> = match &embedding {
+              Some(provider) => match provider.embed_batch(&texts).await {
+                Ok(vecs) => vecs.into_iter().map(Some).collect(),
+                Err(e) => {
+                  warn!("Background extraction batch embedding failed: {}", e);
+                  vec![None; valid_memories.len()]
+                }
+              },
+              None => vec![None; valid_memories.len()],
+            };
+
+            // Create and store memories with precomputed embeddings
+            for (extracted, embedding_opt) in valid_memories.iter().zip(embeddings.into_iter()) {
               // Compute hashes for dedup
               let (content_hash, simhash) = compute_hashes(&extracted.content);
               let project_uuid = uuid::Uuid::new_v4();
@@ -769,12 +787,8 @@ impl HookHandler {
                 memory.summary = Some(summary.clone());
               }
 
-              // Generate embedding
-              let vector = match &embedding {
-                Some(provider) => provider.embed(&extracted.content).await.ok(),
-                None => None,
-              }
-              .unwrap_or_else(|| vec![0.0f32; db.vector_dim]);
+              // Use precomputed embedding or fallback to zero vector
+              let vector = embedding_opt.unwrap_or_else(|| vec![0.0f32; db.vector_dim]);
 
               // Store memory
               if let Err(e) = db.add_memory(&memory, Some(&vector)).await {

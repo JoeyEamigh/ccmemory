@@ -46,6 +46,7 @@ query = "What is the main entry point of this application?"
 expected_results = 3
 max_noise_ratio = 0.3
 scope = "code"
+expand_top = 3
 
 # Step 2: Try to understand the architecture without knowing terms
 [[steps]]
@@ -84,3 +85,26 @@ max_context_bloat = 0.4         # May need more context calls
 min_navigation_efficiency = 0.3 # May take less efficient paths
 min_suggestion_quality = 0.3    # Suggestions may be less targeted
 max_dead_end_ratio = 0.35       # May hit more dead ends
+
+# LLM-as-judge comprehension evaluation
+# Run with --llm-judge to enable
+[llm_judge]
+min_comprehension_score = 0.5   # Lower threshold for blind exploration
+
+[[llm_judge.comprehension_questions]]
+question = "What is the core UI framework used by this editor?"
+expected_concepts = ["GPUI", "View", "Model", "Element"]
+wrong_concepts = ["React", "Vue", "Electron"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "How are editor commands and keybindings organized?"
+expected_concepts = ["Action", "Keymap", "dispatch"]
+wrong_concepts = ["Redux", "Vuex"]
+weight = 1.0
+
+[[llm_judge.comprehension_questions]]
+question = "What is the relationship between Workspace and Editor components?"
+expected_concepts = ["Workspace", "Editor", "pane", "buffer"]
+wrong_concepts = []
+weight = 1.0

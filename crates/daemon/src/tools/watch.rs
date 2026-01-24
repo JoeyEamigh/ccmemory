@@ -2,6 +2,8 @@
 
 use super::ToolHandler;
 use crate::router::{Request, Response};
+use crate::startup_scan::StartupScanConfig;
+use engram_core::{Config, ScanMode};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -12,6 +14,15 @@ impl ToolHandler {
     struct Args {
       #[serde(default)]
       cwd: Option<String>,
+      /// Override startup_scan enabled setting
+      #[serde(default)]
+      startup_scan: Option<bool>,
+      /// Override startup_scan_mode setting
+      #[serde(default)]
+      startup_scan_mode: Option<String>,
+      /// Override startup_scan_blocking setting
+      #[serde(default)]
+      startup_scan_blocking: Option<bool>,
     }
 
     let args: Args = match serde_json::from_value(request.params.clone()) {
@@ -30,10 +41,31 @@ impl ToolHandler {
       Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
     };
 
+    // Build startup scan config with CLI overrides
+    let config = Config::load_for_project(&project_path);
+    let mut scan_config = StartupScanConfig::from_config(&config);
+
+    // Apply CLI overrides
+    if let Some(enabled) = args.startup_scan {
+      scan_config.enabled = enabled;
+    }
+    if let Some(ref mode_str) = args.startup_scan_mode
+      && let Ok(mode) = mode_str.parse::<ScanMode>() {
+        scan_config.mode = mode;
+      }
+    if let Some(blocking) = args.startup_scan_blocking {
+      scan_config.blocking = blocking;
+    }
+
     // Start the watcher for this project (with embedding if available)
     if let Err(e) = self
       .registry
-      .start_watcher(info.id.as_str(), &project_path, self.embedding.clone())
+      .start_watcher_with_scan_config(
+        info.id.as_str(),
+        &project_path,
+        self.embedding.clone(),
+        Some(scan_config),
+      )
       .await
     {
       return Response::error(request.id, -32000, &format!("Failed to start watcher: {}", e));
@@ -115,6 +147,13 @@ impl ToolHandler {
     // Get watcher status
     let status = self.registry.watcher_status(info.id.as_str()).await;
 
+    // Get scan progress if scanning
+    let scan_progress = if status.scanning {
+      self.registry.scan_progress(info.id.as_str()).await
+    } else {
+      None
+    };
+
     Response::success(
       request.id,
       serde_json::json!({
@@ -122,6 +161,8 @@ impl ToolHandler {
           "root": status.root.map(|p| p.to_string_lossy().to_string()),
           "pending_changes": status.pending_changes,
           "project_id": info.id.as_str(),
+          "scanning": status.scanning,
+          "scan_progress": scan_progress.map(|(p, t)| [p, t]),
       }),
     )
   }

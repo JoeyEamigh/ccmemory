@@ -18,8 +18,8 @@
 use crate::ground_truth::{CallGraph, ExplorationPath, NoisePatterns};
 use crate::metrics::{AccuracyMetrics, LatencyTracker, PerformanceMetrics, StepMetrics};
 use crate::scenarios::{Expected, SuccessCriteria};
-use std::collections::HashSet;
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 /// Per-step discovery record for convergence analysis.
 #[derive(Debug, Clone, Default)]
@@ -175,6 +175,16 @@ pub struct ExplorationSession {
   // === Context budget tracking ===
   /// Cumulative context budget tracking
   context_budget: ContextBudget,
+
+  // === Time-to-first-relevant tracking ===
+  /// When the session started (for timing metrics)
+  session_start: Instant,
+  /// Time elapsed when first relevant result was found
+  first_relevant_result_time: Option<Duration>,
+
+  // === File diversity tracking ===
+  /// Files discovered per step (step_index -> files in that step's results)
+  step_files: HashMap<usize, Vec<String>>,
 }
 
 impl ExplorationSession {
@@ -209,6 +219,11 @@ impl ExplorationSession {
       step_relevance: Vec::new(),
       // Context budget
       context_budget: ContextBudget::default(),
+      // Time-to-first-relevant
+      session_start: Instant::now(),
+      first_relevant_result_time: None,
+      // File diversity
+      step_files: HashMap::new(),
     }
   }
 
@@ -238,6 +253,9 @@ impl ExplorationSession {
     for id in result_ids {
       self.all_result_ids.insert(id.clone());
     }
+
+    // Track files per step for diversity calculation
+    self.step_files.insert(self.current_step, files.to_vec());
 
     // Track latency using LatencyTracker
     self.search_latencies.record(latency);
@@ -292,8 +310,22 @@ impl ExplorationSession {
   }
 
   /// Record a result's relevance and rank for MRR calculation.
+  /// Also records time to first relevant result if this is the first relevant result.
   pub fn record_result_rank(&mut self, is_relevant: bool, rank: usize) {
     self.result_ranks.push((is_relevant, rank));
+    self.record_first_relevant_if_needed(is_relevant);
+  }
+
+  /// Record the time to first relevant result if this is the first one found.
+  fn record_first_relevant_if_needed(&mut self, is_relevant: bool) {
+    if is_relevant && self.first_relevant_result_time.is_none() {
+      self.first_relevant_result_time = Some(self.session_start.elapsed());
+    }
+  }
+
+  /// Get the time to first relevant result, if any was found.
+  pub fn time_to_first_relevant(&self) -> Option<Duration> {
+    self.first_relevant_result_time
   }
 
   /// Record a navigation hint shown to the user.
@@ -508,6 +540,54 @@ impl ExplorationSession {
       .count();
 
     dead_ends as f64 / self.step_discoveries.len() as f64
+  }
+
+  /// Calculate file diversity for a specific step.
+  /// Returns unique_files / min(top_n, total_results).
+  /// 1.0 = perfect diversity (all different files), lower = more files from same location.
+  pub fn calculate_step_file_diversity(&self, step: usize, top_n: usize) -> f64 {
+    if let Some(files) = self.step_files.get(&step) {
+      if files.is_empty() {
+        return 1.0; // No results = no diversity problem
+      }
+
+      // Take top N files
+      let top_files: Vec<_> = files.iter().take(top_n).collect();
+      let total = top_files.len();
+
+      if total == 0 {
+        return 1.0;
+      }
+
+      // Count unique files in top N
+      let unique_files: HashSet<_> = top_files.into_iter().collect();
+      unique_files.len() as f64 / total as f64
+    } else {
+      1.0 // Step not found = no penalty
+    }
+  }
+
+  /// Calculate average file diversity across all steps for top-5 results.
+  /// Higher = better (more diverse file coverage in results).
+  pub fn calculate_avg_file_diversity(&self) -> f64 {
+    if self.step_files.is_empty() {
+      return 1.0; // No steps = perfect score
+    }
+
+    let mut total_diversity = 0.0;
+    let mut step_count = 0;
+
+    for step in 0..self.current_step {
+      let diversity = self.calculate_step_file_diversity(step, 5);
+      total_diversity += diversity;
+      step_count += 1;
+    }
+
+    if step_count == 0 {
+      return 1.0;
+    }
+
+    total_diversity / step_count as f64
   }
 
   /// Calculate navigation efficiency using exploration paths.
@@ -736,6 +816,14 @@ impl ExplorationSession {
     let (max_consecutive, total_rabbit, ratio) = self.calculate_rabbit_holes();
     builder = builder.set_rabbit_holes(max_consecutive, total_rabbit, ratio);
 
+    // Set time-to-first-relevant metric
+    let time_to_first_ms = self.first_relevant_result_time.map(|d| d.as_millis() as u64);
+    builder = builder.set_time_to_first_relevant_ms(time_to_first_ms);
+
+    // Set file diversity metric
+    let avg_diversity = self.calculate_avg_file_diversity();
+    builder = builder.set_avg_file_diversity_top5(avg_diversity);
+
     builder.build()
   }
 
@@ -859,5 +947,221 @@ mod tests {
     assert!(session.file_matches_expected("src/commands.rs", &expected));
     assert!(session.file_matches_expected("crates/gpui/src/keymap.rs", &expected));
     assert!(!session.file_matches_expected("src/other.rs", &expected));
+  }
+
+  #[test]
+  fn test_time_to_first_relevant() {
+    let mut session = ExplorationSession::new("test");
+
+    // Initially, no relevant result found
+    assert!(session.time_to_first_relevant().is_none());
+
+    // Record some non-relevant results
+    session.record_result_rank(false, 1);
+    session.record_result_rank(false, 2);
+    assert!(session.time_to_first_relevant().is_none());
+
+    // Record first relevant result
+    session.record_result_rank(true, 3);
+    assert!(session.time_to_first_relevant().is_some());
+    let first_time = session.time_to_first_relevant().unwrap();
+
+    // Recording more relevant results shouldn't change the time
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    session.record_result_rank(true, 1);
+    assert_eq!(session.time_to_first_relevant(), Some(first_time));
+  }
+
+  #[test]
+  fn test_time_to_first_relevant_none_when_no_relevant() {
+    let mut session = ExplorationSession::new("test");
+
+    // Only record non-relevant results
+    session.record_result_rank(false, 1);
+    session.record_result_rank(false, 2);
+    session.record_result_rank(false, 3);
+
+    // Time should still be None
+    assert!(session.time_to_first_relevant().is_none());
+
+    // Check that accuracy metrics also return None
+    let expected = Expected::default();
+    let criteria = SuccessCriteria::default();
+    let metrics = session.compute_accuracy_metrics(&expected, &criteria);
+    assert!(metrics.time_to_first_relevant_ms.is_none());
+  }
+
+  #[test]
+  fn test_file_diversity_all_different_files() {
+    let mut session = ExplorationSession::new("test");
+
+    // Record step with 5 different files - perfect diversity
+    session.record_explore_step(
+      "query",
+      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "src/a.rs".to_string(),
+        "src/b.rs".to_string(),
+        "src/c.rs".to_string(),
+        "src/d.rs".to_string(),
+        "src/e.rs".to_string(),
+      ],
+      &[],
+      Duration::from_millis(100),
+    );
+
+    let diversity = session.calculate_step_file_diversity(0, 5);
+    assert!((diversity - 1.0).abs() < f64::EPSILON, "Expected 1.0, got {}", diversity);
+  }
+
+  #[test]
+  fn test_file_diversity_all_same_file() {
+    let mut session = ExplorationSession::new("test");
+
+    // Record step with 5 results all from the same file - worst diversity
+    session.record_explore_step(
+      "query",
+      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "src/same.rs".to_string(),
+        "src/same.rs".to_string(),
+        "src/same.rs".to_string(),
+        "src/same.rs".to_string(),
+        "src/same.rs".to_string(),
+      ],
+      &[],
+      Duration::from_millis(100),
+    );
+
+    let diversity = session.calculate_step_file_diversity(0, 5);
+    assert!((diversity - 0.2).abs() < f64::EPSILON, "Expected 0.2, got {}", diversity);
+  }
+
+  #[test]
+  fn test_file_diversity_mixed() {
+    let mut session = ExplorationSession::new("test");
+
+    // Record step with 3 unique files out of 5 results
+    session.record_explore_step(
+      "query",
+      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "src/a.rs".to_string(),
+        "src/a.rs".to_string(),
+        "src/b.rs".to_string(),
+        "src/b.rs".to_string(),
+        "src/c.rs".to_string(),
+      ],
+      &[],
+      Duration::from_millis(100),
+    );
+
+    let diversity = session.calculate_step_file_diversity(0, 5);
+    assert!((diversity - 0.6).abs() < f64::EPSILON, "Expected 0.6 (3/5), got {}", diversity);
+  }
+
+  #[test]
+  fn test_file_diversity_fewer_than_n_results() {
+    let mut session = ExplorationSession::new("test");
+
+    // Record step with only 2 files, ask for top-5
+    session.record_explore_step(
+      "query",
+      &["id1".to_string(), "id2".to_string()],
+      &["src/a.rs".to_string(), "src/b.rs".to_string()],
+      &[],
+      Duration::from_millis(100),
+    );
+
+    // Should calculate diversity based on available results (2), not requested (5)
+    let diversity = session.calculate_step_file_diversity(0, 5);
+    assert!((diversity - 1.0).abs() < f64::EPSILON, "Expected 1.0 (2 unique / 2 total), got {}", diversity);
+  }
+
+  #[test]
+  fn test_file_diversity_empty_results() {
+    let mut session = ExplorationSession::new("test");
+
+    // Record step with no files
+    session.record_explore_step("query", &[], &[], &[], Duration::from_millis(100));
+
+    // Empty results should return 1.0 (no diversity problem)
+    let diversity = session.calculate_step_file_diversity(0, 5);
+    assert!((diversity - 1.0).abs() < f64::EPSILON, "Expected 1.0 for empty results, got {}", diversity);
+  }
+
+  #[test]
+  fn test_file_diversity_missing_step() {
+    let session = ExplorationSession::new("test");
+
+    // Query step that doesn't exist - should return 1.0
+    let diversity = session.calculate_step_file_diversity(99, 5);
+    assert!((diversity - 1.0).abs() < f64::EPSILON, "Expected 1.0 for missing step, got {}", diversity);
+  }
+
+  #[test]
+  fn test_avg_file_diversity() {
+    let mut session = ExplorationSession::new("test");
+
+    // Step 0: Perfect diversity (5 unique)
+    session.record_explore_step(
+      "query1",
+      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "src/a.rs".to_string(),
+        "src/b.rs".to_string(),
+        "src/c.rs".to_string(),
+        "src/d.rs".to_string(),
+        "src/e.rs".to_string(),
+      ],
+      &[],
+      Duration::from_millis(100),
+    );
+
+    // Step 1: Worst diversity (all same)
+    session.record_explore_step(
+      "query2",
+      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "src/same.rs".to_string(),
+        "src/same.rs".to_string(),
+        "src/same.rs".to_string(),
+        "src/same.rs".to_string(),
+        "src/same.rs".to_string(),
+      ],
+      &[],
+      Duration::from_millis(100),
+    );
+
+    // Average should be (1.0 + 0.2) / 2 = 0.6
+    let avg_diversity = session.calculate_avg_file_diversity();
+    assert!((avg_diversity - 0.6).abs() < f64::EPSILON, "Expected 0.6 average, got {}", avg_diversity);
+  }
+
+  #[test]
+  fn test_file_diversity_in_accuracy_metrics() {
+    let mut session = ExplorationSession::new("test");
+
+    // Record step with 3 unique files out of 5
+    session.record_explore_step(
+      "query",
+      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "src/a.rs".to_string(),
+        "src/a.rs".to_string(),
+        "src/b.rs".to_string(),
+        "src/b.rs".to_string(),
+        "src/c.rs".to_string(),
+      ],
+      &[],
+      Duration::from_millis(100),
+    );
+
+    let expected = Expected::default();
+    let criteria = SuccessCriteria::default();
+    let metrics = session.compute_accuracy_metrics(&expected, &criteria);
+
+    // Should include file diversity metric
+    assert!((metrics.avg_file_diversity_top5 - 0.6).abs() < f64::EPSILON, "Expected 0.6 in metrics, got {}", metrics.avg_file_diversity_top5);
   }
 }

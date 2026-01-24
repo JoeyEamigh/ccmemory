@@ -194,10 +194,6 @@ async fn run_benchmarks(
   parallel: bool,
   run_name: Option<String>,
 ) -> Result<()> {
-  if llm_judge {
-    warn!("LLM-as-judge evaluation is not yet implemented");
-  }
-
   // Load scenarios
   let scenarios_dir = scenarios_dir.unwrap_or_else(|| PathBuf::from("crates/benchmark/scenarios"));
   info!("Loading scenarios from: {}", scenarios_dir.display());
@@ -232,6 +228,14 @@ async fn run_benchmarks(
   // Determine annotations directory (sibling to scenarios dir)
   let annotations_dir = scenarios_dir.parent().map(|p| p.join("annotations"));
   let runner = ScenarioRunner::new(&socket_path, &project_path, annotations_dir);
+
+  // Enable LLM judge if requested
+  let runner = if llm_judge {
+    info!("Enabling LLM-as-judge comprehension evaluation");
+    runner.with_llm_judge()?
+  } else {
+    runner
+  };
 
   // Check daemon
   if !runner.check_daemon().await {

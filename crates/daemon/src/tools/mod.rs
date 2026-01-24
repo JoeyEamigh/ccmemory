@@ -136,6 +136,23 @@ impl ToolHandler {
   pub fn embedding_cache_stats(&self) -> (u64, u64) {
     (self.embedding_cache.entry_count(), EMBEDDING_CACHE_SIZE)
   }
+
+  /// Wait for any startup scan to complete before executing a search
+  ///
+  /// This ensures search results are consistent and don't include stale data.
+  /// Returns true if scan completed (or no scan was running), false if timed out.
+  pub(crate) async fn wait_for_scan_if_needed(&self, project_id: &str) -> bool {
+    // Default timeout: 60 seconds for search blocking
+    // This is shorter than the full scan timeout since we want to be responsive
+    let timeout = Duration::from_secs(60);
+
+    if self.registry.is_scanning(project_id).await {
+      debug!("Waiting for startup scan to complete before search");
+      self.registry.wait_for_scan(project_id, timeout).await
+    } else {
+      true
+    }
+  }
 }
 
 #[cfg(test)]

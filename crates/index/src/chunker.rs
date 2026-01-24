@@ -1,7 +1,16 @@
 use chrono::Utc;
 use engram_core::{CHARS_PER_TOKEN, ChunkType, CodeChunk, Language, compute_content_hash};
 use parser::{Definition, DefinitionKind, TreeSitterParser};
+use std::cell::RefCell;
 use uuid::Uuid;
+
+// Thread-local parser pool to avoid creating new parsers for each Chunker instance.
+// TreeSitterParser is not thread-safe (uses internal mutable state), so thread_local!
+// is the appropriate pattern for reusing parsers across multiple chunking operations
+// on the same thread.
+thread_local! {
+  static PARSER_POOL: RefCell<TreeSitterParser> = RefCell::new(TreeSitterParser::new());
+}
 
 /// Configuration for the chunker
 #[derive(Debug, Clone)]
@@ -31,9 +40,16 @@ impl Default for ChunkerConfig {
 ///
 /// Chunks code by semantic definitions (functions, classes, structs) using tree-sitter.
 /// Falls back to line-based chunking for unsupported languages.
+///
+/// Uses a thread-local parser pool to avoid creating new parsers for each Chunker instance,
+/// significantly reducing memory and initialization overhead when processing many files.
 pub struct Chunker {
   config: ChunkerConfig,
-  ts_parser: TreeSitterParser,
+  /// Whether to use the thread-local parser pool (default: true)
+  /// Set to false for testing or when an isolated parser is needed
+  use_parser_pool: bool,
+  /// Fallback owned parser (only used when use_parser_pool is false)
+  owned_parser: Option<TreeSitterParser>,
 }
 
 impl Default for Chunker {
@@ -46,7 +62,45 @@ impl Chunker {
   pub fn new(config: ChunkerConfig) -> Self {
     Self {
       config,
-      ts_parser: TreeSitterParser::new(),
+      use_parser_pool: true,
+      owned_parser: None,
+    }
+  }
+
+  /// Create a chunker with an isolated parser (useful for testing)
+  pub fn with_owned_parser(config: ChunkerConfig) -> Self {
+    Self {
+      config,
+      use_parser_pool: false,
+      owned_parser: Some(TreeSitterParser::new()),
+    }
+  }
+
+  /// Execute a function with access to the parser.
+  /// Uses thread-local pool or owned parser based on configuration.
+  fn with_parser<F, R>(&mut self, f: F) -> R
+  where
+    F: FnOnce(&mut TreeSitterParser) -> R,
+  {
+    if self.use_parser_pool {
+      PARSER_POOL.with(|pool| {
+        let mut parser = pool.borrow_mut();
+        f(&mut parser)
+      })
+    } else {
+      f(self
+        .owned_parser
+        .as_mut()
+        .expect("owned_parser should be set when use_parser_pool is false"))
+    }
+  }
+
+  /// Check if the parser supports a language
+  fn supports_language(&self, lang: Language) -> bool {
+    if self.use_parser_pool {
+      PARSER_POOL.with(|pool| pool.borrow().supports_language(lang))
+    } else {
+      self.owned_parser.as_ref().is_some_and(|p| p.supports_language(lang))
     }
   }
 
@@ -55,15 +109,45 @@ impl Chunker {
   /// Uses tree-sitter to extract definitions and create one chunk per definition.
   /// Falls back to line-based chunking for unsupported languages or when AST chunking is disabled.
   pub fn chunk(&mut self, source: &str, file_path: &str, language: Language, file_hash: &str) -> Vec<CodeChunk> {
-    // Clear tree cache when starting a new file (memory efficiency)
-    self.ts_parser.clear_cache();
+    self.chunk_incremental(source, file_path, language, file_hash, None)
+  }
+
+  /// Chunk source code with incremental parsing support.
+  ///
+  /// When `old_content` is provided, uses incremental tree-sitter parsing which
+  /// is significantly faster for small edits (O(log n) vs O(n) for full reparse).
+  ///
+  /// The parser computes the diff between old and new content and only reparses
+  /// the affected portions of the syntax tree. Falls back to full parse if:
+  /// - No old content is provided
+  /// - Changes affect more than 50% of the file (full parse is faster in that case)
+  ///
+  /// # Arguments
+  /// * `source` - The new file content to parse
+  /// * `file_path` - Relative path to the file
+  /// * `language` - Programming language
+  /// * `file_hash` - Hash of the file for cache invalidation
+  /// * `old_content` - Optional previous content for incremental parsing
+  pub fn chunk_incremental(
+    &mut self,
+    source: &str,
+    file_path: &str,
+    language: Language,
+    file_hash: &str,
+    old_content: Option<&str>,
+  ) -> Vec<CodeChunk> {
+    // Don't clear tree cache when using incremental parsing with old content
+    // This allows the parser to reuse the previous tree
+    if old_content.is_none() {
+      self.with_parser(|p| p.clear_cache());
+    }
 
     let lines: Vec<&str> = source.lines().collect();
     let total_lines = lines.len();
 
     // Try AST-level chunking if enabled and language is supported
-    if self.config.use_ast_chunking && self.ts_parser.supports_language(language) {
-      let chunks = self.chunk_by_definitions(source, &lines, file_path, language, file_hash);
+    if self.config.use_ast_chunking && self.supports_language(language) {
+      let chunks = self.chunk_by_definitions_incremental(source, &lines, file_path, language, file_hash, old_content);
       if !chunks.is_empty() {
         return chunks;
       }
@@ -74,53 +158,74 @@ impl Chunker {
     self.chunk_by_lines(source, &lines, file_path, language, file_hash, total_lines)
   }
 
-  /// Chunk code by AST definitions
-  fn chunk_by_definitions(
+  /// Chunk code by AST definitions with incremental parsing support
+  fn chunk_by_definitions_incremental(
     &mut self,
     source: &str,
     lines: &[&str],
     file_path: &str,
     language: Language,
     file_hash: &str,
+    old_content: Option<&str>,
   ) -> Vec<CodeChunk> {
-    // Parse and cache the file once for all subsequent queries
-    let definitions = self.ts_parser.extract_definitions_cached(source, language);
+    // Use incremental parsing if old content is available
+    let parsed = self.with_parser(|p| {
+      if old_content.is_some() {
+        p.parse_file_incremental(source, language, None)
+      } else {
+        p.parse_file(source, language)
+      }
+    });
+
+    if !parsed {
+      return Vec::new();
+    }
+
+    // Extract definitions using cached tree
+    let definitions = self.with_parser(|p| p.extract_definitions_cached(source, language));
 
     if definitions.is_empty() {
       return Vec::new();
     }
 
     // Extract file-level imports using the cached tree
-    let file_imports = self.ts_parser.extract_imports(source, language);
+    let file_imports = self.with_parser(|p| p.extract_imports(source, language));
 
     // Sort definitions by start line
     let mut defs: Vec<_> = definitions.into_iter().collect();
     defs.sort_by_key(|d| d.start_line);
 
     let mut chunks = Vec::new();
-    let mut covered_lines: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let total_lines = lines.len();
+
+    // Use a bitmap (Vec<bool>) instead of HashSet for O(1) line coverage tracking.
+    // Index 0 is unused since lines are 1-indexed; index i represents line i.
+    // This avoids HashSet allocations and provides faster insert/lookup.
+    let mut covered_lines: Vec<bool> = vec![false; total_lines + 1];
 
     for def in &defs {
       // Skip if this definition is entirely contained within already-processed lines
       // (handles nested definitions - we keep the outer one)
-      let def_lines: std::collections::HashSet<u32> = (def.start_line..=def.end_line).collect();
-      if def_lines.is_subset(&covered_lines) {
+      let start = def.start_line as usize;
+      let end = def.end_line as usize;
+      let is_subset = (start..=end.min(total_lines)).all(|i| covered_lines[i]);
+      if is_subset {
         continue;
       }
 
       let chunk = self.create_definition_chunk(def, source, lines, file_path, language, file_hash, &file_imports);
 
-      // Mark these lines as covered
-      for line in def.start_line..=def.end_line {
-        covered_lines.insert(line);
+      // Mark these lines as covered (O(1) per line)
+      for line in covered_lines.iter_mut().take(end.min(total_lines) + 1).skip(start) {
+        *line = true;
       }
 
       chunks.push(chunk);
     }
 
     // Handle any remaining code not covered by definitions (imports, constants, etc.)
-    let total_lines = lines.len() as u32;
-    let uncovered: Vec<u32> = (1..=total_lines).filter(|l| !covered_lines.contains(l)).collect();
+    let total_lines = total_lines as u32;
+    let uncovered: Vec<u32> = (1..=total_lines).filter(|&l| !covered_lines[l as usize]).collect();
 
     if !uncovered.is_empty() {
       // Group contiguous uncovered regions
@@ -188,10 +293,8 @@ impl Chunker {
     let visibility = self.extract_visibility(&signature, language);
 
     // Extract imports and calls for this chunk using cached tree (no re-parsing)
-    let (chunk_imports, calls) =
-      self
-        .ts_parser
-        .extract_imports_and_calls_in_range(source, language, (actual_start + 1) as u32, def.end_line);
+    let (chunk_imports, calls) = self
+      .with_parser(|p| p.extract_imports_and_calls_in_range(source, language, (actual_start + 1) as u32, def.end_line));
 
     // Combine chunk-level imports with file-level imports for relationship tracking
     // This ensures that functions can be linked via the imports used in their file
@@ -270,9 +373,8 @@ impl Chunker {
   ) -> CodeChunk {
     let chunk_type = self.determine_chunk_type(content, language);
     // Use cached tree with line range for efficiency
-    let (imports, calls) = self
-      .ts_parser
-      .extract_imports_and_calls_in_range(source, language, start_line, end_line);
+    let (imports, calls) =
+      self.with_parser(|p| p.extract_imports_and_calls_in_range(source, language, start_line, end_line));
     let symbols = self.extract_symbols(content, language);
     let tokens_estimate = (content.len() / CHARS_PER_TOKEN) as u32;
     let content_hash = compute_content_hash(content);
@@ -490,7 +592,10 @@ impl Chunker {
   }
 
   #[allow(clippy::too_many_arguments)]
-  /// Create enriched text for embedding
+  /// Create enriched text for embedding.
+  ///
+  /// Uses pre-allocated String with write!() to minimize allocations.
+  /// Previously used 8-10 format!() calls per chunk; now uses a single allocation.
   fn create_embedding_text(
     &self,
     name: &str,
@@ -503,47 +608,98 @@ impl Chunker {
     file_path: &str,
     code: &str,
   ) -> String {
-    let mut parts = Vec::new();
+    use std::fmt::Write;
+
+    // Estimate capacity: headers + signature + doc preview + imports + calls + code
+    // This avoids reallocations during construction
+    let estimated_size = 100 // headers and labels
+      + name.len()
+      + file_path.len()
+      + signature.map_or(0, |s| s.len())
+      + docstring.map_or(0, |d| d.len().min(500)) // first 5 lines ~ 500 chars max
+      + chunk_imports.iter().take(10).map(|s| s.len() + 2).sum::<usize>()
+      + file_imports.iter().take(10).map(|s| s.len() + 2).sum::<usize>()
+      + calls.iter().take(15).map(|s| s.len() + 2).sum::<usize>()
+      + code.len()
+      + 50; // newlines and separators
+
+    let mut result = String::with_capacity(estimated_size);
 
     // Definition header
-    parts.push(format!("[DEFINITION] {:?}: {}", kind, name));
+    let _ = writeln!(result, "[DEFINITION] {:?}: {}", kind, name);
 
     // File path for context
-    parts.push(format!("[FILE] {}", file_path));
+    let _ = writeln!(result, "[FILE] {}", file_path);
 
     // Signature
     if let Some(sig) = signature {
-      // Clean up multi-line signatures
-      let clean_sig: String = sig.lines().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
-      parts.push(format!("[SIGNATURE] {}", clean_sig));
+      result.push_str("[SIGNATURE] ");
+      // Clean up multi-line signatures inline
+      let mut first = true;
+      for line in sig.lines() {
+        if !first {
+          result.push(' ');
+        }
+        result.push_str(line.trim());
+        first = false;
+      }
+      result.push('\n');
     }
 
-    // Docstring (truncated if long)
+    // Docstring (truncated to first 5 lines)
     if let Some(doc) = docstring {
-      let doc_preview: String = doc.lines().take(5).collect::<Vec<_>>().join(" ");
-      parts.push(format!("[DOC] {}", doc_preview));
+      result.push_str("[DOC] ");
+      let mut first = true;
+      for line in doc.lines().take(5) {
+        if !first {
+          result.push(' ');
+        }
+        result.push_str(line);
+        first = false;
+      }
+      result.push('\n');
     }
 
-    // Imports (combine chunk and relevant file imports)
-    let all_imports: std::collections::HashSet<_> = chunk_imports.iter().chain(file_imports.iter()).collect();
+    // Imports (deduplicate via HashSet, take first 10)
+    let all_imports: std::collections::HashSet<&str> = chunk_imports
+      .iter()
+      .chain(file_imports.iter())
+      .map(|s| s.as_str())
+      .collect();
     if !all_imports.is_empty() {
-      let import_str: Vec<_> = all_imports.iter().take(10).map(|s| s.as_str()).collect();
-      parts.push(format!("[IMPORTS] {}", import_str.join(", ")));
+      result.push_str("[IMPORTS] ");
+      let mut first = true;
+      for import in all_imports.iter().take(10) {
+        if !first {
+          result.push_str(", ");
+        }
+        result.push_str(import);
+        first = false;
+      }
+      result.push('\n');
     }
 
-    // Calls
+    // Calls (take first 15)
     if !calls.is_empty() {
-      let calls_str: Vec<_> = calls.iter().take(15).map(|s| s.as_str()).collect();
-      parts.push(format!("[CALLS] {}", calls_str.join(", ")));
+      result.push_str("[CALLS] ");
+      let mut first = true;
+      for call in calls.iter().take(15) {
+        if !first {
+          result.push_str(", ");
+        }
+        result.push_str(call);
+        first = false;
+      }
+      result.push('\n');
     }
 
     // Separator before code
-    parts.push("---".to_string());
+    result.push_str("---\n");
 
     // The actual code
-    parts.push(code.to_string());
+    result.push_str(code);
 
-    parts.join("\n")
+    result
   }
 
   /// Find contiguous regions from a list of line numbers
@@ -583,7 +739,7 @@ impl Chunker {
     // Small files: single chunk
     if total_lines <= self.config.max_lines {
       let chunk_type = self.determine_chunk_type(source, language);
-      let (imports, calls) = self.ts_parser.extract_imports_and_calls(source, language);
+      let (imports, calls) = self.with_parser(|p| p.extract_imports_and_calls(source, language));
       let symbols = self.extract_symbols(source, language);
       let content_hash = compute_content_hash(source);
 
@@ -627,7 +783,7 @@ impl Chunker {
         let content = lines[current_start..boundary].join("\n");
         let chunk_type = self.determine_chunk_type(&content, language);
         let tokens_estimate = (content.len() / CHARS_PER_TOKEN) as u32;
-        let (imports, calls) = self.ts_parser.extract_imports_and_calls(&content, language);
+        let (imports, calls) = self.with_parser(|p| p.extract_imports_and_calls(&content, language));
         let content_hash = compute_content_hash(&content);
 
         chunks.push(CodeChunk {
@@ -665,7 +821,7 @@ impl Chunker {
       let content = lines[current_start..].join("\n");
       let chunk_type = self.determine_chunk_type(&content, language);
       let tokens_estimate = (content.len() / CHARS_PER_TOKEN) as u32;
-      let (imports, calls) = self.ts_parser.extract_imports_and_calls(&content, language);
+      let (imports, calls) = self.with_parser(|p| p.extract_imports_and_calls(&content, language));
       let content_hash = compute_content_hash(&content);
 
       chunks.push(CodeChunk {
@@ -943,7 +1099,7 @@ impl Chunker {
       let content = lines[start..end].join("\n");
       let chunk_type = self.determine_chunk_type(&content, language);
       let tokens_estimate = (content.len() / CHARS_PER_TOKEN) as u32;
-      let (imports, calls) = self.ts_parser.extract_imports_and_calls(&content, language);
+      let (imports, calls) = self.with_parser(|p| p.extract_imports_and_calls(&content, language));
       let content_hash = compute_content_hash(&content);
 
       chunks.push(CodeChunk {

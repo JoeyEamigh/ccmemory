@@ -536,10 +536,19 @@ impl ToolHandler {
       .map(PathBuf::from)
       .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let (_, db) = match self.registry.get_or_create(&project_path).await {
+    let (info, db) = match self.registry.get_or_create(&project_path).await {
       Ok(p) => p,
       Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
     };
+
+    // Wait for any ongoing startup scan to complete before searching
+    if !self.wait_for_scan_if_needed(info.id.as_str()).await {
+      return Response::error(
+        request.id,
+        -32000,
+        "Search timed out waiting for startup scan to complete. Please try again.",
+      );
+    }
 
     // Build filter for language if provided
     let filter = args

@@ -22,6 +22,7 @@ impl MarkdownReport {
     Self::write_performance_table(&mut content, results);
     Self::write_accuracy_table(&mut content, results);
     Self::write_exploration_table(&mut content, results);
+    Self::write_comprehension_table(&mut content, results);
     Self::write_scenario_details(&mut content, results);
 
     Self { content }
@@ -98,8 +99,14 @@ impl MarkdownReport {
 
     let _ = writeln!(out, "## Accuracy");
     let _ = writeln!(out);
-    let _ = writeln!(out, "| Scenario | File Recall | Symbol Recall | MRR | Noise | Steps |");
-    let _ = writeln!(out, "|----------|-------------|---------------|-----|-------|-------|");
+    let _ = writeln!(
+      out,
+      "| Scenario | File Recall | Symbol Recall | MRR | Noise | Steps | First Relevant |"
+    );
+    let _ = writeln!(
+      out,
+      "|----------|-------------|---------------|-----|-------|-------|----------------|"
+    );
 
     for result in results {
       let file_icon = if result.accuracy.file_recall >= targets.file_recall {
@@ -134,9 +141,15 @@ impl MarkdownReport {
         .map(|s: usize| s.to_string())
         .unwrap_or_else(|| "N/A".to_string());
 
+      let first_relevant_str = result
+        .accuracy
+        .time_to_first_relevant_ms
+        .map(|ms| format!("{}ms", ms))
+        .unwrap_or_else(|| "N/A".to_string());
+
       let _ = writeln!(
         out,
-        "| {} | {} {:.0}% | {} {:.0}% | {} {:.2} | {} {:.0}% | {} {} |",
+        "| {} | {} {:.0}% | {} {:.0}% | {} {:.2} | {} {:.0}% | {} {} | {} |",
         result.scenario_id,
         file_icon,
         result.accuracy.file_recall * 100.0,
@@ -147,7 +160,8 @@ impl MarkdownReport {
         noise_icon,
         result.accuracy.noise_ratio * 100.0,
         steps_icon,
-        steps_str
+        steps_str,
+        first_relevant_str
       );
     }
     let _ = writeln!(out);
@@ -172,11 +186,11 @@ impl MarkdownReport {
     let _ = writeln!(out);
     let _ = writeln!(
       out,
-      "| Scenario | Convergence | Nav Efficiency | Hint Utility | Context Bloat | Dead Ends |"
+      "| Scenario | Convergence | Nav Efficiency | Hint Utility | Context Bloat | Dead Ends | File Diversity |"
     );
     let _ = writeln!(
       out,
-      "|----------|-------------|----------------|--------------|---------------|-----------|"
+      "|----------|-------------|----------------|--------------|---------------|-----------|----------------|"
     );
 
     for result in results {
@@ -222,9 +236,18 @@ impl MarkdownReport {
         "❌"
       };
 
+      // File diversity: higher is better
+      let diversity_icon = if result.accuracy.avg_file_diversity_top5 >= targets.file_diversity {
+        "✅"
+      } else if result.accuracy.avg_file_diversity_top5 >= targets.file_diversity * 0.8 {
+        "⚠️"
+      } else {
+        "❌"
+      };
+
       let _ = writeln!(
         out,
-        "| {} | {} {:.0}% | {} {:.0}% | {} {:.0}% | {} {:.0}% | {} {:.0}% |",
+        "| {} | {} {:.0}% | {} {:.0}% | {} {:.0}% | {} {:.0}% | {} {:.0}% | {} {:.0}% |",
         result.scenario_id,
         convergence_icon,
         result.accuracy.convergence_rate * 100.0,
@@ -235,7 +258,9 @@ impl MarkdownReport {
         bloat_icon,
         result.accuracy.context_bloat * 100.0,
         dead_end_icon,
-        result.accuracy.dead_end_ratio * 100.0
+        result.accuracy.dead_end_ratio * 100.0,
+        diversity_icon,
+        result.accuracy.avg_file_diversity_top5 * 100.0
       );
     }
     let _ = writeln!(out);
@@ -243,13 +268,65 @@ impl MarkdownReport {
     // Targets legend
     let _ = writeln!(
       out,
-      "**Targets:** Convergence ≥{:.0}%, Nav Efficiency ≥{:.0}%, Hint Utility ≥{:.0}%, Context Bloat ≤{:.0}%, Dead Ends ≤{:.0}%",
+      "**Targets:** Convergence ≥{:.0}%, Nav Efficiency ≥{:.0}%, Hint Utility ≥{:.0}%, Context Bloat ≤{:.0}%, Dead Ends ≤{:.0}%, File Diversity ≥{:.0}%",
       targets.convergence_rate * 100.0,
       targets.navigation_efficiency * 100.0,
       targets.hint_utility * 100.0,
       targets.context_bloat * 100.0,
-      targets.dead_end_ratio * 100.0
+      targets.dead_end_ratio * 100.0,
+      targets.file_diversity * 100.0
     );
+    let _ = writeln!(out);
+  }
+
+  fn write_comprehension_table(out: &mut String, results: &[ScenarioResult]) {
+    // Only show if any scenario has comprehension results
+    let has_comprehension = results.iter().any(|r| r.comprehension.is_some());
+    if !has_comprehension {
+      return;
+    }
+
+    let _ = writeln!(out, "## Comprehension (LLM Judge)");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "| Scenario | Score | Questions | Passed | Summary |");
+    let _ = writeln!(out, "|----------|-------|-----------|--------|---------|");
+
+    for result in results {
+      match &result.comprehension {
+        Some(comp) => {
+          let score_icon = if comp.passed {
+            "✅"
+          } else if comp.overall_score >= 0.5 {
+            "⚠️"
+          } else {
+            "❌"
+          };
+
+          let passed_str = if comp.passed { "Yes" } else { "No" };
+
+          // Truncate summary if too long
+          let summary = if comp.summary.len() > 50 {
+            format!("{}...", &comp.summary[..47])
+          } else {
+            comp.summary.clone()
+          };
+
+          let _ = writeln!(
+            out,
+            "| {} | {} {:.0}% | {} | {} | {} |",
+            result.scenario_id,
+            score_icon,
+            comp.overall_score * 100.0,
+            comp.questions.len(),
+            passed_str,
+            summary
+          );
+        }
+        None => {
+          let _ = writeln!(out, "| {} | ➖ N/A | - | - | No comprehension questions defined |", result.scenario_id);
+        }
+      }
+    }
     let _ = writeln!(out);
   }
 
@@ -384,6 +461,8 @@ mod tests {
         max_consecutive_failures: 1,
         rabbit_hole_steps: 0,
         rabbit_hole_ratio: 0.0,
+        time_to_first_relevant_ms: Some(150),
+        avg_file_diversity_top5: 0.8,
         files_found: vec!["found.rs".to_string()],
         files_missed: vec!["missed.rs".to_string()],
         symbols_found: vec!["Found".to_string()],
@@ -404,6 +483,7 @@ mod tests {
       }],
       errors: vec![],
       total_duration_ms: 500,
+      comprehension: None,
     }
   }
 

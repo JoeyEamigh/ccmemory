@@ -2,7 +2,7 @@
   "enabledPlugins": {
     "ralph-loop@claude-plugins-official": true,
     "context7@claude-plugins-official": true,
-    "typescript-lsp@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true,
     "plugin-dev@claude-plugins-official": true
   }
 }

@@ -150,6 +150,61 @@ impl DebouncedWatcher {
     changes
   }
 
+  /// Block until ready events are available or max_wait timeout expires.
+  ///
+  /// This is more efficient than poll+sleep because it:
+  /// - Uses zero CPU when idle (blocks on channel recv)
+  /// - Responds immediately when events arrive
+  /// - Still respects debounce timing via calculated timeouts
+  pub fn wait_ready(&mut self, max_wait: Duration) -> Result<Vec<FileChange>, WatchError> {
+    let start = Instant::now();
+
+    loop {
+      // Check if we've exceeded max_wait
+      if start.elapsed() >= max_wait {
+        return Ok(Vec::new());
+      }
+
+      // Check if any events are ready now
+      let ready = self.collect_ready();
+      if !ready.is_empty() {
+        return Ok(ready);
+      }
+
+      // Check for force flush condition
+      if self.should_force_flush() {
+        return Ok(self.collect_all());
+      }
+
+      // Calculate timeout: min of (next debounce expiry, remaining max_wait)
+      let remaining = max_wait.saturating_sub(start.elapsed());
+      let timeout = if self.pending.is_empty() {
+        remaining // No pending events, just wait for new ones
+      } else {
+        let debounce = Duration::from_millis(self.config.file_debounce_ms);
+        let now = Instant::now();
+        self.pending
+          .values()
+          .map(|p| debounce.saturating_sub(now.duration_since(p.last_seen)))
+          .min()
+          .unwrap_or(remaining)
+          .min(remaining)
+      };
+
+      // Block until event or timeout
+      match self.watcher.wait_timeout(timeout) {
+        Ok(Some(change)) => {
+          self.handle_change(change);
+          self.poll_raw(); // Drain any additional buffered events
+        }
+        Ok(None) => {
+          // Timeout - loop to check if debounced events are ready
+        }
+        Err(e) => return Err(e),
+      }
+    }
+  }
+
   /// Check if gitignore has changed (with debouncing)
   pub fn check_gitignore_change(&mut self) -> bool {
     let now = Instant::now();
@@ -443,5 +498,59 @@ mod tests {
 
     assert_eq!(count, 3);
     assert_eq!(processed.len(), 3);
+  }
+
+  #[test]
+  fn test_wait_ready_timeout() {
+    let dir = TempDir::new().unwrap();
+    let mut watcher = DebouncedWatcher::new(
+      dir.path(),
+      DebounceConfig {
+        file_debounce_ms: 50,
+        ..Default::default()
+      },
+    )
+    .unwrap();
+
+    // wait_ready should return empty after timeout when no events
+    let start = std::time::Instant::now();
+    let result = watcher.wait_ready(Duration::from_millis(100));
+    let elapsed = start.elapsed();
+
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_empty());
+    // Should have waited approximately the timeout duration
+    assert!(elapsed >= Duration::from_millis(90));
+  }
+
+  #[test]
+  fn test_wait_ready_with_pending_events() {
+    let dir = TempDir::new().unwrap();
+    let mut watcher = DebouncedWatcher::new(
+      dir.path(),
+      DebounceConfig {
+        file_debounce_ms: 50,
+        ..Default::default()
+      },
+    )
+    .unwrap();
+
+    // Add pending events that are already past debounce time
+    watcher
+      .pending
+      .insert(PathBuf::from("/test/file.rs"), PendingChange::new(ChangeKind::Modified));
+
+    // Wait for debounce period
+    std::thread::sleep(Duration::from_millis(60));
+
+    // wait_ready should return immediately with the ready event
+    let start = std::time::Instant::now();
+    let result = watcher.wait_ready(Duration::from_secs(5));
+    let elapsed = start.elapsed();
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().len(), 1);
+    // Should return quickly, not wait the full timeout
+    assert!(elapsed < Duration::from_millis(100));
   }
 }

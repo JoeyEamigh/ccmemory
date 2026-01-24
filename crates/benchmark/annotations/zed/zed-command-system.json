@@ -1,0 +1,50 @@
+{
+  "scenario_id": "zed-command-system",
+  "critical_files": [
+    "crates/gpui/src/action.rs",
+    "crates/gpui/src/keymap.rs",
+    "crates/gpui/src/keymap/binding.rs",
+    "crates/editor/src/actions.rs",
+    "crates/zed/src/zed/actions.rs"
+  ],
+  "critical_symbols": [
+    "Action",
+    "ActionRegistry",
+    "Keymap",
+    "KeyBinding",
+    "dispatch",
+    "register_action",
+    "build_action_from_type"
+  ],
+  "key_locations": [
+    "crates/gpui/src/action.rs:42",
+    "crates/gpui/src/keymap.rs:15",
+    "crates/gpui/src/keymap/binding.rs:1"
+  ],
+  "exploration_paths": [
+    {
+      "start": "Action",
+      "through": ["ActionRegistry"],
+      "target": "dispatch",
+      "max_hops": 3
+    },
+    {
+      "start": "Keymap",
+      "through": ["KeyBinding"],
+      "target": "Action",
+      "max_hops": 2
+    },
+    {
+      "start": "register_action",
+      "through": ["ActionRegistry"],
+      "target": "build_action_from_type",
+      "max_hops": 3
+    }
+  ],
+  "notes": [
+    "Action trait in gpui is the core abstraction for all commands",
+    "Commands are registered via ActionRegistry during app initialization",
+    "Keymaps bind keyboard shortcuts to Actions via KeyBinding structs",
+    "The dispatch mechanism routes actions to the appropriate handler based on focus"
+  ]
+}

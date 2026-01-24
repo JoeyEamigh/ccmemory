@@ -49,6 +49,7 @@ const GLOBAL_PATTERNS: &[&str] = &[
   "*.map",
   // Lock files
   "package-lock.json",
+  "bun.lock",
   "yarn.lock",
   "pnpm-lock.yaml",
   "Cargo.lock",

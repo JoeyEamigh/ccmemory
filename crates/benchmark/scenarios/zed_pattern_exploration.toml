@@ -1,0 +1,105 @@
+# Pattern-Based Exploration Scenario
+#
+# Tests exploration through architectural pattern questions.
+# "What handles X?" and "How is Y pattern implemented?" are
+# common when agents need to understand cross-cutting concerns.
+
+[scenario]
+id = "zed-pattern-exploration"
+name = "Pattern-Based Exploration"
+repo = "zed"
+difficulty = "hard"
+description = "Understand external service integration patterns in Zed"
+
+[task]
+prompt = "Understand external service integration patterns"
+intent = "architectural_discovery"
+
+[expected]
+must_find_files = [
+    "**/http_client/**",
+    "**/client/**",
+    "**/api/**",
+    "**/rpc/**",
+]
+must_find_symbols = [
+    "Client",
+    "request",
+    "HttpClient",
+    "auth",
+    "token",
+    "Response",
+]
+noise_patterns = [
+    "**/tests/**",
+    "**/test/**",
+    "test_*",
+    "Mock*",
+    "**/fixtures/**",
+]
+
+# Step 1: Start with a broad pattern question
+[[steps]]
+query = "What makes HTTP requests to external services?"
+expand_top = 5
+expected_results = 5
+max_noise_ratio = 0.4
+scope = "code"
+
+# Step 2: Focus on authentication patterns
+[[steps]]
+query = "How is authentication handled for external APIs?"
+depends_on_previous = true
+expected_results = 4
+scope = "code"
+
+# Step 3: Follow up on discovered auth mechanism
+[[steps]]
+query = "Where is {{previous.symbol}} configured?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+
+# Step 4: Understand error handling patterns
+[[steps]]
+query = "How are HTTP errors and retries handled?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+
+# Step 5: Drill into a specific client implementation
+[[steps]]
+query = "Show me how {{previous.symbol}} works"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+context_ids = ["{{previous.id}}"]
+
+[success]
+min_discovery_score = 0.4
+max_noise_ratio = 0.4
+max_steps_to_core = 2
+min_file_diversity = 0.5
+min_navigation_efficiency = 0.3
+
+# LLM-as-judge comprehension evaluation
+[llm_judge]
+min_comprehension_score = 0.4
+
+[[llm_judge.comprehension_questions]]
+question = "What HTTP client does Zed use for external requests?"
+expected_concepts = ["HttpClient", "async", "request"]
+wrong_concepts = ["curl", "wget"]
+weight = 1.0
+
+[[llm_judge.comprehension_questions]]
+question = "How does Zed authenticate with cloud services?"
+expected_concepts = ["token", "auth", "credentials"]
+wrong_concepts = ["OAuth browser flow", "API key in URL"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "What patterns does Zed use for handling API failures?"
+expected_concepts = ["retry", "error", "Result", "timeout"]
+wrong_concepts = []
+weight = 1.0

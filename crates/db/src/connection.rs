@@ -332,6 +332,19 @@ impl ProjectDb {
     }
     Ok(())
   }
+
+  /// Get the project ID
+  pub fn project_id(&self) -> &ProjectId {
+    &self.project_id
+  }
+
+  /// Clone the database connection by reopening at the same path
+  ///
+  /// This creates a new connection to the same database, useful for
+  /// passing to tasks that need their own connection handle.
+  pub async fn clone_connection(&self) -> Result<Self> {
+    Self::open_at_path(self.project_id.clone(), self.path.clone(), self.vector_dim).await
+  }
 }
 
 /// Get the default base path for CCEngram data

@@ -372,6 +372,15 @@ CONFIG LOCATIONS:
     /// Check watcher status
     #[arg(long)]
     status: bool,
+    /// Skip startup scan (don't reconcile with filesystem on start)
+    #[arg(long)]
+    no_startup_scan: bool,
+    /// Startup scan mode: deleted_only, deleted_and_new, full (default: from config)
+    #[arg(long)]
+    startup_scan_mode: Option<String>,
+    /// Wait for startup scan to complete before watching
+    #[arg(long)]
+    startup_scan_sync: bool,
   },
   /// Get surrounding context for a code or document chunk
   #[command(after_help = "\
@@ -605,7 +614,13 @@ async fn main() -> Result<()> {
       ConfigCommand::Reset => cmd_config_reset().await,
     },
 
-    Commands::Watch { stop, status } => cmd_watch(stop, status).await,
+    Commands::Watch {
+      stop,
+      status,
+      no_startup_scan,
+      startup_scan_mode,
+      startup_scan_sync,
+    } => cmd_watch(stop, status, no_startup_scan, startup_scan_mode, startup_scan_sync).await,
     Commands::Context {
       chunk_id,
       before,

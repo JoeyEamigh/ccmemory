@@ -275,10 +275,20 @@ impl ToolHandler {
       }
     };
 
-    let (_, db) = match self.registry.get_or_create(&project_path).await {
+    let (info, db) = match self.registry.get_or_create(&project_path).await {
       Ok(p) => p,
       Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
     };
+
+    // Wait for any ongoing startup scan to complete before searching
+    // This ensures search results are consistent and don't include stale data
+    if !self.wait_for_scan_if_needed(info.id.as_str()).await {
+      return Response::error(
+        request.id,
+        -32000,
+        "Search timed out waiting for startup scan to complete. Please try again.",
+      );
+    }
 
     // Get query embedding
     let query_embedding = self.get_embedding(&args.query).await;
@@ -559,10 +569,19 @@ impl ToolHandler {
       );
     }
 
-    let (_, db) = match self.registry.get_or_create(&project_path).await {
+    let (info, db) = match self.registry.get_or_create(&project_path).await {
       Ok(p) => p,
       Err(e) => return Response::error(request.id, -32000, &format!("Project error: {}", e)),
     };
+
+    // Wait for any ongoing startup scan to complete before searching
+    if !self.wait_for_scan_if_needed(info.id.as_str()).await {
+      return Response::error(
+        request.id,
+        -32000,
+        "Search timed out waiting for startup scan to complete. Please try again.",
+      );
+    }
 
     let mut code_contexts: Vec<CodeContext> = Vec::new();
     let mut memory_contexts: Vec<MemoryContext> = Vec::new();

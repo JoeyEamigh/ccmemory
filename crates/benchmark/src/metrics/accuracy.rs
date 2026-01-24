@@ -62,6 +62,16 @@ pub struct AccuracyMetrics {
   #[serde(default)]
   pub rabbit_hole_ratio: f64,
 
+  // === Time-to-first-relevant metric ===
+  /// Time in milliseconds to find first relevant result (None if no relevant results)
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub time_to_first_relevant_ms: Option<u64>,
+
+  // === File diversity metric ===
+  /// Average file diversity in top-5 results (1.0 = all different files, lower = clustered)
+  #[serde(default)]
+  pub avg_file_diversity_top5: f64,
+
   // === Debug fields ===
   /// Files found (for debugging)
   #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -127,6 +137,12 @@ pub struct AccuracyMetricsBuilder {
   max_consecutive_failures: Option<usize>,
   rabbit_hole_steps: Option<usize>,
   rabbit_hole_ratio: Option<f64>,
+
+  // Time-to-first-relevant metric
+  time_to_first_relevant_ms: Option<u64>,
+
+  // File diversity metric
+  avg_file_diversity_top5: Option<f64>,
 }
 
 impl AccuracyMetricsBuilder {
@@ -251,6 +267,18 @@ impl AccuracyMetricsBuilder {
     self
   }
 
+  /// Set time to first relevant result in milliseconds.
+  pub fn set_time_to_first_relevant_ms(mut self, time_ms: Option<u64>) -> Self {
+    self.time_to_first_relevant_ms = time_ms;
+    self
+  }
+
+  /// Set average file diversity for top-5 results.
+  pub fn set_avg_file_diversity_top5(mut self, diversity: f64) -> Self {
+    self.avg_file_diversity_top5 = Some(diversity);
+    self
+  }
+
   /// Build the final metrics.
   pub fn build(self) -> AccuracyMetrics {
     // Calculate file recall
@@ -294,6 +322,10 @@ impl AccuracyMetricsBuilder {
       max_consecutive_failures: self.max_consecutive_failures.unwrap_or(0),
       rabbit_hole_steps: self.rabbit_hole_steps.unwrap_or(0),
       rabbit_hole_ratio: self.rabbit_hole_ratio.unwrap_or(0.0),
+      // Time-to-first-relevant metric
+      time_to_first_relevant_ms: self.time_to_first_relevant_ms,
+      // File diversity metric
+      avg_file_diversity_top5: self.avg_file_diversity_top5.unwrap_or(1.0),
       // Debug fields
       files_found,
       files_missed,
