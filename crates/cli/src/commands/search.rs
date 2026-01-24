@@ -1,7 +1,9 @@
 //! Search commands for memories, code, and documents
 
 use anyhow::{Context, Result};
-use daemon::{Request, connect_or_start};
+use cli::to_daemon_request;
+use daemon::connect_or_start;
+use ipc::{CodeSearchParams, DocsSearchParams, MemorySearchParams, Method, Request};
 use tracing::error;
 
 /// Format an ID for display
@@ -37,33 +39,25 @@ pub async fn cmd_search(
     .or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().to_string()))
     .unwrap_or_else(|| ".".to_string());
 
-  let mut params = serde_json::json!({
-      "query": query,
-      "cwd": cwd,
-      "limit": limit,
-      "include_superseded": include_superseded,
-  });
-
-  if let Some(s) = sector {
-    params["sector"] = serde_json::json!(s);
-  }
-  if let Some(t) = memory_type {
-    params["type"] = serde_json::json!(t);
-  }
-  if let Some(sal) = min_salience {
-    params["min_salience"] = serde_json::json!(sal);
-  }
-  if let Some(sc) = scope {
-    params["scope_path"] = serde_json::json!(sc);
-  }
+  let params = MemorySearchParams {
+    query: query.to_string(),
+    cwd: Some(cwd),
+    sector: sector.map(|s| s.to_string()),
+    memory_type: memory_type.map(|t| t.to_string()),
+    min_salience,
+    scope_path: scope.map(|s| s.to_string()),
+    limit: Some(limit),
+    include_superseded,
+    ..Default::default()
+  };
 
   let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "memory_search".to_string(),
+    id: Some(1),
+    method: Method::MemorySearch,
     params,
   };
 
-  let response = client.request(request).await.context("Failed to search memories")?;
+  let response = client.request(to_daemon_request(request)).await.context("Failed to search memories")?;
 
   if let Some(err) = response.error {
     error!("Search error: {}", err.message);
@@ -134,32 +128,33 @@ pub async fn cmd_search_code(
     .or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().to_string()))
     .unwrap_or_else(|| ".".to_string());
 
-  let mut params = serde_json::json!({
-      "query": query,
-      "cwd": cwd,
-      "limit": limit,
-  });
+  // Build file_pattern from optional filters
+  let file_pattern = match (language, chunk_type, path, symbol) {
+    (Some(lang), _, _, _) => Some(format!("*.{}", lang)),
+    (_, _, Some(p), _) => Some(p.to_string()),
+    _ => None,
+  };
 
-  if let Some(lang) = language {
-    params["language"] = serde_json::json!(lang);
-  }
-  if let Some(ct) = chunk_type {
-    params["chunk_type"] = serde_json::json!(ct);
-  }
-  if let Some(p) = path {
-    params["file_path_prefix"] = serde_json::json!(p);
-  }
-  if let Some(s) = symbol {
-    params["symbol"] = serde_json::json!(s);
-  }
+  let symbol_type = chunk_type.map(|ct| ct.to_string());
+
+  // Note: The daemon may need to handle "symbol" separately if needed
+  let _ = symbol; // Acknowledge unused for now
+
+  let params = CodeSearchParams {
+    query: query.to_string(),
+    cwd: Some(cwd),
+    limit: Some(limit),
+    file_pattern,
+    symbol_type,
+  };
 
   let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "code_search".to_string(),
+    id: Some(1),
+    method: Method::CodeSearch,
     params,
   };
 
-  let response = client.request(request).await.context("Failed to search code")?;
+  let response = client.request(to_daemon_request(request)).await.context("Failed to search code")?;
 
   if let Some(err) = response.error {
     error!("Code search error: {}", err.message);
@@ -219,17 +214,19 @@ pub async fn cmd_search_docs(
     .or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().to_string()))
     .unwrap_or_else(|| ".".to_string());
 
-  let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "docs_search".to_string(),
-    params: serde_json::json!({
-        "query": query,
-        "cwd": cwd,
-        "limit": limit,
-    }),
+  let params = DocsSearchParams {
+    query: query.to_string(),
+    cwd: Some(cwd),
+    limit: Some(limit),
   };
 
-  let response = client.request(request).await.context("Failed to search documents")?;
+  let request = Request {
+    id: Some(1),
+    method: Method::DocsSearch,
+    params,
+  };
+
+  let response = client.request(to_daemon_request(request)).await.context("Failed to search documents")?;
 
   if let Some(err) = response.error {
     error!("Document search error: {}", err.message);

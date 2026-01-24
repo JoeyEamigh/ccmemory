@@ -18,6 +18,7 @@ daemon = { workspace = true }
 index = { workspace = true }
 embedding = { workspace = true }
 llm = { workspace = true }
+ipc = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }

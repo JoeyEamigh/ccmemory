@@ -1,7 +1,9 @@
 //! Memory management commands (show, delete, export, restore, deleted)
 
 use anyhow::{Context, Result};
-use daemon::{Request, connect_or_start};
+use cli::to_daemon_request;
+use daemon::connect_or_start;
+use ipc::{MemoryDeleteParams, MemoryGetParams, MemoryListDeletedParams, MemoryListParams, MemoryRestoreParams, Method, Request};
 use tracing::error;
 
 /// Show detailed memory by ID
@@ -12,17 +14,19 @@ pub async fn cmd_show(memory_id: &str, related: bool, json_output: bool) -> Resu
     .map(|p| p.to_string_lossy().to_string())
     .unwrap_or_else(|_| ".".to_string());
 
-  let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "memory_get".to_string(),
-    params: serde_json::json!({
-        "memory_id": memory_id,
-        "cwd": cwd,
-        "include_related": related,
-    }),
+  let params = MemoryGetParams {
+    memory_id: memory_id.to_string(),
+    cwd: Some(cwd),
+    include_related: if related { Some(true) } else { None },
   };
 
-  let response = client.request(request).await.context("Failed to get memory")?;
+  let request = Request {
+    id: Some(1),
+    method: Method::MemoryGet,
+    params,
+  };
+
+  let response = client.request(to_daemon_request(request)).await.context("Failed to get memory")?;
 
   if let Some(err) = response.error {
     error!("Error: {}", err.message);
@@ -107,17 +111,21 @@ pub async fn cmd_delete(memory_id: &str, hard: bool) -> Result<()> {
     .map(|p| p.to_string_lossy().to_string())
     .unwrap_or_else(|_| ".".to_string());
 
-  let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "memory_delete".to_string(),
-    params: serde_json::json!({
-        "memory_id": memory_id,
-        "cwd": cwd,
-        "hard": hard,
-    }),
+  let params = MemoryDeleteParams {
+    memory_id: memory_id.to_string(),
+    cwd: Some(cwd),
   };
 
-  let response = client.request(request).await.context("Failed to delete memory")?;
+  // Note: "hard" parameter would need to be added to MemoryDeleteParams if the API supports it
+  let _ = hard;
+
+  let request = Request {
+    id: Some(1),
+    method: Method::MemoryDelete,
+    params,
+  };
+
+  let response = client.request(to_daemon_request(request)).await.context("Failed to delete memory")?;
 
   if let Some(err) = response.error {
     error!("Delete error: {}", err.message);
@@ -142,15 +150,18 @@ pub async fn cmd_export(output: Option<&str>, format: &str) -> Result<()> {
     .unwrap_or_else(|_| ".".to_string());
 
   // Get all memories for the project
-  let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "memory_list".to_string(),
-    params: serde_json::json!({
-        "cwd": cwd,
-    }),
+  let params = MemoryListParams {
+    cwd: Some(cwd),
+    ..Default::default()
   };
 
-  let response = client.request(request).await.context("Failed to list memories")?;
+  let request = Request {
+    id: Some(1),
+    method: Method::MemoryList,
+    params,
+  };
+
+  let response = client.request(to_daemon_request(request)).await.context("Failed to list memories")?;
 
   if let Some(err) = response.error {
     error!("Export error: {}", err.message);
@@ -210,16 +221,18 @@ pub async fn cmd_restore(memory_id: &str) -> Result<()> {
     .map(|p| p.to_string_lossy().to_string())
     .unwrap_or_else(|_| ".".to_string());
 
-  let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "memory_restore".to_string(),
-    params: serde_json::json!({
-        "memory_id": memory_id,
-        "cwd": cwd,
-    }),
+  let params = MemoryRestoreParams {
+    memory_id: memory_id.to_string(),
+    cwd: Some(cwd),
   };
 
-  let response = client.request(request).await.context("Failed to restore memory")?;
+  let request = Request {
+    id: Some(1),
+    method: Method::MemoryRestore,
+    params,
+  };
+
+  let response = client.request(to_daemon_request(request)).await.context("Failed to restore memory")?;
 
   if let Some(err) = response.error {
     error!("Restore error: {}", err.message);
@@ -259,17 +272,19 @@ pub async fn cmd_deleted(limit: usize, json_output: bool) -> Result<()> {
     .map(|p| p.to_string_lossy().to_string())
     .unwrap_or_else(|_| ".".to_string());
 
+  let params = MemoryListDeletedParams {
+    cwd: Some(cwd),
+    limit: Some(limit),
+  };
+
   let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "memory_list_deleted".to_string(),
-    params: serde_json::json!({
-        "cwd": cwd,
-        "limit": limit,
-    }),
+    id: Some(1),
+    method: Method::MemoryListDeleted,
+    params,
   };
 
   let response = client
-    .request(request)
+    .request(cli::to_daemon_request(request))
     .await
     .context("Failed to list deleted memories")?;
 

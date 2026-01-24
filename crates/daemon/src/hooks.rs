@@ -1,4 +1,8 @@
 use crate::projects::ProjectRegistry;
+use crate::router::{
+  PostToolUseHookResult, PreCompactHookResult, SessionEndHookResult, SessionStartHookResult,
+  SimpleHookResult, StopHookResult, UserPromptHookResult,
+};
 use crate::session_tracker::{SessionId, SessionTracker};
 use embedding::EmbeddingProvider;
 use engram_core::{HooksConfig, Memory, MemoryType, Sector, resolve_project_path};
@@ -873,13 +877,13 @@ impl HookHandler {
     // Auto-start watcher if not already running
     let watcher_started = self.maybe_auto_start_watcher(info.id.as_str(), &project_path).await;
 
-    Ok(serde_json::json!({
-        "status": "ok",
-        "project_id": info.id.as_str(),
-        "project_name": info.name,
-        "project_path": project_path.to_string_lossy(),
-        "watcher_started": watcher_started,
-    }))
+    Ok(serde_json::to_value(SessionStartHookResult {
+      status: "ok".to_string(),
+      project_id: info.id.as_str().to_string(),
+      project_name: info.name.clone(),
+      project_path: project_path.to_string_lossy().to_string(),
+      watcher_started,
+    })?)
   }
 
   async fn on_session_end(&self, params: serde_json::Value) -> Result<serde_json::Value, HookError> {
@@ -950,11 +954,11 @@ impl HookHandler {
     }
     self.unbind_session_project(session_id).await;
 
-    Ok(serde_json::json!({
-        "status": "ok",
-        "memories_created": memories_created,
-        "memories_promoted": memories_promoted,
-    }))
+    Ok(serde_json::to_value(SessionEndHookResult {
+      status: "ok".to_string(),
+      memories_created,
+      memories_promoted,
+    })?)
   }
 
   async fn on_user_prompt_submit(&self, params: serde_json::Value) -> Result<serde_json::Value, HookError> {
@@ -1029,16 +1033,19 @@ impl HookHandler {
       }
     }
 
-    Ok(serde_json::json!({
-        "status": "ok",
-        "memories_created": memories_created,
-    }))
+    Ok(serde_json::to_value(UserPromptHookResult {
+      status: "ok".to_string(),
+      memories_created,
+    })?)
   }
 
   async fn on_post_tool_use(&self, params: serde_json::Value) -> Result<serde_json::Value, HookError> {
     let session_id = params.get("session_id").and_then(|v| v.as_str()).unwrap_or("unknown");
     let tool_name = params.get("tool_name").and_then(|v| v.as_str()).unwrap_or("unknown");
-    let tool_params = params.get("tool_input").cloned().unwrap_or(serde_json::json!({}));
+    let tool_params = params
+      .get("tool_input")
+      .cloned()
+      .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
     let tool_result = params.get("tool_result");
 
     debug!("Tool used in session {}: {}", session_id, tool_name);
@@ -1172,10 +1179,10 @@ impl HookHandler {
       }
     }
 
-    Ok(serde_json::json!({
-        "status": "ok",
-        "observation_memory_id": observation_memory_id,
-    }))
+    Ok(serde_json::to_value(PostToolUseHookResult {
+      status: "ok".to_string(),
+      observation_memory_id,
+    })?)
   }
 
   async fn on_pre_compact(&self, params: serde_json::Value) -> Result<serde_json::Value, HookError> {
@@ -1235,11 +1242,11 @@ impl HookHandler {
       memories_created.push(id);
     }
 
-    Ok(serde_json::json!({
-        "status": "ok",
-        "background_extraction": self.use_background_extraction,
-        "memories_created": memories_created,
-    }))
+    Ok(serde_json::to_value(PreCompactHookResult {
+      status: "ok".to_string(),
+      background_extraction: self.use_background_extraction,
+      memories_created,
+    })?)
   }
 
   async fn on_stop(&self, params: serde_json::Value) -> Result<serde_json::Value, HookError> {
@@ -1298,11 +1305,11 @@ impl HookHandler {
       memories_created.push(id);
     }
 
-    Ok(serde_json::json!({
-        "status": "ok",
-        "background_extraction": self.use_background_extraction,
-        "memories_created": memories_created,
-    }))
+    Ok(serde_json::to_value(StopHookResult {
+      status: "ok".to_string(),
+      background_extraction: self.use_background_extraction,
+      memories_created,
+    })?)
   }
 
   async fn on_subagent_stop(&self, params: serde_json::Value) -> Result<serde_json::Value, HookError> {
@@ -1310,9 +1317,9 @@ impl HookHandler {
 
     debug!("Subagent stop for session {}", session_id);
 
-    Ok(serde_json::json!({
-        "status": "ok",
-    }))
+    Ok(serde_json::to_value(SimpleHookResult {
+      status: "ok".to_string(),
+    })?)
   }
 
   async fn on_notification(&self, params: serde_json::Value) -> Result<serde_json::Value, HookError> {
@@ -1320,9 +1327,9 @@ impl HookHandler {
 
     debug!("Notification: {}", message);
 
-    Ok(serde_json::json!({
-        "status": "ok",
-    }))
+    Ok(serde_json::to_value(SimpleHookResult {
+      status: "ok".to_string(),
+    })?)
   }
 }
 
@@ -1334,7 +1341,7 @@ pub fn read_hook_input() -> Result<serde_json::Value, HookError> {
   std::io::stdin().read_to_string(&mut input)?;
 
   if input.trim().is_empty() {
-    return Ok(serde_json::json!({}));
+    return Ok(serde_json::Value::Object(Default::default()));
   }
 
   Ok(serde_json::from_str(&input)?)

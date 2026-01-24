@@ -310,6 +310,25 @@ mod tests {
   use std::path::Path;
   use tempfile::TempDir;
 
+  // Typed event payload structs for type-safe test data
+  #[derive(Serialize)]
+  struct MemoryCreatedPayload {
+    content: String,
+  }
+
+  #[derive(Serialize)]
+  struct ReinforcedPayload {
+    amount: f32,
+  }
+
+  #[derive(Serialize)]
+  struct EmptyPayload;
+
+  /// Helper to convert a typed payload to serde_json::Value
+  fn payload<T: Serialize>(data: T) -> serde_json::Value {
+    serde_json::to_value(data).unwrap_or_default()
+  }
+
   async fn create_test_db() -> (TempDir, ProjectDb) {
     let temp_dir = TempDir::new().unwrap();
     let project_id = ProjectId::from_path(Path::new("/test"));
@@ -326,7 +345,7 @@ mod tests {
     let event = Event::memory(
       "test-memory-123",
       EventType::Created,
-      serde_json::json!({"content": "test"}),
+      payload(MemoryCreatedPayload { content: "test".to_string() }),
     );
 
     db.log_event(&event).await.unwrap();
@@ -345,9 +364,9 @@ mod tests {
     let (_temp, db) = create_test_db().await;
 
     let events = vec![
-      Event::memory("mem-1", EventType::Created, serde_json::json!({})),
-      Event::memory("mem-1", EventType::Accessed, serde_json::json!({})),
-      Event::memory("mem-1", EventType::Reinforced, serde_json::json!({"amount": 0.1})),
+      Event::memory("mem-1", EventType::Created, payload(EmptyPayload)),
+      Event::memory("mem-1", EventType::Accessed, payload(EmptyPayload)),
+      Event::memory("mem-1", EventType::Reinforced, payload(ReinforcedPayload { amount: 0.1 })),
     ];
 
     db.log_events(&events).await.unwrap();
@@ -365,9 +384,9 @@ mod tests {
     let (_temp, db) = create_test_db().await;
 
     let events = vec![
-      Event::memory("mem-1", EventType::Created, serde_json::json!({})),
-      Event::session("sess-1", EventType::Created, serde_json::json!({})),
-      Event::memory("mem-2", EventType::Created, serde_json::json!({})),
+      Event::memory("mem-1", EventType::Created, payload(EmptyPayload)),
+      Event::session("sess-1", EventType::Created, payload(EmptyPayload)),
+      Event::memory("mem-2", EventType::Created, payload(EmptyPayload)),
     ];
 
     db.log_events(&events).await.unwrap();
@@ -384,8 +403,8 @@ mod tests {
     let (_temp, db) = create_test_db().await;
 
     let events = vec![
-      Event::memory("mem-1", EventType::Created, serde_json::json!({})),
-      Event::memory("mem-2", EventType::Created, serde_json::json!({})),
+      Event::memory("mem-1", EventType::Created, payload(EmptyPayload)),
+      Event::memory("mem-2", EventType::Created, payload(EmptyPayload)),
     ];
 
     db.log_events(&events).await.unwrap();

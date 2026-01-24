@@ -1,7 +1,9 @@
 //! Watch command for file change monitoring
 
 use anyhow::{Context, Result};
-use daemon::{Request, connect_or_start};
+use cli::to_daemon_request;
+use daemon::connect_or_start;
+use ipc::{Method, Request, WatchStatusParams, WatchStopParams};
 use tracing::error;
 
 /// Watch for file changes
@@ -26,13 +28,17 @@ pub async fn cmd_watch(
     .unwrap_or_else(|_| ".".to_string());
 
   if stop {
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "watch_stop".to_string(),
-      params: serde_json::json!({ "cwd": cwd }),
+    let params = WatchStopParams {
+      cwd: Some(cwd),
     };
 
-    let response = client.request(request).await.context("Failed to stop watcher")?;
+    let request = Request {
+      id: Some(1),
+      method: Method::WatchStop,
+      params,
+    };
+
+    let response = client.request(to_daemon_request(request)).await.context("Failed to stop watcher")?;
 
     if let Some(err) = response.error {
       error!("Stop error: {}", err.message);
@@ -44,13 +50,17 @@ pub async fn cmd_watch(
   }
 
   if status {
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "watch_status".to_string(),
-      params: serde_json::json!({ "cwd": cwd }),
+    let params = WatchStatusParams {
+      cwd: Some(cwd),
     };
 
-    let response = client.request(request).await.context("Failed to get watcher status")?;
+    let request = Request {
+      id: Some(1),
+      method: Method::WatchStatus,
+      params,
+    };
+
+    let response = client.request(to_daemon_request(request)).await.context("Failed to get watcher status")?;
 
     if let Some(err) = response.error {
       error!("Status error: {}", err.message);
@@ -85,28 +95,34 @@ pub async fn cmd_watch(
     return Ok(());
   }
 
-  // Build params for watch_start
-  let mut params = serde_json::json!({ "cwd": cwd });
+  // Extended params for watch_start with startup scan options
+  #[derive(serde::Serialize)]
+  struct ExtendedWatchStartParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    startup_scan: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    startup_scan_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    startup_scan_blocking: Option<bool>,
+  }
 
-  // Add startup scan options if provided
-  if no_startup_scan {
-    params["startup_scan"] = serde_json::json!(false);
-  }
-  if let Some(ref mode) = startup_scan_mode {
-    params["startup_scan_mode"] = serde_json::json!(mode);
-  }
-  if startup_scan_sync {
-    params["startup_scan_blocking"] = serde_json::json!(true);
-  }
+  let params = ExtendedWatchStartParams {
+    cwd: Some(cwd.clone()),
+    startup_scan: if no_startup_scan { Some(false) } else { None },
+    startup_scan_mode: startup_scan_mode.clone(),
+    startup_scan_blocking: if startup_scan_sync { Some(true) } else { None },
+  };
 
   // Start watching
   let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "watch_start".to_string(),
+    id: Some(1),
+    method: Method::WatchStart,
     params,
   };
 
-  let response = client.request(request).await.context("Failed to start watcher")?;
+  let response = client.request(to_daemon_request(request)).await.context("Failed to start watcher")?;
 
   if let Some(err) = response.error {
     error!("Watch error: {}", err.message);
@@ -128,11 +144,13 @@ pub async fn cmd_watch(
 
   // Send stop command on exit
   let stop_request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "watch_stop".to_string(),
-    params: serde_json::json!({ "cwd": cwd }),
+    id: Some(1),
+    method: Method::WatchStop,
+    params: WatchStopParams {
+      cwd: Some(cwd),
+    },
   };
-  let _ = client.request(stop_request).await;
+  let _ = client.request(to_daemon_request(stop_request)).await;
 
   println!("\nWatcher stopped");
   Ok(())

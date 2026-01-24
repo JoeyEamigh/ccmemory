@@ -6,6 +6,7 @@ use crate::llm_judge::{ComprehensionResult, LlmJudge};
 use crate::metrics::{AccuracyMetrics, PerformanceMetrics, ResourceMonitor};
 use crate::session::{ExplorationSession, HintType};
 use crate::{BenchmarkError, Result};
+use ipc::{ContextParams, ExploreParams, HealthCheckParams, Method, Request};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -226,8 +227,13 @@ impl ScenarioRunner {
     let bloat_threshold = scenario.success_criteria.max_context_bloat.unwrap_or(0.3);
     let recall_threshold = scenario.success_criteria.min_discovery_score;
 
-    let diagnostics =
-      session.compute_diagnostics(&expected, &accuracy, convergence_threshold, bloat_threshold, recall_threshold);
+    let diagnostics = session.compute_diagnostics(
+      &expected,
+      &accuracy,
+      convergence_threshold,
+      bloat_threshold,
+      recall_threshold,
+    );
 
     if diagnostics.has_issues {
       accuracy.diagnostics = Some(diagnostics);
@@ -315,21 +321,21 @@ impl ScenarioRunner {
 
     // Build explore request - use step's expand_top or default to 3
     let expand_top = step.expand_top.unwrap_or(3);
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": format!("step-{}", index),
-        "method": "explore",
-        "params": {
-            "query": step.query,
-            "scope": step.scope.as_deref().unwrap_or("all"),
-            "expand_top": expand_top,
-            "limit": 10,
-            "cwd": self.project_path,
-        }
-    });
+    let request: Request<ExploreParams> = Request {
+      id: Some(index as u64),
+      method: Method::Explore,
+      params: ExploreParams {
+        query: step.query.clone(),
+        scope: Some(step.scope.as_deref().unwrap_or("all").to_string()),
+        expand_top: Some(expand_top),
+        limit: Some(10),
+        cwd: Some(self.project_path.clone()),
+        format: None,
+      },
+    };
 
     // Send request to daemon
-    let response = self.send_request(&request).await?;
+    let response = self.send_typed_request(&request).await?;
     let latency = start.elapsed();
 
     // Parse response
@@ -600,18 +606,19 @@ impl ScenarioRunner {
     let files_before = session.discovered_files().len();
     let symbols_before = session.discovered_symbols().len();
 
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": format!("context-{}", id),
-        "method": "context",
-        "params": {
-            "id": id,
-            "depth": 5,
-            "cwd": self.project_path,
-        }
-    });
+    let request: Request<ContextParams> = Request {
+      id: Some(1),
+      method: Method::Context,
+      params: ContextParams {
+        id: Some(id.to_string()),
+        ids: None,
+        depth: Some(5),
+        cwd: Some(self.project_path.clone()),
+        format: None,
+      },
+    };
 
-    let response = self.send_request(&request).await?;
+    let response = self.send_typed_request(&request).await?;
     let latency = start.elapsed();
 
     // Check for success
@@ -665,8 +672,9 @@ impl ScenarioRunner {
     Ok(())
   }
 
-  /// Send a JSON-RPC request to the daemon.
-  async fn send_request(&self, request: &serde_json::Value) -> Result<serde_json::Value> {
+  /// Send a typed JSON-RPC request to the daemon.
+  /// Returns the raw response for flexible parsing of extended result fields.
+  async fn send_typed_request<P: Serialize>(&self, request: &Request<P>) -> Result<serde_json::Value> {
     let mut stream = UnixStream::connect(&self.socket_path)
       .await
       .map_err(|e| BenchmarkError::Execution(format!("Failed to connect to daemon: {}", e)))?;
@@ -688,14 +696,13 @@ impl ScenarioRunner {
 
   /// Check if the daemon is running.
   pub async fn check_daemon(&self) -> bool {
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "health-check",
-        "method": "health",
-        "params": {}
-    });
+    let request: Request<HealthCheckParams> = Request {
+      id: Some(1),
+      method: Method::HealthCheck,
+      params: HealthCheckParams,
+    };
 
-    match self.send_request(&request).await {
+    match self.send_typed_request(&request).await {
       Ok(response) => response.get("error").is_none(),
       Err(_) => false,
     }

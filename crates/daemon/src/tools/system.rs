@@ -1,7 +1,10 @@
 //! System-level tool methods (stats, health, migration)
 
 use super::ToolHandler;
-use crate::router::{Request, Response};
+use crate::router::{
+  DbHealthStatus, EmbeddingHealthStatus, FullHealthCheckResult, MigrateEmbeddingResponse, OllamaHealthStatus, Request,
+  Response,
+};
 use embedding::OllamaProvider;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -61,22 +64,23 @@ impl ToolHandler {
       Ok((_, db)) => {
         // Try a simple operation to verify DB is working
         match db.count_memories(None).await {
-          Ok(_) => serde_json::json!({
-              "status": "healthy",
-              "wal_mode": true, // LanceDB uses its own format
-          }),
-          Err(e) => serde_json::json!({
-              "status": "error",
-              "error": e.to_string(),
-          }),
+          Ok(_) => DbHealthStatus {
+            status: "healthy".to_string(),
+            wal_mode: Some(true), // LanceDB uses its own format
+            error: None,
+          },
+          Err(e) => DbHealthStatus {
+            status: "error".to_string(),
+            wal_mode: None,
+            error: Some(e.to_string()),
+          },
         }
       }
-      Err(e) => {
-        serde_json::json!({
-            "status": "error",
-            "error": e.to_string(),
-        })
-      }
+      Err(e) => DbHealthStatus {
+        status: "error".to_string(),
+        wal_mode: None,
+        error: Some(e.to_string()),
+      },
     };
 
     // Check Ollama availability and context length
@@ -109,43 +113,45 @@ impl ToolHandler {
     // Check embedding provider (use what we have configured)
     let embedding_status = match &self.embedding {
       Some(provider) => {
-        let mut status = serde_json::json!({
-            "configured": true,
-            "provider": provider.name(),
-            "model": provider.model_id(),
-            "dimensions": provider.dimensions(),
-            "available": provider.is_available().await,
-        });
-        // Add context_length info if available
-        if let Some(ref config) = self.embedding_config {
-          status["context_length"] = serde_json::json!(config.context_length);
-          if let Some(batch_size) = config.max_batch_size {
-            status["max_batch_size"] = serde_json::json!(batch_size);
-          }
+        let (context_length, max_batch_size) = if let Some(ref config) = self.embedding_config {
+          (Some(config.context_length), config.max_batch_size)
+        } else {
+          (None, None)
+        };
+
+        EmbeddingHealthStatus {
+          configured: true,
+          provider: provider.name().to_string(),
+          model: Some(provider.model_id().to_string()),
+          dimensions: Some(provider.dimensions()),
+          available: Some(provider.is_available().await),
+          context_length,
+          max_batch_size,
+          warning: context_length_warning,
         }
-        if let Some(ref warning) = context_length_warning {
-          status["warning"] = serde_json::json!(warning);
-        }
-        status
       }
-      None => {
-        serde_json::json!({
-            "configured": false,
-            "provider": "none",
-        })
-      }
+      None => EmbeddingHealthStatus {
+        configured: false,
+        provider: "none".to_string(),
+        model: None,
+        dimensions: None,
+        available: None,
+        context_length: None,
+        max_batch_size: None,
+        warning: None,
+      },
     };
 
-    let health = serde_json::json!({
-        "database": db_status,
-        "ollama": {
-            "available": ollama_status.available,
-            "models_count": ollama_status.models.len(),
-            "configured_model": ollama_status.configured_model,
-            "configured_model_available": ollama_status.configured_model_available,
-        },
-        "embedding": embedding_status,
-    });
+    let health = FullHealthCheckResult {
+      database: db_status,
+      ollama: OllamaHealthStatus {
+        available: ollama_status.available,
+        models_count: ollama_status.models.len(),
+        configured_model: Some(ollama_status.configured_model),
+        configured_model_available: ollama_status.configured_model_available,
+      },
+      embedding: embedding_status,
+    };
 
     Response::success(request.id, health)
   }
@@ -295,13 +301,13 @@ impl ToolHandler {
 
     Response::success(
       request.id,
-      serde_json::json!({
-          "migrated_count": migrated_count,
-          "skipped_count": skipped_count,
-          "error_count": error_count,
-          "duration_ms": duration.as_millis() as u64,
-          "target_dimensions": target_dimensions,
-      }),
+      MigrateEmbeddingResponse {
+        migrated_count,
+        skipped_count,
+        error_count,
+        duration_ms: duration.as_millis() as u64,
+        target_dimensions,
+      },
     )
   }
 }

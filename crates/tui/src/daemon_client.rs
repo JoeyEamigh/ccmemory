@@ -1,5 +1,12 @@
 use anyhow::{Context, Result};
 use daemon::{Client, Response};
+use ipc::{
+  CodeListParams, CodeSearchParams, CodeStatsParams, DocsSearchParams, EntityGetParams, EntityListParams,
+  EntityTopParams, HealthCheckParams, MemoryDeemphasizeParams, MemoryGetParams, MemoryListParams,
+  MemoryReinforceParams, MemorySearchParams, Method, MetricsParams, PingParams, ProjectStatsParams,
+  RelationshipListParams, ShutdownParams, StatusParams, WatchStatusParams,
+};
+use serde::Serialize;
 use serde_json::Value;
 use std::path::PathBuf;
 use tracing::debug;
@@ -22,26 +29,26 @@ impl DaemonClient {
     self.project_path.to_string_lossy().to_string()
   }
 
-  /// Make a request to the daemon
-  async fn call(&mut self, method: &str, mut params: Value) -> Result<Response> {
-    // Add cwd to params if it's an object
-    if let Some(obj) = params.as_object_mut()
-      && !obj.contains_key("cwd")
-    {
-      obj.insert("cwd".to_string(), serde_json::json!(self.cwd()));
-    }
+  /// Make a typed request to the daemon
+  async fn call_typed<P: Serialize>(&mut self, method: Method, params: P) -> Result<Response> {
+    let method_str = serde_json::to_value(method)
+      .ok()
+      .and_then(|v| v.as_str().map(|s| s.to_string()))
+      .unwrap_or_else(|| format!("{:?}", method).to_lowercase());
 
-    debug!("Calling daemon method: {}", method);
+    let params_value = serde_json::to_value(params).context("Failed to serialize params")?;
+
+    debug!("Calling daemon method: {}", method_str);
     self
       .client
-      .call(method, params)
+      .call(&method_str, params_value)
       .await
       .map_err(|e| anyhow::anyhow!("{}", e))
   }
 
   /// Ping the daemon to check if it's responsive
   pub async fn ping(&mut self) -> Result<bool> {
-    match self.call("ping", serde_json::json!({})).await {
+    match self.call_typed(Method::Ping, PingParams).await {
       Ok(response) => Ok(response.error.is_none()),
       Err(_) => Ok(false),
     }
@@ -49,7 +56,8 @@ impl DaemonClient {
 
   /// Get daemon status
   pub async fn status(&mut self) -> Result<Value> {
-    let response = self.call("status", serde_json::json!({})).await?;
+    let params = StatusParams { cwd: Some(self.cwd()) };
+    let response = self.call_typed(Method::Status, params).await?;
     response.result.ok_or_else(|| {
       let msg = response
         .error
@@ -61,7 +69,8 @@ impl DaemonClient {
 
   /// Get project statistics
   pub async fn project_stats(&mut self) -> Result<Value> {
-    let response = self.call("project_stats", serde_json::json!({})).await?;
+    let params = ProjectStatsParams { cwd: Some(self.cwd()) };
+    let response = self.call_typed(Method::ProjectStats, params).await?;
     response.result.ok_or_else(|| {
       let msg = response
         .error
@@ -73,7 +82,8 @@ impl DaemonClient {
 
   /// Get health check
   pub async fn health_check(&mut self) -> Result<Value> {
-    let response = self.call("health_check", serde_json::json!({})).await?;
+    let params = HealthCheckParams;
+    let response = self.call_typed(Method::HealthCheck, params).await?;
     response.result.ok_or_else(|| {
       let msg = response
         .error
@@ -85,15 +95,13 @@ impl DaemonClient {
 
   /// Search memories
   pub async fn memory_search(&mut self, query: &str, limit: usize) -> Result<Vec<Value>> {
-    let response = self
-      .call(
-        "memory_search",
-        serde_json::json!({
-            "query": query,
-            "limit": limit,
-        }),
-      )
-      .await?;
+    let params = MemorySearchParams {
+      query: query.to_string(),
+      cwd: Some(self.cwd()),
+      limit: Some(limit),
+      ..Default::default()
+    };
+    let response = self.call_typed(Method::MemorySearch, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -107,15 +115,13 @@ impl DaemonClient {
 
   /// List memories
   pub async fn memory_list(&mut self, limit: usize, offset: usize) -> Result<Vec<Value>> {
-    let response = self
-      .call(
-        "memory_list",
-        serde_json::json!({
-            "limit": limit,
-            "offset": offset,
-        }),
-      )
-      .await?;
+    let params = MemoryListParams {
+      cwd: Some(self.cwd()),
+      limit: Some(limit),
+      offset: Some(offset),
+      ..Default::default()
+    };
+    let response = self.call_typed(Method::MemoryList, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -129,15 +135,12 @@ impl DaemonClient {
 
   /// Get a single memory by ID
   pub async fn memory_get(&mut self, memory_id: &str) -> Result<Value> {
-    let response = self
-      .call(
-        "memory_get",
-        serde_json::json!({
-            "memory_id": memory_id,
-            "include_related": true,
-        }),
-      )
-      .await?;
+    let params = MemoryGetParams {
+      memory_id: memory_id.to_string(),
+      cwd: Some(self.cwd()),
+      include_related: Some(true),
+    };
+    let response = self.call_typed(Method::MemoryGet, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -148,15 +151,12 @@ impl DaemonClient {
 
   /// Reinforce a memory
   pub async fn memory_reinforce(&mut self, memory_id: &str) -> Result<()> {
-    let response = self
-      .call(
-        "memory_reinforce",
-        serde_json::json!({
-            "memory_id": memory_id,
-            "amount": 0.2,
-        }),
-      )
-      .await?;
+    let params = MemoryReinforceParams {
+      memory_id: memory_id.to_string(),
+      cwd: Some(self.cwd()),
+      amount: Some(0.2),
+    };
+    let response = self.call_typed(Method::MemoryReinforce, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -167,15 +167,12 @@ impl DaemonClient {
 
   /// Deemphasize a memory
   pub async fn memory_deemphasize(&mut self, memory_id: &str) -> Result<()> {
-    let response = self
-      .call(
-        "memory_deemphasize",
-        serde_json::json!({
-            "memory_id": memory_id,
-            "amount": 0.2,
-        }),
-      )
-      .await?;
+    let params = MemoryDeemphasizeParams {
+      memory_id: memory_id.to_string(),
+      cwd: Some(self.cwd()),
+      amount: Some(0.2),
+    };
+    let response = self.call_typed(Method::MemoryDeemphasize, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -186,15 +183,13 @@ impl DaemonClient {
 
   /// Search code
   pub async fn code_search(&mut self, query: &str, limit: usize) -> Result<Vec<Value>> {
-    let response = self
-      .call(
-        "code_search",
-        serde_json::json!({
-            "query": query,
-            "limit": limit,
-        }),
-      )
-      .await?;
+    let params = CodeSearchParams {
+      query: query.to_string(),
+      cwd: Some(self.cwd()),
+      limit: Some(limit),
+      ..Default::default()
+    };
+    let response = self.call_typed(Method::CodeSearch, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -208,7 +203,11 @@ impl DaemonClient {
 
   /// List code chunks
   pub async fn code_list(&mut self) -> Result<Vec<Value>> {
-    let response = self.call("code_list", serde_json::json!({})).await?;
+    let params = CodeListParams {
+      cwd: Some(self.cwd()),
+      ..Default::default()
+    };
+    let response = self.call_typed(Method::CodeList, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -222,7 +221,8 @@ impl DaemonClient {
 
   /// Get code stats
   pub async fn code_stats(&mut self) -> Result<Value> {
-    let response = self.call("code_stats", serde_json::json!({})).await?;
+    let params = CodeStatsParams { cwd: Some(self.cwd()) };
+    let response = self.call_typed(Method::CodeStats, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -235,15 +235,12 @@ impl DaemonClient {
 
   /// Search documents
   pub async fn docs_search(&mut self, query: &str, limit: usize) -> Result<Vec<Value>> {
-    let response = self
-      .call(
-        "docs_search",
-        serde_json::json!({
-            "query": query,
-            "limit": limit,
-        }),
-      )
-      .await?;
+    let params = DocsSearchParams {
+      query: query.to_string(),
+      cwd: Some(self.cwd()),
+      limit: Some(limit),
+    };
+    let response = self.call_typed(Method::DocsSearch, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -257,14 +254,11 @@ impl DaemonClient {
 
   /// List entities
   pub async fn entity_list(&mut self, limit: usize) -> Result<Vec<Value>> {
-    let response = self
-      .call(
-        "entity_list",
-        serde_json::json!({
-            "limit": limit,
-        }),
-      )
-      .await?;
+    let params = EntityListParams {
+      cwd: Some(self.cwd()),
+      limit: Some(limit),
+    };
+    let response = self.call_typed(Method::EntityList, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -278,14 +272,11 @@ impl DaemonClient {
 
   /// Get top entities
   pub async fn entity_top(&mut self, limit: usize) -> Result<Vec<Value>> {
-    let response = self
-      .call(
-        "entity_top",
-        serde_json::json!({
-            "limit": limit,
-        }),
-      )
-      .await?;
+    let params = EntityTopParams {
+      cwd: Some(self.cwd()),
+      limit: Some(limit),
+    };
+    let response = self.call_typed(Method::EntityTop, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -299,14 +290,11 @@ impl DaemonClient {
 
   /// Get entity details
   pub async fn entity_get(&mut self, entity_id: &str) -> Result<Value> {
-    let response = self
-      .call(
-        "entity_get",
-        serde_json::json!({
-            "entity_id": entity_id,
-        }),
-      )
-      .await?;
+    let params = EntityGetParams {
+      entity_id: entity_id.to_string(),
+      cwd: Some(self.cwd()),
+    };
+    let response = self.call_typed(Method::EntityGet, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -317,14 +305,11 @@ impl DaemonClient {
 
   /// List relationships for a memory
   pub async fn relationship_list(&mut self, memory_id: &str) -> Result<Vec<Value>> {
-    let response = self
-      .call(
-        "relationship_list",
-        serde_json::json!({
-            "memory_id": memory_id,
-        }),
-      )
-      .await?;
+    let params = RelationshipListParams {
+      memory_id: memory_id.to_string(),
+      cwd: Some(self.cwd()),
+    };
+    let response = self.call_typed(Method::RelationshipList, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -338,14 +323,15 @@ impl DaemonClient {
 
   /// Get memory timeline
   pub async fn memory_timeline(&mut self, limit: usize) -> Result<Vec<Value>> {
-    let response = self
-      .call(
-        "memory_timeline",
-        serde_json::json!({
-            "limit": limit,
-        }),
-      )
-      .await?;
+    // Note: The daemon's memory_timeline expects an anchor_id, but for TUI session listing
+    // we use memory_list with a limit to get recent memories as a workaround.
+    // This maintains backward compatibility with existing TUI behavior.
+    let params = MemoryListParams {
+      cwd: Some(self.cwd()),
+      limit: Some(limit),
+      ..Default::default()
+    };
+    let response = self.call_typed(Method::MemoryList, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -360,7 +346,8 @@ impl DaemonClient {
   /// Shutdown the daemon
   pub async fn shutdown(&mut self) -> Result<()> {
     debug!("Sending shutdown request to daemon");
-    let response = self.call("shutdown", serde_json::json!({})).await?;
+    let params = ShutdownParams;
+    let response = self.call_typed(Method::Shutdown, params).await?;
 
     if let Some(err) = response.error {
       return Err(anyhow::anyhow!("{}", err.message));
@@ -371,7 +358,8 @@ impl DaemonClient {
 
   /// Get file watcher status
   pub async fn watch_status(&mut self) -> Result<Value> {
-    let response = self.call("watch_status", serde_json::json!({})).await?;
+    let params = WatchStatusParams { cwd: Some(self.cwd()) };
+    let response = self.call_typed(Method::WatchStatus, params).await?;
     response.result.ok_or_else(|| {
       let msg = response
         .error
@@ -383,7 +371,8 @@ impl DaemonClient {
 
   /// Get daemon metrics
   pub async fn metrics(&mut self) -> Result<Value> {
-    let response = self.call("metrics", serde_json::json!({})).await?;
+    let params = MetricsParams;
+    let response = self.call_typed(Method::Metrics, params).await?;
     response.result.ok_or_else(|| {
       let msg = response
         .error

@@ -1,11 +1,20 @@
 //! Code indexing and search tool methods
 
 use super::ToolHandler;
-use crate::router::{IndexProgress, Request, Response};
+use crate::router::{
+  CodeIndexDryRunResponse, CodeIndexResponse, CodeQueryInfo, CodeSearchResponse, IndexProgress, Request, Response,
+};
 use crate::server::ProgressSender;
 use db::{CheckpointType, IndexCheckpoint, ProjectDb};
 use engram_core::{CodeChunk, MemoryType};
 use index::{Chunker, Scanner, compute_gitignore_hash};
+use ipc::{
+  CodeCallerItem, CodeCalleeItem, CodeCalleesResponse, CodeCallersResponse, CodeChunkFullDetail,
+  CodeContextResponse, CodeContextSection, CodeContextSections, CodeFullCallee, CodeFullCaller,
+  CodeFullDoc, CodeFullMemory, CodeFullSibling, CodeContextFullResponse, CodeImportResult,
+  CodeIndexDryRunResult, CodeIndexStreamingResult, CodeListItem, CodeMemoriesResponse,
+  CodeMemoryItem, CodeRelatedItem, CodeRelatedResponse,
+};
 use parser::import_matches_file;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -594,14 +603,15 @@ impl ToolHandler {
 
           return Response::success(
             request.id,
-            serde_json::json!({
-              "results": enriched_results,
-              "query_info": {
-                "original": args.query,
-                "expanded": if exact { None } else { Some(&search_query) },
-                "intent": intent,
-              }
-            }),
+            CodeSearchResponse {
+              results: enriched_results,
+              query_info: CodeQueryInfo {
+                original: args.query.clone(),
+                expanded: if exact { None } else { Some(search_query.clone()) },
+                intent: intent.map(|s| s.to_string()),
+                search_mode: None,
+              },
+            },
           );
         }
         Err(e) => {
@@ -657,13 +667,15 @@ impl ToolHandler {
 
         Response::success(
           request.id,
-          serde_json::json!({
-            "results": enriched_results,
-            "query_info": {
-              "original": args.query,
-              "search_mode": "text_fallback",
-            }
-          }),
+          CodeSearchResponse {
+            results: enriched_results,
+            query_info: CodeQueryInfo {
+              original: args.query,
+              expanded: None,
+              intent: None,
+              search_mode: Some("text_fallback".to_string()),
+            },
+          },
         )
       }
       Err(e) => Response::error(request.id, -32000, &format!("Code search error: {}", e)),
@@ -724,13 +736,13 @@ impl ToolHandler {
     if dry_run {
       return Response::success(
         request.id,
-        serde_json::json!({
-            "status": "dry_run",
-            "files_found": scan_result.files.len(),
-            "skipped": scan_result.skipped_count,
-            "total_bytes": scan_result.total_bytes,
-            "scan_duration_ms": scan_result.scan_duration.as_millis(),
-        }),
+        CodeIndexDryRunResponse {
+          status: "dry_run".to_string(),
+          files_found: scan_result.files.len(),
+          skipped: scan_result.skipped_count as usize,
+          total_bytes: scan_result.total_bytes,
+          scan_duration_ms: scan_result.scan_duration.as_millis() as u64,
+        },
       );
     }
 
@@ -900,20 +912,20 @@ impl ToolHandler {
 
     Response::success(
       request.id,
-      serde_json::json!({
-          "status": "complete",
-          "files_scanned": scan_result.files.len(),
-          "files_indexed": indexed_files,
-          "chunks_created": total_chunks,
-          "failed_files": failed_files,
-          "resumed_from_checkpoint": !pending_to_process.is_empty() && pending_to_process.len() < scan_result.files.len(),
-          "scan_duration_ms": scan_result.scan_duration.as_millis(),
-          "index_duration_ms": index_duration_ms,
-          "total_duration_ms": total_duration_ms,
-          "files_per_second": files_per_second,
-          "bytes_processed": bytes_processed,
-          "total_bytes": scan_result.total_bytes,
-      }),
+      CodeIndexResponse {
+        status: "complete".to_string(),
+        files_scanned: scan_result.files.len(),
+        files_indexed: indexed_files,
+        chunks_created: total_chunks,
+        failed_files: failed_files.len(),
+        resumed_from_checkpoint: !pending_to_process.is_empty() && pending_to_process.len() < scan_result.files.len(),
+        scan_duration_ms: scan_result.scan_duration.as_millis() as u64,
+        index_duration_ms,
+        total_duration_ms,
+        files_per_second,
+        bytes_processed,
+        total_bytes: scan_result.total_bytes,
+      },
     )
   }
 
@@ -992,13 +1004,13 @@ impl ToolHandler {
       let _ = progress_tx
         .send(Response::success(
           request_id,
-          serde_json::json!({
-              "status": "dry_run",
-              "files_found": scan_result.files.len(),
-              "skipped": scan_result.skipped_count,
-              "total_bytes": scan_result.total_bytes,
-              "scan_duration_ms": scan_result.scan_duration.as_millis(),
-          }),
+          CodeIndexDryRunResult {
+            status: "dry_run".to_string(),
+            files_found: scan_result.files.len(),
+            skipped: scan_result.skipped_count as usize,
+            total_bytes: scan_result.total_bytes,
+            scan_duration_ms: scan_result.scan_duration.as_millis() as u64,
+          },
         ))
         .await;
       return;
@@ -1190,20 +1202,20 @@ impl ToolHandler {
     let _ = progress_tx
       .send(Response::success(
         request_id,
-        serde_json::json!({
-            "status": "complete",
-            "files_scanned": scan_result.files.len(),
-            "files_indexed": indexed_files,
-            "chunks_created": total_chunks,
-            "failed_files": failed_files,
-            "resumed_from_checkpoint": !pending_to_process.is_empty() && pending_to_process.len() < scan_result.files.len(),
-            "scan_duration_ms": scan_result.scan_duration.as_millis(),
-            "index_duration_ms": index_duration_ms,
-            "total_duration_ms": total_duration_ms,
-            "files_per_second": files_per_second,
-            "bytes_processed": bytes_processed,
-            "total_bytes": scan_result.total_bytes,
-        }),
+        CodeIndexStreamingResult {
+          status: "complete".to_string(),
+          files_scanned: scan_result.files.len(),
+          files_indexed: indexed_files,
+          chunks_created: total_chunks,
+          failed_files: failed_files.len(),
+          resumed_from_checkpoint: !pending_to_process.is_empty() && pending_to_process.len() < scan_result.files.len(),
+          scan_duration_ms: scan_result.scan_duration.as_millis() as u64,
+          index_duration_ms,
+          total_duration_ms,
+          files_per_second,
+          bytes_processed,
+          total_bytes: scan_result.total_bytes,
+        },
       ))
       .await;
   }
@@ -1235,25 +1247,23 @@ impl ToolHandler {
 
     match db.list_code_chunks(None, args.limit).await {
       Ok(chunks) => {
-        let results: Vec<_> = chunks
+        let results: Vec<CodeListItem> = chunks
           .into_iter()
-          .map(|chunk| {
-            serde_json::json!({
-                "id": chunk.id.to_string(),
-                "file_path": chunk.file_path,
-                "content": chunk.content,
-                "language": format!("{:?}", chunk.language).to_lowercase(),
-                "chunk_type": format!("{:?}", chunk.chunk_type).to_lowercase(),
-                "symbols": chunk.symbols,
-                "start_line": chunk.start_line,
-                "end_line": chunk.end_line,
-                "file_hash": chunk.file_hash,
-                "tokens_estimate": chunk.tokens_estimate,
-            })
+          .map(|chunk| CodeListItem {
+            id: chunk.id.to_string(),
+            file_path: chunk.file_path,
+            content: chunk.content,
+            language: format!("{:?}", chunk.language).to_lowercase(),
+            chunk_type: format!("{:?}", chunk.chunk_type).to_lowercase(),
+            symbols: chunk.symbols,
+            start_line: chunk.start_line,
+            end_line: chunk.end_line,
+            file_hash: chunk.file_hash,
+            tokens_estimate: chunk.tokens_estimate,
           })
           .collect();
 
-        Response::success(request.id, serde_json::json!(results))
+        Response::success(request.id, results)
       }
       Err(e) => Response::error(request.id, -32000, &format!("List error: {}", e)),
     }
@@ -1350,10 +1360,10 @@ impl ToolHandler {
     match db.add_code_chunk(&chunk, Some(&vector)).await {
       Ok(_) => Response::success(
         request.id,
-        serde_json::json!({
-            "id": chunk.id.to_string(),
-            "status": "imported"
-        }),
+        CodeImportResult {
+          id: chunk.id.to_string(),
+          status: "imported".to_string(),
+        },
       ),
       Err(e) => Response::error(request.id, -32000, &format!("Import failed: {}", e)),
     }
@@ -1430,22 +1440,30 @@ impl ToolHandler {
         );
         return Response::success(
           request.id,
-          serde_json::json!({
-            "chunk_id": chunk.id.to_string(),
-            "file_path": chunk.file_path,
-            "language": format!("{:?}", chunk.language).to_lowercase(),
-            "context": {
-              "before": { "content": "", "start_line": 0, "end_line": 0 },
-              "target": {
-                "content": chunk.content,
-                "start_line": chunk.start_line,
-                "end_line": chunk.end_line
+          CodeContextResponse {
+            chunk_id: chunk.id.to_string(),
+            file_path: chunk.file_path,
+            language: format!("{:?}", chunk.language).to_lowercase(),
+            context: CodeContextSections {
+              before: CodeContextSection {
+                content: String::new(),
+                start_line: 0,
+                end_line: 0,
               },
-              "after": { "content": "", "start_line": 0, "end_line": 0 }
+              target: CodeContextSection {
+                content: chunk.content,
+                start_line: chunk.start_line as usize,
+                end_line: chunk.end_line as usize,
+              },
+              after: CodeContextSection {
+                content: String::new(),
+                start_line: 0,
+                end_line: 0,
+              },
             },
-            "total_file_lines": 0,
-            "warning": format!("File not readable: {}", e)
-          }),
+            total_file_lines: 0,
+            warning: Some(format!("File not readable: {}", e)),
+          },
         );
       }
     };
@@ -1467,29 +1485,30 @@ impl ToolHandler {
 
     Response::success(
       request.id,
-      serde_json::json!({
-        "chunk_id": chunk.id.to_string(),
-        "file_path": chunk.file_path,
-        "language": format!("{:?}", chunk.language).to_lowercase(),
-        "context": {
-          "before": {
-            "content": before_content,
-            "start_line": before_start + 1, // Convert back to 1-indexed
-            "end_line": target_start        // Exclusive, so equals target_start
+      CodeContextResponse {
+        chunk_id: chunk.id.to_string(),
+        file_path: chunk.file_path,
+        language: format!("{:?}", chunk.language).to_lowercase(),
+        context: CodeContextSections {
+          before: CodeContextSection {
+            content: before_content,
+            start_line: before_start + 1, // Convert back to 1-indexed
+            end_line: target_start,       // Exclusive, so equals target_start
           },
-          "target": {
-            "content": target_content,
-            "start_line": chunk.start_line,
-            "end_line": chunk.end_line
+          target: CodeContextSection {
+            content: target_content,
+            start_line: chunk.start_line as usize,
+            end_line: chunk.end_line as usize,
           },
-          "after": {
-            "content": after_content,
-            "start_line": target_end + 1,   // Convert back to 1-indexed
-            "end_line": after_end           // This is the count
-          }
+          after: CodeContextSection {
+            content: after_content,
+            start_line: target_end + 1, // Convert back to 1-indexed
+            end_line: after_end,        // This is the count
+          },
         },
-        "total_file_lines": total_lines
-      }),
+        total_file_lines: total_lines,
+        warning: None,
+      },
     )
   }
 
@@ -1592,31 +1611,29 @@ impl ToolHandler {
     // Take top results
     memories.truncate(limit);
 
-    let results: Vec<_> = memories
+    let results: Vec<CodeMemoryItem> = memories
       .into_iter()
-      .map(|(m, score, source)| {
-        serde_json::json!({
-          "id": m.id.to_string(),
-          "content": m.content,
-          "summary": m.summary,
-          "memory_type": m.memory_type.map(|t| t.as_str()),
-          "sector": m.sector.as_str(),
-          "salience": m.salience,
-          "score": score,
-          "source": source,
-          "scope_path": m.scope_path,
-          "tags": m.tags,
-          "created_at": m.created_at.to_rfc3339(),
-        })
+      .map(|(m, score, source)| CodeMemoryItem {
+        id: m.id.to_string(),
+        content: m.content,
+        summary: m.summary,
+        memory_type: m.memory_type.map(|t| t.as_str().to_string()),
+        sector: m.sector.as_str().to_string(),
+        salience: m.salience,
+        score,
+        source,
+        scope_path: m.scope_path,
+        tags: m.tags,
+        created_at: m.created_at.to_rfc3339(),
       })
       .collect();
 
     Response::success(
       request.id,
-      serde_json::json!({
-        "file_path": file_path,
-        "memories": results
-      }),
+      CodeMemoriesResponse {
+        file_path,
+        memories: results,
+      },
     )
   }
 
@@ -1688,28 +1705,27 @@ impl ToolHandler {
       Err(e) => return Response::error(request.id, -32000, &format!("Database error: {}", e)),
     };
 
-    let results: Vec<_> = callers
+    let results: Vec<CodeCallerItem> = callers
       .into_iter()
-      .map(|c| {
-        serde_json::json!({
-          "id": c.id.to_string(),
-          "file_path": c.file_path,
-          "symbols": c.symbols,
-          "start_line": c.start_line,
-          "end_line": c.end_line,
-          "language": format!("{:?}", c.language).to_lowercase(),
-          "chunk_type": format!("{:?}", c.chunk_type).to_lowercase(),
-        })
+      .map(|c| CodeCallerItem {
+        id: c.id.to_string(),
+        file_path: c.file_path,
+        symbols: c.symbols,
+        start_line: c.start_line,
+        end_line: c.end_line,
+        language: format!("{:?}", c.language).to_lowercase(),
+        chunk_type: format!("{:?}", c.chunk_type).to_lowercase(),
       })
       .collect();
 
+    let count = results.len();
     Response::success(
       request.id,
-      serde_json::json!({
-        "symbol": symbol,
-        "callers": results,
-        "count": results.len()
-      }),
+      CodeCallersResponse {
+        symbol,
+        callers: results,
+        count,
+      },
     )
   }
 
@@ -1749,17 +1765,17 @@ impl ToolHandler {
     if chunk.calls.is_empty() {
       return Response::success(
         request.id,
-        serde_json::json!({
-          "chunk_id": chunk.id.to_string(),
-          "calls": chunk.calls,
-          "callees": [],
-          "unresolved": []
-        }),
+        CodeCalleesResponse {
+          chunk_id: chunk.id.to_string(),
+          calls: chunk.calls,
+          callees: vec![],
+          unresolved: vec![],
+        },
       );
     }
 
     let limit_per_call = args.limit.unwrap_or(3);
-    let mut callees = Vec::new();
+    let mut callees: Vec<CodeCalleeItem> = Vec::new();
     let mut unresolved = Vec::new();
     let mut seen_ids = HashSet::new();
 
@@ -1774,15 +1790,15 @@ impl ToolHandler {
           } else {
             for m in matches {
               if seen_ids.insert(m.id) {
-                callees.push(serde_json::json!({
-                  "call": call,
-                  "id": m.id.to_string(),
-                  "file_path": m.file_path,
-                  "symbols": m.symbols,
-                  "start_line": m.start_line,
-                  "end_line": m.end_line,
-                  "language": format!("{:?}", m.language).to_lowercase(),
-                }));
+                callees.push(CodeCalleeItem {
+                  call: call.clone(),
+                  id: m.id.to_string(),
+                  file_path: m.file_path,
+                  symbols: m.symbols,
+                  start_line: m.start_line,
+                  end_line: Some(m.end_line),
+                  language: Some(format!("{:?}", m.language).to_lowercase()),
+                });
               }
             }
           }
@@ -1795,12 +1811,12 @@ impl ToolHandler {
 
     Response::success(
       request.id,
-      serde_json::json!({
-        "chunk_id": chunk.id.to_string(),
-        "calls": chunk.calls,
-        "callees": callees,
-        "unresolved": unresolved
-      }),
+      CodeCalleesResponse {
+        chunk_id: chunk.id.to_string(),
+        calls: chunk.calls,
+        callees,
+        unresolved,
+      },
     )
   }
 
@@ -1934,32 +1950,31 @@ impl ToolHandler {
     related.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     related.truncate(limit);
 
-    let results: Vec<_> = related
+    let results: Vec<CodeRelatedItem> = related
       .into_iter()
-      .map(|(c, score, relationship)| {
-        serde_json::json!({
-          "id": c.id.to_string(),
-          "file_path": c.file_path,
-          "symbols": c.symbols,
-          "start_line": c.start_line,
-          "end_line": c.end_line,
-          "language": format!("{:?}", c.language).to_lowercase(),
-          "chunk_type": format!("{:?}", c.chunk_type).to_lowercase(),
-          "score": score,
-          "relationship": relationship,
-        })
+      .map(|(c, score, relationship)| CodeRelatedItem {
+        id: c.id.to_string(),
+        file_path: c.file_path,
+        symbols: c.symbols,
+        start_line: c.start_line,
+        end_line: c.end_line,
+        language: format!("{:?}", c.language).to_lowercase(),
+        chunk_type: format!("{:?}", c.chunk_type).to_lowercase(),
+        score,
+        relationship,
       })
       .collect();
 
+    let count = results.len();
     Response::success(
       request.id,
-      serde_json::json!({
-        "chunk_id": chunk.id.to_string(),
-        "file_path": chunk.file_path,
-        "symbols": chunk.symbols,
-        "related": results,
-        "count": results.len()
-      }),
+      CodeRelatedResponse {
+        chunk_id: chunk.id.to_string(),
+        file_path: chunk.file_path,
+        symbols: chunk.symbols,
+        related: results,
+        count,
+      },
     )
   }
 
@@ -2034,21 +2049,19 @@ impl ToolHandler {
     let file_path = chunk.file_path.clone();
 
     // 1. Callers - who calls this?
-    let callers: Vec<serde_json::Value> = if let Some(symbol) = chunk.symbols.first() {
+    let callers: Vec<CodeFullCaller> = if let Some(symbol) = chunk.symbols.first() {
       let filter = format!("calls LIKE '%\"{}%'", symbol.replace('\'', "''"));
       db.list_code_chunks(Some(&filter), Some(limit))
         .await
         .unwrap_or_default()
         .into_iter()
         .filter(|c| c.id != chunk_id)
-        .map(|c| {
-          serde_json::json!({
-            "id": c.id.to_string(),
-            "file_path": c.file_path,
-            "symbols": c.symbols,
-            "start_line": c.start_line,
-            "end_line": c.end_line,
-          })
+        .map(|c| CodeFullCaller {
+          id: c.id.to_string(),
+          file_path: c.file_path,
+          symbols: c.symbols,
+          start_line: c.start_line,
+          end_line: c.end_line,
         })
         .collect()
     } else {
@@ -2056,7 +2069,7 @@ impl ToolHandler {
     };
 
     // 2. Callees - what does this call?
-    let mut callees: Vec<serde_json::Value> = Vec::new();
+    let mut callees: Vec<CodeFullCallee> = Vec::new();
     let mut unresolved_calls: Vec<String> = Vec::new();
     for call in &chunk.calls {
       let filter = format!("symbols LIKE '%\"{}%'", call.replace('\'', "''"));
@@ -2065,13 +2078,13 @@ impl ToolHandler {
           unresolved_calls.push(call.clone());
         } else {
           for m in matches {
-            callees.push(serde_json::json!({
-              "call": call,
-              "id": m.id.to_string(),
-              "file_path": m.file_path,
-              "symbols": m.symbols,
-              "start_line": m.start_line,
-            }));
+            callees.push(CodeFullCallee {
+              call: call.clone(),
+              id: m.id.to_string(),
+              file_path: m.file_path,
+              symbols: m.symbols,
+              start_line: m.start_line,
+            });
           }
         }
       }
@@ -2079,26 +2092,24 @@ impl ToolHandler {
     callees.truncate(limit);
 
     // 3. Same file siblings
-    let same_file: Vec<serde_json::Value> = db
+    let same_file: Vec<CodeFullSibling> = db
       .get_chunks_for_file(&file_path)
       .await
       .unwrap_or_default()
       .into_iter()
       .filter(|c| c.id != chunk_id)
       .take(limit)
-      .map(|c| {
-        serde_json::json!({
-          "id": c.id.to_string(),
-          "symbols": c.symbols,
-          "chunk_type": format!("{:?}", c.chunk_type).to_lowercase(),
-          "start_line": c.start_line,
-          "end_line": c.end_line,
-        })
+      .map(|c| CodeFullSibling {
+        id: c.id.to_string(),
+        symbols: c.symbols,
+        chunk_type: format!("{:?}", c.chunk_type).to_lowercase(),
+        start_line: c.start_line,
+        end_line: c.end_line,
       })
       .collect();
 
     // 4. Related memories
-    let memories: Vec<serde_json::Value> = {
+    let memories: Vec<CodeFullMemory> = {
       let scope_filter = format!(
         "is_deleted = false AND (scope_path LIKE '{}%' OR scope_path LIKE '%{}%')",
         file_path.replace('\'', "''"),
@@ -2108,30 +2119,26 @@ impl ToolHandler {
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|m| {
-          serde_json::json!({
-            "id": m.id.to_string(),
-            "content": m.content,
-            "memory_type": m.memory_type.map(|t| t.as_str()),
-            "salience": m.salience,
-          })
+        .map(|m| CodeFullMemory {
+          id: m.id.to_string(),
+          content: m.content,
+          memory_type: m.memory_type.map(|t| t.as_str().to_string()),
+          salience: m.salience,
         })
         .collect()
     };
 
     // 5. Related documentation (semantic search if embedding available)
-    let documentation: Vec<serde_json::Value> = if let Some(query_vec) = self.get_embedding(&chunk.content).await {
+    let documentation: Vec<CodeFullDoc> = if let Some(query_vec) = self.get_embedding(&chunk.content).await {
       db.search_documents(&query_vec, limit, None)
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|(doc, distance): (engram_core::DocumentChunk, f32)| {
-          serde_json::json!({
-            "id": doc.id.to_string(),
-            "title": doc.title,
-            "content": doc.content,
-            "similarity": 1.0 - distance.min(1.0),
-          })
+        .map(|(doc, distance): (engram_core::DocumentChunk, f32)| CodeFullDoc {
+          id: doc.id.to_string(),
+          title: doc.title,
+          content: doc.content,
+          similarity: 1.0 - distance.min(1.0),
         })
         .collect()
     } else {
@@ -2140,26 +2147,26 @@ impl ToolHandler {
 
     Response::success(
       request.id,
-      serde_json::json!({
-        "chunk": {
-          "id": chunk.id.to_string(),
-          "file_path": chunk.file_path,
-          "content": chunk.content,
-          "language": format!("{:?}", chunk.language).to_lowercase(),
-          "chunk_type": format!("{:?}", chunk.chunk_type).to_lowercase(),
-          "symbols": chunk.symbols,
-          "imports": chunk.imports,
-          "calls": chunk.calls,
-          "start_line": chunk.start_line,
-          "end_line": chunk.end_line,
+      CodeContextFullResponse {
+        chunk: CodeChunkFullDetail {
+          id: chunk.id.to_string(),
+          file_path: chunk.file_path,
+          content: chunk.content,
+          language: format!("{:?}", chunk.language).to_lowercase(),
+          chunk_type: format!("{:?}", chunk.chunk_type).to_lowercase(),
+          symbols: chunk.symbols,
+          imports: chunk.imports,
+          calls: chunk.calls,
+          start_line: chunk.start_line,
+          end_line: chunk.end_line,
         },
-        "callers": callers,
-        "callees": callees,
-        "unresolved_calls": unresolved_calls,
-        "same_file": same_file,
-        "memories": memories,
-        "documentation": documentation,
-      }),
+        callers,
+        callees,
+        unresolved_calls,
+        same_file,
+        memories,
+        documentation,
+      },
     )
   }
 }

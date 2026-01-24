@@ -1,7 +1,9 @@
 //! Document ingestion and search tool methods
 
 use super::ToolHandler;
-use crate::router::{Request, Response};
+use crate::router::{
+  DocContextChunk, DocContextResponse, DocContextSections, DocIngestResult, DocSearchResultItem, Request, Response,
+};
 use engram_core::{ChunkParams, DocumentChunk, DocumentId, DocumentSource, chunk_text};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -50,24 +52,24 @@ impl ToolHandler {
       debug!("Using vector search for docs query: {}", args.query);
       match db.search_documents(&query_vec, limit, None).await {
         Ok(results) => {
-          let results: Vec<_> = results
+          let results: Vec<DocSearchResultItem> = results
             .into_iter()
             .map(|(chunk, distance)| {
               let similarity = 1.0 - distance.min(1.0);
-              serde_json::json!({
-                  "id": chunk.id.to_string(),
-                  "document_id": chunk.document_id.to_string(),
-                  "title": chunk.title,
-                  "source": chunk.source,
-                  "content": chunk.content,
-                  "chunk_index": chunk.chunk_index,
-                  "total_chunks": chunk.total_chunks,
-                  "similarity": similarity,
-              })
+              DocSearchResultItem {
+                id: chunk.id.to_string(),
+                document_id: chunk.document_id.to_string(),
+                title: chunk.title,
+                source: chunk.source,
+                content: chunk.content,
+                chunk_index: chunk.chunk_index,
+                total_chunks: chunk.total_chunks,
+                similarity: Some(similarity),
+              }
             })
             .collect();
 
-          return Response::success(request.id, serde_json::json!(results));
+          return Response::success(request.id, results);
         }
         Err(e) => {
           warn!("Vector docs search failed, falling back to text: {}", e);
@@ -80,24 +82,23 @@ impl ToolHandler {
     match db.list_document_chunks(None, Some(limit * 10)).await {
       Ok(chunks) => {
         let query_lower = args.query.to_lowercase();
-        let results: Vec<_> = chunks
+        let results: Vec<DocSearchResultItem> = chunks
           .into_iter()
           .filter(|c| c.content.to_lowercase().contains(&query_lower) || c.title.to_lowercase().contains(&query_lower))
           .take(limit)
-          .map(|chunk| {
-            serde_json::json!({
-                "id": chunk.id.to_string(),
-                "document_id": chunk.document_id.to_string(),
-                "title": chunk.title,
-                "source": chunk.source,
-                "content": chunk.content,
-                "chunk_index": chunk.chunk_index,
-                "total_chunks": chunk.total_chunks,
-            })
+          .map(|chunk| DocSearchResultItem {
+            id: chunk.id.to_string(),
+            document_id: chunk.document_id.to_string(),
+            title: chunk.title,
+            source: chunk.source,
+            content: chunk.content,
+            chunk_index: chunk.chunk_index,
+            total_chunks: chunk.total_chunks,
+            similarity: None,
           })
           .collect();
 
-        Response::success(request.id, serde_json::json!(results))
+        Response::success(request.id, results)
       }
       Err(e) => Response::error(request.id, -32000, &format!("Docs search error: {}", e)),
     }
@@ -247,16 +248,16 @@ impl ToolHandler {
 
     Response::success(
       request.id,
-      serde_json::json!({
-          "document_id": document_id.to_string(),
-          "title": title,
-          "source": source,
-          "source_type": source_type.as_str(),
-          "content_hash": content_hash,
-          "char_count": content.len(),
-          "chunks_created": stored_chunks,
-          "total_chunks": total_chunks,
-      }),
+      DocIngestResult {
+        document_id: document_id.to_string(),
+        title,
+        source,
+        source_type: source_type.as_str().to_string(),
+        content_hash,
+        char_count: content.len(),
+        chunks_created: stored_chunks,
+        total_chunks,
+      },
     )
   }
 
@@ -341,39 +342,42 @@ impl ToolHandler {
     };
 
     // Split into before, target, and after
-    let mut before_chunks: Vec<serde_json::Value> = Vec::new();
-    let mut after_chunks: Vec<serde_json::Value> = Vec::new();
-    let mut target_json = serde_json::json!(null);
+    let mut before_chunks: Vec<DocContextChunk> = Vec::new();
+    let mut after_chunks: Vec<DocContextChunk> = Vec::new();
+    let mut target_ctx = DocContextChunk {
+      chunk_index: target_chunk.chunk_index,
+      content: target_chunk.content.clone(),
+    };
 
     for chunk in adjacent_chunks {
-      let chunk_json = serde_json::json!({
-        "chunk_index": chunk.chunk_index,
-        "content": chunk.content,
-      });
+      let chunk_ctx = DocContextChunk {
+        chunk_index: chunk.chunk_index,
+        content: chunk.content,
+      };
 
       if chunk.chunk_index < target_chunk.chunk_index {
-        before_chunks.push(chunk_json);
+        before_chunks.push(chunk_ctx);
       } else if chunk.chunk_index > target_chunk.chunk_index {
-        after_chunks.push(chunk_json);
+        after_chunks.push(chunk_ctx);
       } else {
-        target_json = chunk_json;
+        target_ctx = chunk_ctx;
       }
     }
 
     Response::success(
       request.id,
-      serde_json::json!({
-        "chunk_id": target_chunk.id.to_string(),
-        "document_id": target_chunk.document_id.to_string(),
-        "title": target_chunk.title,
-        "source": target_chunk.source,
-        "context": {
-          "before": before_chunks,
-          "target": target_json,
-          "after": after_chunks,
+      DocContextResponse {
+        chunk_id: target_chunk.id.to_string(),
+        document_id: target_chunk.document_id.to_string(),
+        title: target_chunk.title,
+        source: target_chunk.source,
+        context: DocContextSections {
+          before: before_chunks,
+          target: target_ctx,
+          after: after_chunks,
         },
-        "total_chunks": target_chunk.total_chunks,
-      }),
+        total_chunks: target_chunk.total_chunks,
+      },
     )
   }
 }

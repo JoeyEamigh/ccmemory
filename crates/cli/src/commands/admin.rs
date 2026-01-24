@@ -1,7 +1,9 @@
 //! Administrative commands (stats, health, archive, config)
 
 use anyhow::{Context, Result};
-use daemon::{Request, connect_or_start, default_socket_path};
+use cli::to_daemon_request;
+use daemon::{connect_or_start, default_socket_path};
+use ipc::{HealthCheckParams, MemoryDeleteParams, MemoryListParams, MetricsParams, Method, PingParams, ProjectStatsParams, Request, StatusParams};
 use tracing::error;
 
 /// Show statistics
@@ -9,13 +11,13 @@ pub async fn cmd_stats() -> Result<()> {
   let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   // Get daemon metrics (includes status info plus more)
-  let metrics_request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "metrics".to_string(),
-    params: serde_json::json!({}),
+  let request = Request {
+    id: Some(1),
+    method: Method::Metrics,
+    params: MetricsParams,
   };
 
-  let metrics_response = client.request(metrics_request).await.context("Failed to get metrics")?;
+  let metrics_response = client.request(to_daemon_request(request)).await.context("Failed to get metrics")?;
 
   println!("CCEngram Statistics");
   println!("===================\n");
@@ -114,13 +116,15 @@ pub async fn cmd_stats() -> Result<()> {
     .unwrap_or_else(|_| ".".to_string());
 
   let stats_request = Request {
-    id: Some(serde_json::json!(2)),
-    method: "project_stats".to_string(),
-    params: serde_json::json!({ "cwd": cwd }),
+    id: Some(2),
+    method: Method::ProjectStats,
+    params: ProjectStatsParams {
+      cwd: Some(cwd),
+    },
   };
 
   let stats_response = client
-    .request(stats_request)
+    .request(to_daemon_request(stats_request))
     .await
     .context("Failed to get project stats")?;
 
@@ -266,12 +270,12 @@ pub async fn cmd_health() -> Result<()> {
 
   // Ping test
   let ping_request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "ping".to_string(),
-    params: serde_json::json!({}),
+    id: Some(1),
+    method: Method::Ping,
+    params: PingParams,
   };
 
-  let ping_ok = match client.request(ping_request).await {
+  let ping_ok = match client.request(to_daemon_request(ping_request)).await {
     Ok(response) => response.error.is_none(),
     Err(_) => false,
   };
@@ -286,12 +290,12 @@ pub async fn cmd_health() -> Result<()> {
 
   // Get daemon status info
   let status_request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "status".to_string(),
-    params: serde_json::json!({}),
+    id: Some(1),
+    method: Method::Status,
+    params: StatusParams::default(),
   };
 
-  if let Ok(status_response) = client.request(status_request).await
+  if let Ok(status_response) = client.request(to_daemon_request(status_request)).await
     && let Some(status) = status_response.result
   {
     println!("\n--- Daemon Status ---");
@@ -336,12 +340,12 @@ pub async fn cmd_health() -> Result<()> {
     .unwrap_or_else(|_| ".".to_string());
 
   let health_request = Request {
-    id: Some(serde_json::json!(2)),
-    method: "health_check".to_string(),
-    params: serde_json::json!({ "cwd": cwd }),
+    id: Some(2),
+    method: Method::HealthCheck,
+    params: HealthCheckParams,
   };
 
-  if let Ok(response) = client.request(health_request).await
+  if let Ok(response) = client.request(to_daemon_request(health_request)).await
     && let Some(health) = response.result
   {
     // Database status
@@ -403,6 +407,9 @@ pub async fn cmd_health() -> Result<()> {
     }
   }
 
+  // Use cwd for health check context
+  let _ = cwd;
+
   Ok(())
 }
 
@@ -416,14 +423,15 @@ pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) ->
 
   // First, get all memories to find archival candidates
   let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "memory_list".to_string(),
-    params: serde_json::json!({
-        "cwd": cwd,
-    }),
+    id: Some(1),
+    method: Method::MemoryList,
+    params: MemoryListParams {
+      cwd: Some(cwd.clone()),
+      ..Default::default()
+    },
   };
 
-  let response = client.request(request).await.context("Failed to list memories")?;
+  let response = client.request(to_daemon_request(request)).await.context("Failed to list memories")?;
 
   if let Some(err) = response.error {
     error!("Archive error: {}", err.message);
@@ -508,16 +516,15 @@ pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) ->
   let mut archived = 0;
   for (id, _, _) in candidates {
     let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "memory_delete".to_string(),
-      params: serde_json::json!({
-          "memory_id": id,
-          "cwd": cwd,
-          "hard": false,
-      }),
+      id: Some(1),
+      method: Method::MemoryDelete,
+      params: MemoryDeleteParams {
+        memory_id: id.clone(),
+        cwd: Some(cwd.clone()),
+      },
     };
 
-    match client.request(request).await {
+    match client.request(to_daemon_request(request)).await {
       Ok(resp) if resp.error.is_none() => archived += 1,
       _ => error!("Failed to archive memory {}", id),
     }

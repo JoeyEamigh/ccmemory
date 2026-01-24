@@ -307,11 +307,7 @@ async fn run_benchmarks(
 
     // Create runner for this repo
     let runner = ScenarioRunner::new(&socket_path, &project_path, annotations_dir.clone());
-    let runner = if llm_judge {
-      runner.with_llm_judge()?
-    } else {
-      runner
-    };
+    let runner = if llm_judge { runner.with_llm_judge()? } else { runner };
 
     // Check daemon
     if !runner.check_daemon().await {
@@ -374,19 +370,19 @@ async fn run_benchmarks(
 
 /// Check if a repo is indexed by querying code stats.
 async fn check_repo_indexed(socket_path: &str, repo_path: &std::path::Path) -> Result<()> {
+  use ipc::{CodeStatsParams, CodeStatsResult, Method, Request, Response};
   use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
   use tokio::net::UnixStream;
 
   let mut stream = UnixStream::connect(socket_path).await?;
 
-  let request = serde_json::json!({
-      "jsonrpc": "2.0",
-      "id": 1,
-      "method": "code_stats",
-      "params": {
-          "cwd": repo_path.to_string_lossy()
-      }
-  });
+  let request = Request {
+    id: Some(1),
+    method: Method::CodeStats,
+    params: CodeStatsParams {
+      cwd: Some(repo_path.to_string_lossy().to_string()),
+    },
+  };
 
   let request_str = serde_json::to_string(&request)?;
   stream.write_all(request_str.as_bytes()).await?;
@@ -397,19 +393,23 @@ async fn check_repo_indexed(socket_path: &str, repo_path: &std::path::Path) -> R
   let mut response_str = String::new();
   reader.read_line(&mut response_str).await?;
 
-  let response: serde_json::Value = serde_json::from_str(&response_str)?;
+  let response: Response<CodeStatsResult> = serde_json::from_str(&response_str)?;
 
-  if let Some(error) = response.get("error") {
-    anyhow::bail!("Stats error: {}", error);
+  if let Some(error) = &response.error {
+    anyhow::bail!("Stats error: {}", error.message);
   }
 
   // Check if there are chunks
-  if let Some(result) = response.get("result") {
-    let chunks = result.get("total_chunks").and_then(|v| v.as_u64()).unwrap_or(0);
+  if let Some(result) = &response.result {
+    let chunks = result.total_chunks;
     if chunks == 0 {
       anyhow::bail!("No code indexed (0 chunks)");
     }
-    info!("  {} has {} chunks indexed", repo_path.file_name().unwrap_or_default().to_string_lossy(), chunks);
+    info!(
+      "  {} has {} chunks indexed",
+      repo_path.file_name().unwrap_or_default().to_string_lossy(),
+      chunks
+    );
   }
 
   Ok(())
@@ -462,16 +462,17 @@ async fn index_code_streaming(repos: String, force: bool, cache_dir: Option<Path
     let mut stream = UnixStream::connect(&socket_path).await?;
 
     // Send streaming index request
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": format!("index-{}", repo),
-        "method": "code_index",
-        "params": {
-            "project_path": repo_path.to_string_lossy(),
-            "force": force,
-            "stream": true
-        }
-    });
+    use ipc::{CodeIndexParams, CodeIndexResult, Method, Request, Response};
+
+    let request: Request<CodeIndexParams> = Request {
+      id: Some(1),
+      method: Method::CodeIndex,
+      params: CodeIndexParams {
+        cwd: Some(repo_path.to_string_lossy().to_string()),
+        force,
+        stream: true,
+      },
+    };
 
     let request_str = serde_json::to_string(&request)?;
     stream.write_all(request_str.as_bytes()).await?;
@@ -496,25 +497,26 @@ async fn index_code_streaming(repos: String, force: bool, cache_dir: Option<Path
       match reader.read_line(&mut line).await {
         Ok(0) => break, // EOF
         Ok(_) => {
-          let response: serde_json::Value = match serde_json::from_str(line.trim()) {
+          // For streaming, we parse as generic Response since we get both progress and final result
+          let response: Response<CodeIndexResult> = match serde_json::from_str(line.trim()) {
             Ok(r) => r,
             Err(_) => continue,
           };
 
           // Check for progress update
-          if let Some(progress) = response.get("progress") {
-            let phase = progress.get("phase").and_then(|p| p.as_str()).unwrap_or("unknown");
-            let message = progress.get("message").and_then(|m| m.as_str()).unwrap_or("");
+          if let Some(progress) = &response.progress {
+            let phase = progress.phase.as_str();
+            let message = progress.message.as_deref().unwrap_or("");
 
             match phase {
               "scanning" => {
-                let scanned = progress.get("processed_files").and_then(|v| v.as_u64()).unwrap_or(0);
+                let scanned = progress.processed_files.unwrap_or(0) as u64;
                 pb.set_message(format!("Scanning: {} files", scanned));
                 pb.set_position(0);
               }
               "indexing" => {
-                let processed = progress.get("processed_files").and_then(|v| v.as_u64()).unwrap_or(0);
-                let total = progress.get("total_files").and_then(|v| v.as_u64()).unwrap_or(1);
+                let processed = progress.processed_files.unwrap_or(0) as u64;
+                let total = progress.total_files.unwrap_or(1) as u64;
                 let percent = if total > 0 { (processed * 100) / total } else { 0 };
                 pb.set_position(percent);
                 pb.set_message(message.to_string());
@@ -528,20 +530,17 @@ async fn index_code_streaming(repos: String, force: bool, cache_dir: Option<Path
           }
 
           // Check for final result
-          if response.get("result").is_some() {
-            if let Some(result) = response.get("result") {
-              let files = result.get("files_indexed").and_then(|v| v.as_u64()).unwrap_or(0);
-              let chunks = result.get("chunks_created").and_then(|v| v.as_u64()).unwrap_or(0);
-              let duration = result.get("total_duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-              println!("  Indexed {} files, {} chunks in {:.1}s", files, chunks, duration as f64 / 1000.0);
-            }
+          if let Some(result) = &response.result {
+            let files = result.files_processed;
+            let chunks = result.chunks_created;
+            println!("  Indexed {} files, {} chunks", files, chunks);
             break;
           }
 
           // Check for error
-          if let Some(error) = response.get("error") {
+          if let Some(error) = &response.error {
             pb.finish_with_message("Error");
-            anyhow::bail!("Index error: {}", error);
+            anyhow::bail!("Index error: {}", error.message);
           }
         }
         Err(e) => {

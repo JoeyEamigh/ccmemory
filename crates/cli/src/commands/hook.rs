@@ -1,7 +1,9 @@
 //! Hook command for handling hook events
 
 use anyhow::{Context, Result};
-use daemon::{Client, HookEvent, HookHandler, ProjectRegistry, Request, default_socket_path, is_running};
+use cli::to_daemon_request;
+use daemon::{Client, HookEvent, HookHandler, ProjectRegistry, default_socket_path, is_running};
+use ipc::{HookParams, Method, Request};
 use std::sync::Arc;
 use tracing::error;
 
@@ -20,16 +22,20 @@ pub async fn cmd_hook(name: &str) -> Result<()> {
       .await
       .context("Failed to connect to daemon")?;
 
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "hook".to_string(),
-      params: serde_json::json!({
-          "event": name,
-          "params": input,
-      }),
+    let params = HookParams {
+      hook_name: name.to_string(),
+      session_id: None,
+      cwd: None,
+      data: input,
     };
 
-    let response = client.request(request).await.context("Failed to send hook to daemon")?;
+    let request = Request {
+      id: Some(1),
+      method: Method::Hook,
+      params,
+    };
+
+    let response = client.request(to_daemon_request(request)).await.context("Failed to send hook to daemon")?;
 
     if let Some(err) = response.error {
       error!("Hook error: {}", err.message);

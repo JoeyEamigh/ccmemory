@@ -2,7 +2,11 @@
 
 use super::ToolHandler;
 use super::ranking::{RankingWeights, rank_memories};
-use crate::router::{Request, Response};
+use crate::router::{
+  MemoryAddResult, MemoryDeleteResult, MemoryFullDetail, MemoryRelatedItem, MemoryRelatedResponse,
+  MemoryRelationshipItem, MemoryRestoreResult, MemorySearchItem, MemorySessionInfo, MemorySupersedeResult,
+  MemoryTimelineItem, MemoryTimelineResponse, MemoryUpdateResult, Request, Response,
+};
 use chrono::Utc;
 use db::ProjectDb;
 use engram_core::{Memory, MemoryType, Sector};
@@ -158,36 +162,36 @@ impl ToolHandler {
             }
           }
 
-          let results: Vec<_> = ranked
+          let results: Vec<MemorySearchItem> = ranked
             .into_iter()
             .map(|(m, distance, rank_score)| {
               // Convert distance to similarity score (1.0 - distance for cosine)
               let similarity = 1.0 - distance.min(1.0);
               let is_superseded = m.superseded_by.is_some();
-              serde_json::json!({
-                  "id": m.id.to_string(),
-                  "content": m.content,
-                  "summary": m.summary,
-                  "sector": m.sector.as_str(),
-                  "tier": m.tier.as_str(),
-                  "memory_type": m.memory_type.map(|t| t.as_str()),
-                  "salience": m.salience,
-                  "importance": m.importance,
-                  "similarity": similarity,
-                  "rank_score": rank_score,
-                  "is_superseded": is_superseded,
-                  "superseded_by": m.superseded_by.map(|id| id.to_string()),
-                  "tags": m.tags,
-                  "categories": m.categories,
-                  "scope_path": m.scope_path,
-                  "scope_module": m.scope_module,
-                  "created_at": m.created_at.to_rfc3339(),
-                  "last_accessed": m.last_accessed.to_rfc3339(),
-              })
+              MemorySearchItem {
+                id: m.id.to_string(),
+                content: m.content,
+                summary: m.summary,
+                sector: m.sector.as_str().to_string(),
+                tier: m.tier.as_str().to_string(),
+                memory_type: m.memory_type.map(|t| t.as_str().to_string()),
+                salience: m.salience,
+                importance: m.importance,
+                similarity,
+                rank_score,
+                is_superseded,
+                superseded_by: m.superseded_by.map(|id| id.to_string()),
+                tags: m.tags,
+                categories: m.categories,
+                scope_path: m.scope_path,
+                scope_module: m.scope_module,
+                created_at: m.created_at.to_rfc3339(),
+                last_accessed: m.last_accessed.to_rfc3339(),
+              }
             })
             .collect();
 
-          return Response::success(request.id, serde_json::json!(results));
+          return Response::success(request.id, results);
         }
         Err(e) => {
           tracing::warn!("Vector search failed, falling back to text: {}", e);
@@ -201,34 +205,36 @@ impl ToolHandler {
     match db.list_memories(filter.as_deref(), Some(fetch_limit * 3)).await {
       Ok(memories) => {
         let query_lower = args.query.to_lowercase();
-        let results: Vec<_> = memories
+        let results: Vec<MemorySearchItem> = memories
           .into_iter()
           .filter(|m| m.content.to_lowercase().contains(&query_lower))
           .take(limit)
           .map(|m| {
             let is_superseded = m.superseded_by.is_some();
-            serde_json::json!({
-                "id": m.id.to_string(),
-                "content": m.content,
-                "summary": m.summary,
-                "sector": m.sector.as_str(),
-                "tier": m.tier.as_str(),
-                "memory_type": m.memory_type.map(|t| t.as_str()),
-                "salience": m.salience,
-                "importance": m.importance,
-                "is_superseded": is_superseded,
-                "superseded_by": m.superseded_by.map(|id| id.to_string()),
-                "tags": m.tags,
-                "categories": m.categories,
-                "scope_path": m.scope_path,
-                "scope_module": m.scope_module,
-                "created_at": m.created_at.to_rfc3339(),
-                "last_accessed": m.last_accessed.to_rfc3339(),
-            })
+            MemorySearchItem {
+              id: m.id.to_string(),
+              content: m.content,
+              summary: m.summary,
+              sector: m.sector.as_str().to_string(),
+              tier: m.tier.as_str().to_string(),
+              memory_type: m.memory_type.map(|t| t.as_str().to_string()),
+              salience: m.salience,
+              importance: m.importance,
+              similarity: 0.0, // No similarity score for text search
+              rank_score: 0.0,
+              is_superseded,
+              superseded_by: m.superseded_by.map(|id| id.to_string()),
+              tags: m.tags,
+              categories: m.categories,
+              scope_path: m.scope_path,
+              scope_module: m.scope_module,
+              created_at: m.created_at.to_rfc3339(),
+              last_accessed: m.last_accessed.to_rfc3339(),
+            }
           })
           .collect();
 
-        Response::success(request.id, serde_json::json!(results))
+        Response::success(request.id, results)
       }
       Err(e) => Response::error(request.id, -32000, &format!("Search error: {}", e)),
     }
@@ -350,11 +356,11 @@ impl ToolHandler {
     if let Some((existing_id, reason)) = duplicate {
       return Response::success(
         request.id,
-        serde_json::json!({
-            "id": existing_id.to_string(),
-            "message": format!("Duplicate detected: {}", reason),
-            "is_duplicate": true
-        }),
+        MemoryAddResult {
+          id: existing_id.to_string(),
+          message: format!("Duplicate detected: {}", reason),
+          is_duplicate: true,
+        },
       );
     }
 
@@ -406,10 +412,11 @@ impl ToolHandler {
     match db.add_memory(&memory, Some(&vector)).await {
       Ok(_) => Response::success(
         request.id,
-        serde_json::json!({
-            "id": memory.id.to_string(),
-            "message": "Memory created successfully"
-        }),
+        MemoryAddResult {
+          id: memory.id.to_string(),
+          message: "Memory created successfully".to_string(),
+          is_duplicate: false,
+        },
       ),
       Err(e) => Response::error(request.id, -32000, &format!("Failed to add memory: {}", e)),
     }
@@ -454,11 +461,11 @@ impl ToolHandler {
     match db.update_memory(&memory, None).await {
       Ok(_) => Response::success(
         request.id,
-        serde_json::json!({
-            "id": memory.id.to_string(),
-            "new_salience": memory.salience,
-            "message": "Memory reinforced"
-        }),
+        MemoryUpdateResult {
+          id: memory.id.to_string(),
+          new_salience: memory.salience,
+          message: "Memory reinforced".to_string(),
+        },
       ),
       Err(e) => Response::error(request.id, -32000, &format!("Update failed: {}", e)),
     }
@@ -503,11 +510,11 @@ impl ToolHandler {
     match db.update_memory(&memory, None).await {
       Ok(_) => Response::success(
         request.id,
-        serde_json::json!({
-            "id": memory.id.to_string(),
-            "new_salience": memory.salience,
-            "message": "Memory de-emphasized"
-        }),
+        MemoryUpdateResult {
+          id: memory.id.to_string(),
+          new_salience: memory.salience,
+          message: "Memory de-emphasized".to_string(),
+        },
       ),
       Err(e) => Response::error(request.id, -32000, &format!("Update failed: {}", e)),
     }
@@ -550,11 +557,11 @@ impl ToolHandler {
       match db.delete_memory(&memory.id).await {
         Ok(_) => Response::success(
           request.id,
-          serde_json::json!({
-              "id": memory.id.to_string(),
-              "hard_delete": true,
-              "message": "Memory permanently deleted"
-          }),
+          MemoryDeleteResult {
+            id: memory.id.to_string(),
+            message: "Memory permanently deleted".to_string(),
+            hard_delete: true,
+          },
         ),
         Err(e) => Response::error(request.id, -32000, &format!("Delete failed: {}", e)),
       }
@@ -565,11 +572,11 @@ impl ToolHandler {
       match db.update_memory(&memory, None).await {
         Ok(_) => Response::success(
           request.id,
-          serde_json::json!({
-              "id": memory.id.to_string(),
-              "hard_delete": false,
-              "message": "Memory soft deleted"
-          }),
+          MemoryDeleteResult {
+            id: memory.id.to_string(),
+            message: "Memory soft deleted".to_string(),
+            hard_delete: false,
+          },
         ),
         Err(e) => Response::error(request.id, -32000, &format!("Update failed: {}", e)),
       }
@@ -618,11 +625,11 @@ impl ToolHandler {
     match db.update_memory(&old_memory, None).await {
       Ok(_) => Response::success(
         request.id,
-        serde_json::json!({
-            "old_memory_id": old_memory.id.to_string(),
-            "new_memory_id": new_memory.id.to_string(),
-            "message": "Memory superseded"
-        }),
+        MemorySupersedeResult {
+          old_id: old_memory.id.to_string(),
+          new_id: new_memory.id.to_string(),
+          message: "Memory superseded".to_string(),
+        },
       ),
       Err(e) => Response::error(request.id, -32000, &format!("Update failed: {}", e)),
     }
@@ -677,32 +684,34 @@ impl ToolHandler {
     // Find anchor position
     let anchor_pos = sorted.iter().position(|m| m.id == anchor.id);
 
-    // Helper to build memory JSON with optional session context
-    async fn build_memory_with_session(m: &Memory, db: &db::ProjectDb) -> serde_json::Value {
-      let mut json = serde_json::json!({
-          "id": m.id.to_string(),
-          "content": m.content,
-          "sector": format!("{:?}", m.sector),
-          "salience": m.salience,
-          "created_at": m.created_at.to_rfc3339(),
-      });
-
-      // Add session context if available
-      if let Some(session_id) = m.session_id {
-        json["session_id"] = serde_json::json!(session_id.to_string());
-
+    // Helper to build memory timeline item with optional session context
+    async fn build_memory_with_session(m: &Memory, db: &db::ProjectDb) -> MemoryTimelineItem {
+      let (session_id_str, session) = if let Some(session_id) = m.session_id {
         // Try to fetch full session info
-        if let Ok(Some(session)) = db.get_session(&session_id).await {
-          json["session"] = serde_json::json!({
-              "id": session.id.to_string(),
-              "started_at": session.started_at.to_rfc3339(),
-              "ended_at": session.ended_at.map(|t| t.to_rfc3339()),
-              "summary": session.summary,
-          });
-        }
-      }
+        let session_info = if let Ok(Some(session)) = db.get_session(&session_id).await {
+          Some(MemorySessionInfo {
+            id: session.id.to_string(),
+            started_at: session.started_at.to_rfc3339(),
+            ended_at: session.ended_at.map(|t| t.to_rfc3339()),
+            summary: session.summary,
+          })
+        } else {
+          None
+        };
+        (Some(session_id.to_string()), session_info)
+      } else {
+        (None, None)
+      };
 
-      json
+      MemoryTimelineItem {
+        id: m.id.to_string(),
+        content: m.content.clone(),
+        sector: format!("{:?}", m.sector),
+        salience: m.salience,
+        created_at: m.created_at.to_rfc3339(),
+        session_id: session_id_str,
+        session,
+      }
     }
 
     let (before, after) = match anchor_pos {
@@ -710,31 +719,31 @@ impl ToolHandler {
         let start = pos.saturating_sub(depth_before);
         let end = (pos + 1 + depth_after).min(sorted.len());
 
-        let mut before = Vec::new();
+        let mut before_items = Vec::new();
         for m in &sorted[start..pos] {
-          before.push(build_memory_with_session(m, &db).await);
+          before_items.push(build_memory_with_session(m, &db).await);
         }
 
-        let mut after = Vec::new();
+        let mut after_items = Vec::new();
         for m in &sorted[pos + 1..end] {
-          after.push(build_memory_with_session(m, &db).await);
+          after_items.push(build_memory_with_session(m, &db).await);
         }
 
-        (before, after)
+        (before_items, after_items)
       }
       None => (vec![], vec![]),
     };
 
     // Get anchor with session info
-    let anchor_json = build_memory_with_session(&anchor, &db).await;
+    let anchor_item = build_memory_with_session(&anchor, &db).await;
 
     Response::success(
       request.id,
-      serde_json::json!({
-          "anchor": anchor_json,
-          "before": before,
-          "after": after,
-      }),
+      MemoryTimelineResponse {
+        anchor: anchor_item,
+        before,
+        after,
+      },
     )
   }
 
@@ -770,62 +779,62 @@ impl ToolHandler {
       Err(response) => return response,
     };
 
-    // Build base response
-    let mut result = serde_json::json!({
-        "id": memory.id.to_string(),
-        "content": memory.content,
-        "summary": memory.summary,
-        "sector": memory.sector.as_str(),
-        "tier": memory.tier.as_str(),
-        "memory_type": memory.memory_type.map(|t| t.as_str()),
-        "salience": memory.salience,
-        "importance": memory.importance,
-        "confidence": memory.confidence,
-        "access_count": memory.access_count,
-        "is_deleted": memory.is_deleted,
-        "superseded_by": memory.superseded_by.map(|id| id.to_string()),
-        "tags": memory.tags,
-        "categories": memory.categories,
-        "concepts": memory.concepts,
-        "files": memory.files,
-        "context": memory.context,
-        "scope_path": memory.scope_path,
-        "scope_module": memory.scope_module,
-        "created_at": memory.created_at.to_rfc3339(),
-        "updated_at": memory.updated_at.to_rfc3339(),
-        "last_accessed": memory.last_accessed.to_rfc3339(),
-        "valid_from": memory.valid_from.to_rfc3339(),
-        "valid_until": memory.valid_until.map(|t| t.to_rfc3339()),
-    });
-
     // Include relationships if requested
-    if args.include_related.unwrap_or(false) {
+    let relationships = if args.include_related.unwrap_or(false) {
       match db.get_all_relationships(&memory.id).await {
-        Ok(relationships) => {
-          let rels: Vec<_> = relationships
+        Ok(rels) => Some(
+          rels
             .iter()
-            .map(|r| {
-              serde_json::json!({
-                  "type": r.relationship_type.as_str(),
-                  "from_id": r.from_memory_id.to_string(),
-                  "to_id": r.to_memory_id.to_string(),
-                  "target_id": if r.from_memory_id == memory.id {
-                      r.to_memory_id.to_string()
-                  } else {
-                      r.from_memory_id.to_string()
-                  },
-                  "confidence": r.confidence,
-              })
+            .map(|r| MemoryRelationshipItem {
+              relationship_type: r.relationship_type.as_str().to_string(),
+              from_id: r.from_memory_id.to_string(),
+              to_id: r.to_memory_id.to_string(),
+              target_id: if r.from_memory_id == memory.id {
+                r.to_memory_id.to_string()
+              } else {
+                r.from_memory_id.to_string()
+              },
+              confidence: r.confidence,
             })
-            .collect();
-          result["relationships"] = serde_json::json!(rels);
-        }
+            .collect(),
+        ),
         Err(e) => {
           tracing::warn!("Failed to get relationships: {}", e);
-          result["relationships"] = serde_json::json!([]);
+          Some(vec![])
         }
       }
-    }
+    } else {
+      None
+    };
+
+    // Build response
+    let result = MemoryFullDetail {
+      id: memory.id.to_string(),
+      content: memory.content,
+      summary: memory.summary,
+      sector: memory.sector.as_str().to_string(),
+      tier: memory.tier.as_str().to_string(),
+      memory_type: memory.memory_type.map(|t| t.as_str().to_string()),
+      salience: memory.salience,
+      importance: memory.importance,
+      confidence: memory.confidence,
+      access_count: memory.access_count,
+      is_deleted: memory.is_deleted,
+      superseded_by: memory.superseded_by.map(|id| id.to_string()),
+      tags: memory.tags,
+      categories: memory.categories,
+      concepts: memory.concepts,
+      files: memory.files,
+      context: memory.context,
+      scope_path: memory.scope_path,
+      scope_module: memory.scope_module,
+      created_at: memory.created_at.to_rfc3339(),
+      updated_at: memory.updated_at.to_rfc3339(),
+      last_accessed: memory.last_accessed.to_rfc3339(),
+      valid_from: memory.valid_from.to_rfc3339(),
+      valid_until: memory.valid_until.map(|t| t.to_rfc3339()),
+      relationships,
+    };
 
     Response::success(request.id, result)
   }
@@ -865,30 +874,31 @@ impl ToolHandler {
 
     match db.list_memories(filter, args.limit).await {
       Ok(memories) => {
-        let results: Vec<_> = memories
+        let results: Vec<MemorySearchItem> = memories
           .into_iter()
-          .map(|m| {
-            serde_json::json!({
-                "id": m.id.to_string(),
-                "content": m.content,
-                "summary": m.summary,
-                "sector": m.sector.as_str(),
-                "tier": m.tier.as_str(),
-                "memory_type": m.memory_type.map(|t| t.as_str()),
-                "salience": m.salience,
-                "importance": m.importance,
-                "is_deleted": m.is_deleted,
-                "superseded_by": m.superseded_by.map(|id| id.to_string()),
-                "tags": m.tags,
-                "categories": m.categories,
-                "scope_path": m.scope_path,
-                "scope_module": m.scope_module,
-                "created_at": m.created_at.to_rfc3339(),
-            })
+          .map(|m| MemorySearchItem {
+            id: m.id.to_string(),
+            content: m.content,
+            summary: m.summary,
+            sector: m.sector.as_str().to_string(),
+            tier: m.tier.as_str().to_string(),
+            memory_type: m.memory_type.map(|t| t.as_str().to_string()),
+            salience: m.salience,
+            importance: m.importance,
+            similarity: 0.0,
+            rank_score: 0.0,
+            is_superseded: m.superseded_by.is_some(),
+            superseded_by: m.superseded_by.map(|id| id.to_string()),
+            tags: m.tags,
+            categories: m.categories,
+            scope_path: m.scope_path,
+            scope_module: m.scope_module,
+            created_at: m.created_at.to_rfc3339(),
+            last_accessed: m.last_accessed.to_rfc3339(),
           })
           .collect();
 
-        Response::success(request.id, serde_json::json!(results))
+        Response::success(request.id, results)
       }
       Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
     }
@@ -936,14 +946,10 @@ impl ToolHandler {
     match db.update_memory(&memory, None).await {
       Ok(_) => Response::success(
         request.id,
-        serde_json::json!({
-            "id": memory.id.to_string(),
-            "content": memory.content,
-            "sector": memory.sector.as_str(),
-            "memory_type": memory.memory_type.map(|t| t.as_str()),
-            "salience": memory.salience,
-            "message": "Memory restored"
-        }),
+        MemoryRestoreResult {
+          id: memory.id.to_string(),
+          message: "Memory restored".to_string(),
+        },
       ),
       Err(e) => Response::error(request.id, -32000, &format!("Restore failed: {}", e)),
     }
@@ -979,22 +985,31 @@ impl ToolHandler {
     // Query deleted memories
     match db.list_memories(Some("is_deleted = true"), Some(limit)).await {
       Ok(memories) => {
-        let results: Vec<_> = memories
+        let results: Vec<MemorySearchItem> = memories
           .into_iter()
-          .map(|m| {
-            serde_json::json!({
-                "id": m.id.to_string(),
-                "content": m.content,
-                "sector": m.sector.as_str(),
-                "memory_type": m.memory_type.map(|t| t.as_str()),
-                "salience": m.salience,
-                "deleted_at": m.deleted_at.map(|t| t.to_rfc3339()),
-                "created_at": m.created_at.to_rfc3339(),
-            })
+          .map(|m| MemorySearchItem {
+            id: m.id.to_string(),
+            content: m.content,
+            summary: m.summary,
+            sector: m.sector.as_str().to_string(),
+            tier: m.tier.as_str().to_string(),
+            memory_type: m.memory_type.map(|t| t.as_str().to_string()),
+            salience: m.salience,
+            importance: m.importance,
+            similarity: 0.0,
+            rank_score: 0.0,
+            is_superseded: m.superseded_by.is_some(),
+            superseded_by: m.superseded_by.map(|id| id.to_string()),
+            tags: m.tags,
+            categories: m.categories,
+            scope_path: m.scope_path,
+            scope_module: m.scope_module,
+            created_at: m.created_at.to_rfc3339(),
+            last_accessed: m.last_accessed.to_rfc3339(),
           })
           .collect();
 
-        Response::success(request.id, serde_json::json!(results))
+        Response::success(request.id, results)
       }
       Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
     }
@@ -1132,31 +1147,30 @@ impl ToolHandler {
     related.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     related.truncate(limit);
 
-    let results: Vec<_> = related
+    let results: Vec<MemoryRelatedItem> = related
       .into_iter()
-      .map(|(m, score, relationship)| {
-        serde_json::json!({
-          "id": m.id.to_string(),
-          "content": m.content,
-          "summary": m.summary,
-          "memory_type": m.memory_type.map(|t| t.as_str()),
-          "sector": m.sector.as_str(),
-          "salience": m.salience,
-          "score": score,
-          "relationship": relationship,
-          "created_at": m.created_at.to_rfc3339(),
-        })
+      .map(|(m, score, relationship)| MemoryRelatedItem {
+        id: m.id.to_string(),
+        content: m.content,
+        summary: m.summary,
+        memory_type: m.memory_type.map(|t| t.as_str().to_string()),
+        sector: m.sector.as_str().to_string(),
+        salience: m.salience,
+        score,
+        relationship,
+        created_at: m.created_at.to_rfc3339(),
       })
       .collect();
 
+    let count = results.len();
     Response::success(
       request.id,
-      serde_json::json!({
-        "memory_id": memory.id.to_string(),
-        "content": memory.content,
-        "related": results,
-        "count": results.len()
-      }),
+      MemoryRelatedResponse {
+        memory_id: memory.id.to_string(),
+        content: memory.content,
+        related: results,
+        count,
+      },
     )
   }
 }

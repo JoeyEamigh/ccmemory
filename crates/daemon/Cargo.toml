@@ -14,6 +14,7 @@ index = { workspace = true }
 parser = { workspace = true }
 extract = { workspace = true }
 llm = { workspace = true }
+ipc = { workspace = true }
 tokio = { workspace = true, features = ["net", "signal"] }
 futures = { workspace = true }
 serde = { workspace = true }

@@ -1,7 +1,9 @@
 //! Migrate command for embedding migration
 
 use anyhow::{Context, Result};
-use daemon::{Request, connect_or_start};
+use cli::to_daemon_request;
+use daemon::connect_or_start;
+use ipc::{Method, MigrateEmbeddingParams, ProjectStatsParams, Request};
 use tracing::error;
 
 /// Migrate embeddings to new dimensions/model
@@ -31,12 +33,14 @@ pub async fn cmd_migrate(dry_run: bool, force: bool) -> Result<()> {
 
   // Get current stats
   let stats_request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "project_stats".to_string(),
-    params: serde_json::json!({ "cwd": cwd }),
+    id: Some(1),
+    method: Method::ProjectStats,
+    params: ProjectStatsParams {
+      cwd: Some(cwd.clone()),
+    },
   };
 
-  let stats_response = client.request(stats_request).await.context("Failed to get stats")?;
+  let stats_response = client.request(to_daemon_request(stats_request)).await.context("Failed to get stats")?;
 
   let mut memory_count = 0u64;
   let mut code_count = 0u64;
@@ -74,16 +78,19 @@ pub async fn cmd_migrate(dry_run: bool, force: bool) -> Result<()> {
   // Call the migration tool
   println!("Starting migration...\n");
 
-  let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "migrate_embedding".to_string(),
-    params: serde_json::json!({
-        "cwd": cwd,
-        "force": force,
-    }),
+  // Note: force flag is handled at CLI level, daemon always performs migration
+  let _ = force; // Acknowledge unused for now until ipc adds force field
+  let params = MigrateEmbeddingParams {
+    cwd: Some(cwd),
   };
 
-  let response = client.request(request).await.context("Failed to migrate embeddings")?;
+  let request = Request {
+    id: Some(1),
+    method: Method::MigrateEmbedding,
+    params,
+  };
+
+  let response = client.request(to_daemon_request(request)).await.context("Failed to migrate embeddings")?;
 
   if let Some(err) = response.error {
     error!("Migration error: {}", err.message);

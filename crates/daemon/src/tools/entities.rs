@@ -1,7 +1,10 @@
 //! Entity and relationship tool methods
 
 use super::ToolHandler;
-use crate::router::{Request, Response};
+use crate::router::{
+  DeletedResult, EntityFullResult, EntityListItem, EntityMemoryLink, MemorySummary, RelatedMemoryItem, RelationshipInfo,
+  RelationshipListItem, RelationshipResult, Request, Response, TopEntityItem,
+};
 use engram_core::{MemoryId, RelationshipType};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -51,23 +54,21 @@ impl ToolHandler {
       }
     };
 
-    let results: Vec<_> = entities
+    let results: Vec<EntityListItem> = entities
       .into_iter()
-      .map(|e| {
-        serde_json::json!({
-            "id": e.id.to_string(),
-            "name": e.name,
-            "type": format!("{:?}", e.entity_type).to_lowercase(),
-            "summary": e.summary,
-            "aliases": e.aliases,
-            "mention_count": e.mention_count,
-            "first_seen_at": e.first_seen_at.to_rfc3339(),
-            "last_seen_at": e.last_seen_at.to_rfc3339(),
-        })
+      .map(|e| EntityListItem {
+        id: e.id.to_string(),
+        name: e.name,
+        entity_type: format!("{:?}", e.entity_type).to_lowercase(),
+        summary: e.summary,
+        aliases: e.aliases,
+        mention_count: e.mention_count,
+        first_seen_at: e.first_seen_at.to_rfc3339(),
+        last_seen_at: e.last_seen_at.to_rfc3339(),
       })
       .collect();
 
-    Response::success(request.id, serde_json::json!(results))
+    Response::success(request.id, results)
   }
 
   /// Get entity by ID or name
@@ -122,38 +123,39 @@ impl ToolHandler {
 
     match entity {
       Some(e) => {
-        let mut result = serde_json::json!({
-            "id": e.id.to_string(),
-            "name": e.name,
-            "type": format!("{:?}", e.entity_type).to_lowercase(),
-            "summary": e.summary,
-            "aliases": e.aliases,
-            "mention_count": e.mention_count,
-            "first_seen_at": e.first_seen_at.to_rfc3339(),
-            "last_seen_at": e.last_seen_at.to_rfc3339(),
-        });
-
         // Include linked memories if requested
-        if args.include_memories.unwrap_or(false) {
+        let memories = if args.include_memories.unwrap_or(false) {
           match db.get_entity_memory_links(&e.id).await {
-            Ok(links) => {
-              let memory_links: Vec<_> = links
+            Ok(links) => Some(
+              links
                 .iter()
-                .map(|l| {
-                  serde_json::json!({
-                      "memory_id": l.memory_id,
-                      "role": format!("{:?}", l.role).to_lowercase(),
-                      "confidence": l.confidence,
-                  })
+                .map(|l| EntityMemoryLink {
+                  memory_id: l.memory_id.to_string(),
+                  role: format!("{:?}", l.role).to_lowercase(),
+                  confidence: l.confidence,
                 })
-                .collect();
-              result["memories"] = serde_json::json!(memory_links);
-            }
-            Err(e) => {
-              warn!("Failed to get entity memory links: {}", e);
+                .collect(),
+            ),
+            Err(err) => {
+              warn!("Failed to get entity memory links: {}", err);
+              None
             }
           }
-        }
+        } else {
+          None
+        };
+
+        let result = EntityFullResult {
+          id: e.id.to_string(),
+          name: e.name,
+          entity_type: format!("{:?}", e.entity_type).to_lowercase(),
+          summary: e.summary,
+          aliases: e.aliases,
+          mention_count: e.mention_count,
+          first_seen_at: e.first_seen_at.to_rfc3339(),
+          last_seen_at: e.last_seen_at.to_rfc3339(),
+          memories,
+        };
 
         Response::success(request.id, result)
       }
@@ -188,18 +190,16 @@ impl ToolHandler {
 
     match db.get_top_entities(args.limit.unwrap_or(10)).await {
       Ok(entities) => {
-        let results: Vec<_> = entities
+        let results: Vec<TopEntityItem> = entities
           .into_iter()
-          .map(|e| {
-            serde_json::json!({
-                "id": e.id.to_string(),
-                "name": e.name,
-                "type": format!("{:?}", e.entity_type).to_lowercase(),
-                "mention_count": e.mention_count,
-            })
+          .map(|e| TopEntityItem {
+            id: e.id.to_string(),
+            name: e.name,
+            entity_type: format!("{:?}", e.entity_type).to_lowercase(),
+            mention_count: e.mention_count,
           })
           .collect();
-        Response::success(request.id, serde_json::json!(results))
+        Response::success(request.id, results)
       }
       Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
     }
@@ -265,13 +265,13 @@ impl ToolHandler {
     {
       Ok(rel) => Response::success(
         request.id,
-        serde_json::json!({
-            "id": rel.id.to_string(),
-            "from_memory_id": rel.from_memory_id.to_string(),
-            "to_memory_id": rel.to_memory_id.to_string(),
-            "relationship_type": rel.relationship_type.as_str(),
-            "confidence": rel.confidence,
-        }),
+        RelationshipResult {
+          id: rel.id.to_string(),
+          from_memory_id: rel.from_memory_id.to_string(),
+          to_memory_id: rel.to_memory_id.to_string(),
+          relationship_type: rel.relationship_type.as_str().to_string(),
+          confidence: rel.confidence,
+        },
       ),
       Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
     }
@@ -330,21 +330,19 @@ impl ToolHandler {
           rels
         };
 
-        let results: Vec<_> = rels
+        let results: Vec<RelationshipListItem> = rels
           .into_iter()
-          .map(|r| {
-            serde_json::json!({
-                "id": r.id.to_string(),
-                "from_memory_id": r.from_memory_id.to_string(),
-                "to_memory_id": r.to_memory_id.to_string(),
-                "relationship_type": r.relationship_type.as_str(),
-                "confidence": r.confidence,
-                "created_at": r.created_at.to_rfc3339(),
-                "valid_until": r.valid_until.map(|t| t.to_rfc3339()),
-            })
+          .map(|r| RelationshipListItem {
+            id: r.id.to_string(),
+            from_memory_id: r.from_memory_id.to_string(),
+            to_memory_id: r.to_memory_id.to_string(),
+            relationship_type: r.relationship_type.as_str().to_string(),
+            confidence: r.confidence,
+            created_at: r.created_at.to_rfc3339(),
+            valid_until: r.valid_until.map(|t| t.to_rfc3339()),
           })
           .collect();
-        Response::success(request.id, serde_json::json!(results))
+        Response::success(request.id, results)
       }
       Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
     }
@@ -380,7 +378,7 @@ impl ToolHandler {
     };
 
     match db.delete_relationship(&rel_id).await {
-      Ok(()) => Response::success(request.id, serde_json::json!({"deleted": true})),
+      Ok(()) => Response::success(request.id, DeletedResult { deleted: true }),
       Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
     }
   }
@@ -438,27 +436,31 @@ impl ToolHandler {
         }
 
         // Fetch the actual memories
-        let mut results = Vec::new();
+        let mut results: Vec<RelatedMemoryItem> = Vec::new();
         for (rel, related_id) in rels.into_iter().zip(related_ids) {
-          if let Ok(Some(memory)) = db.get_memory(&related_id).await {
-            results.push(serde_json::json!({
-                "memory": {
-                    "id": memory.id.to_string(),
-                    "content": memory.content,
-                    "summary": memory.summary,
-                    "sector": format!("{:?}", memory.sector).to_lowercase(),
-                    "salience": memory.salience,
+          if let Ok(Some(mem)) = db.get_memory(&related_id).await {
+            results.push(RelatedMemoryItem {
+              memory: MemorySummary {
+                id: mem.id.to_string(),
+                content: mem.content,
+                summary: mem.summary,
+                sector: format!("{:?}", mem.sector).to_lowercase(),
+                salience: mem.salience,
+              },
+              relationship: RelationshipInfo {
+                relationship_type: rel.relationship_type.as_str().to_string(),
+                confidence: rel.confidence,
+                direction: if rel.from_memory_id == memory_id {
+                  "outgoing".to_string()
+                } else {
+                  "incoming".to_string()
                 },
-                "relationship": {
-                    "type": rel.relationship_type.as_str(),
-                    "confidence": rel.confidence,
-                    "direction": if rel.from_memory_id == memory_id { "outgoing" } else { "incoming" },
-                }
-            }));
+              },
+            });
           }
         }
 
-        Response::success(request.id, serde_json::json!(results))
+        Response::success(request.id, results)
       }
       Err(e) => Response::error(request.id, -32000, &format!("Database error: {}", e)),
     }

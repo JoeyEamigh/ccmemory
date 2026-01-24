@@ -9,8 +9,7 @@ mod performance;
 
 pub use accuracy::{
   AccuracyMetrics, AccuracyMetricsBuilder, BloatDiagnosis, ConvergenceDiagnosis, DiscoveryPattern,
-  ExplorationDiagnostics, OverExpandedStep, QueryIssue, QueryIssueType, RecallCategoryBreakdown,
-  RecallDiagnosis,
+  ExplorationDiagnostics, OverExpandedStep, QueryIssue, QueryIssueType, RecallCategoryBreakdown, RecallDiagnosis,
 };
 pub use performance::{
   IndexingMetrics, LatencyStats, LatencyTracker, PerformanceMetrics, ResourceMonitor, ResourceSnapshot, SearchMetrics,

@@ -6,6 +6,7 @@
 use crate::Result;
 use crate::metrics::{IndexingMetrics, ResourceMonitor};
 use crate::repos::{TargetRepo, prepare_repo};
+use ipc::{CodeIndexParams, Method, Request};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -284,17 +285,17 @@ impl IndexingBenchmark {
     let start = Instant::now();
 
     // Send index request to daemon
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "code_index",
-        "params": {
-            "project_path": repo_path.to_string_lossy(),
-            "force": cold_start
-        }
-    });
+    let request: Request<CodeIndexParams> = Request {
+      id: Some(1),
+      method: Method::CodeIndex,
+      params: CodeIndexParams {
+        cwd: Some(repo_path.to_string_lossy().to_string()),
+        force: cold_start,
+        stream: false,
+      },
+    };
 
-    let response = self.send_request(&request).await?;
+    let response = self.send_typed_request(&request).await?;
     let elapsed = start.elapsed();
 
     monitor.snapshot();
@@ -352,22 +353,23 @@ impl IndexingBenchmark {
   }
 
   /// Clear index for a project (for cold start testing).
+  /// Note: clear_code_index is not yet in the ipc Method enum, using ProjectClean as workaround.
   async fn clear_index(&self, repo_path: &Path) -> Result<()> {
-    let request = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "clear_code_index",
-        "params": {
-            "project_path": repo_path.to_string_lossy()
-        }
-    });
+    let request: Request<ipc::ProjectCleanParams> = Request {
+      id: Some(1),
+      method: Method::ProjectClean,
+      params: ipc::ProjectCleanParams {
+        path: repo_path.to_string_lossy().to_string(),
+      },
+    };
 
-    let _ = self.send_request(&request).await;
+    let _ = self.send_typed_request(&request).await;
     Ok(())
   }
 
-  /// Send a JSON-RPC request to the daemon.
-  async fn send_request(&self, request: &serde_json::Value) -> Result<serde_json::Value> {
+  /// Send a typed JSON-RPC request to the daemon.
+  /// Returns the raw response for flexible parsing of extended result fields.
+  async fn send_typed_request<P: Serialize>(&self, request: &Request<P>) -> Result<serde_json::Value> {
     let mut stream = UnixStream::connect(&self.socket_path)
       .await
       .map_err(|e| crate::BenchmarkError::Execution(format!("Failed to connect to daemon: {}", e)))?;

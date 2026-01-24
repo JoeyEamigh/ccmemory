@@ -1,7 +1,9 @@
 //! Project management commands (list, show, clean)
 
 use anyhow::{Context, Result};
-use daemon::{Request, connect_or_start};
+use cli::to_daemon_request;
+use daemon::connect_or_start;
+use ipc::{Method, ProjectCleanParams, ProjectInfoParams, ProjectsCleanAllParams, ProjectsListParams, Request};
 use std::io::Write;
 use tracing::error;
 
@@ -10,12 +12,12 @@ pub async fn cmd_projects_list(json_output: bool) -> Result<()> {
   let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "projects_list".to_string(),
-    params: serde_json::json!({}),
+    id: Some(1),
+    method: Method::ProjectsList,
+    params: ProjectsListParams,
   };
 
-  let response = client.request(request).await.context("Failed to list projects")?;
+  let response = client.request(to_daemon_request(request)).await.context("Failed to list projects")?;
 
   if let Some(err) = response.error {
     error!("Error: {}", err.message);
@@ -76,15 +78,18 @@ pub async fn cmd_projects_list(json_output: bool) -> Result<()> {
 pub async fn cmd_projects_show(project: &str, json_output: bool) -> Result<()> {
   let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
-  let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "project_info".to_string(),
-    params: serde_json::json!({
-      "project": project,
-    }),
+  let params = ProjectInfoParams {
+    cwd: None,
+    path: Some(project.to_string()),
   };
 
-  let response = client.request(request).await.context("Failed to get project info")?;
+  let request = Request {
+    id: Some(1),
+    method: Method::ProjectInfo,
+    params,
+  };
+
+  let response = client.request(to_daemon_request(request)).await.context("Failed to get project info")?;
 
   if let Some(err) = response.error {
     error!("Error: {}", err.message);
@@ -161,15 +166,17 @@ pub async fn cmd_projects_clean(project: &str, force: bool) -> Result<()> {
 
   let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
-  let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "project_clean".to_string(),
-    params: serde_json::json!({
-      "project": project,
-    }),
+  let params = ProjectCleanParams {
+    path: project.to_string(),
   };
 
-  let response = client.request(request).await.context("Failed to clean project")?;
+  let request = Request {
+    id: Some(1),
+    method: Method::ProjectClean,
+    params,
+  };
+
+  let response = client.request(to_daemon_request(request)).await.context("Failed to clean project")?;
 
   if let Some(err) = response.error {
     error!("Error: {}", err.message);
@@ -210,12 +217,12 @@ pub async fn cmd_projects_clean_all(force: bool) -> Result<()> {
   let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
 
   let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "projects_clean_all".to_string(),
-    params: serde_json::json!({}),
+    id: Some(1),
+    method: Method::ProjectsCleanAll,
+    params: ProjectsCleanAllParams,
   };
 
-  let response = client.request(request).await.context("Failed to clean all projects")?;
+  let response = client.request(to_daemon_request(request)).await.context("Failed to clean all projects")?;
 
   if let Some(err) = response.error {
     error!("Error: {}", err.message);

@@ -12,6 +12,7 @@ members = [
     "crates/tui",
     "crates/parser",
     "crates/benchmark",
+    "crates/ipc",
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ llm = { path = "crates/llm" }
 daemon = { path = "crates/daemon" }
 tui = { path = "crates/tui" }
 parser = { path = "crates/parser" }
+ipc = { path = "crates/ipc" }
 
 # External dependencies (add with cargo add)
 anyhow = "1"

@@ -1,7 +1,8 @@
 //! Context retrieval commands for code and document chunks
 
 use anyhow::{Context, Result};
-use daemon::{Request, connect_or_start};
+use daemon::connect_or_start;
+use ipc::{CodeContextParams, DocContextParams, Method, Request};
 use tracing::error;
 
 /// Get context around a chunk (auto-detects code vs document)
@@ -14,21 +15,21 @@ pub async fn cmd_context(chunk_id: &str, before: Option<usize>, after: Option<us
     .unwrap_or_else(|| ".".to_string());
 
   // Try code_context first
-  let code_params = serde_json::json!({
-    "chunk_id": chunk_id,
-    "cwd": cwd,
-    "lines_before": before,
-    "lines_after": after,
-  });
+  let code_params = CodeContextParams {
+    chunk_id: chunk_id.to_string(),
+    cwd: Some(cwd.clone()),
+    before,
+    after,
+  };
 
   let code_request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "code_context".to_string(),
+    id: Some(1),
+    method: Method::CodeContext,
     params: code_params,
   };
 
   let code_response = client
-    .request(code_request)
+    .request(cli::to_daemon_request(code_request))
     .await
     .context("Failed to get code context")?;
 
@@ -45,21 +46,21 @@ pub async fn cmd_context(chunk_id: &str, before: Option<usize>, after: Option<us
   }
 
   // If code_context failed, try doc_context
-  let doc_params = serde_json::json!({
-    "chunk_id": chunk_id,
-    "cwd": cwd,
-    "chunks_before": before.unwrap_or(1),
-    "chunks_after": after.unwrap_or(1),
-  });
+  let doc_params = DocContextParams {
+    doc_id: chunk_id.to_string(),
+    cwd: Some(cwd),
+    before: Some(before.unwrap_or(1)),
+    after: Some(after.unwrap_or(1)),
+  };
 
   let doc_request = Request {
-    id: Some(serde_json::json!(2)),
-    method: "doc_context".to_string(),
+    id: Some(2),
+    method: Method::DocContext,
     params: doc_params,
   };
 
   let doc_response = client
-    .request(doc_request)
+    .request(cli::to_daemon_request(doc_request))
     .await
     .context("Failed to get document context")?;
 

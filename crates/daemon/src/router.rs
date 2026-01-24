@@ -11,7 +11,581 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-/// JSON-RPC style request
+// Import typed result/params from IPC for type-safe responses
+pub use ipc::{
+  StatusResult, PingResult, ShutdownResult,
+  MemorySearchResult, MemorySearchItem, MemoryGetResult, MemoryDetail,
+  MemoryAddResult, MemoryUpdateResult, MemoryDeleteResult, MemoryListResult,
+  MemoryTimelineResult, TimelineEntry, MemoryRelatedResult, MemoryRestoreResult,
+  MemoryListDeletedResult, MemorySupersedeResult,
+  CodeSearchResult, CodeChunkItem, CodeContextResult, CodeChunkDetail,
+  CodeIndexResult, CodeStatsResult, LanguageStats, CodeCallersResult,
+  CodeCalleesResult, CodeListResult, CodeImportChunkResult, CodeMemoriesResult,
+  CodeRelatedResult, CodeContextFullResult,
+  ExploreResult, ExploreResultItem, ExploreHints, ContextResult, ContextItem,
+  DocsSearchResult, DocSearchItem, DocContextResult, DocDetail, DocsIngestResult,
+  WatchStatusResult, WatchStartResult, WatchStopResult,
+  EntityListResult, EntityItem, EntityGetResult, EntityDetail, EntityRelationship,
+  ProjectsListResult, ProjectInfo as IpcProjectInfo, ProjectCleanResult,
+  HealthCheckResult, HealthCheck, ProjectStatsResult, MigrateEmbeddingResult,
+  RelationshipAddResult, RelationshipListResult, RelationshipItem,
+  RelationshipDeleteResult, RelationshipRelatedResult,
+  HookResult,
+};
+
+// ============================================================================
+// Local result types for daemon-specific responses
+// These types match the current daemon output structure where IPC types differ
+// ============================================================================
+
+/// Metrics response - detailed daemon metrics for monitoring
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsResponse {
+  pub daemon: DaemonInfo,
+  pub requests: RequestsInfo,
+  pub sessions: SessionsInfo,
+  pub projects: ProjectsInfo,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub embedding: Option<EmbeddingInfo>,
+  pub memory: MemoryInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonInfo {
+  pub version: String,
+  pub uptime_seconds: u64,
+  pub idle_seconds: u64,
+  pub foreground: bool,
+  pub auto_shutdown: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestsInfo {
+  pub total: u64,
+  pub per_second: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionsInfo {
+  pub active: usize,
+  pub ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectsInfo {
+  pub count: usize,
+  pub names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingInfo {
+  pub name: String,
+  pub model: String,
+  pub dimensions: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryInfo {
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub rss_kb: Option<u64>,
+}
+
+/// Project list item for projects_list response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectListItem {
+  pub id: String,
+  pub path: String,
+  pub name: String,
+}
+
+/// Project info response for project_info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectInfoResult {
+  pub id: String,
+  pub path: String,
+  pub name: String,
+  pub memory_count: usize,
+  pub code_chunk_count: usize,
+  pub document_count: usize,
+  pub session_count: usize,
+  pub db_path: String,
+}
+
+/// Project clean response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectCleanResponse {
+  pub path: String,
+  pub memories_deleted: usize,
+  pub code_chunks_deleted: usize,
+  pub documents_deleted: usize,
+}
+
+/// Projects clean all response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectsCleanAllResult {
+  pub projects_removed: usize,
+}
+
+// ============================================================================
+// Hook result types - used by hooks.rs
+// ============================================================================
+
+/// Result from SessionStart hook
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStartHookResult {
+  pub status: String,
+  pub project_id: String,
+  pub project_name: String,
+  pub project_path: String,
+  pub watcher_started: bool,
+}
+
+/// Result from SessionEnd hook
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEndHookResult {
+  pub status: String,
+  pub memories_created: Vec<String>,
+  pub memories_promoted: usize,
+}
+
+/// Result from UserPromptSubmit hook
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPromptHookResult {
+  pub status: String,
+  pub memories_created: Vec<String>,
+}
+
+/// Result from PostToolUse hook
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostToolUseHookResult {
+  pub status: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub observation_memory_id: Option<String>,
+}
+
+/// Result from PreCompact hook
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreCompactHookResult {
+  pub status: String,
+  pub background_extraction: bool,
+  pub memories_created: Vec<String>,
+}
+
+/// Result from Stop hook
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StopHookResult {
+  pub status: String,
+  pub background_extraction: bool,
+  pub memories_created: Vec<String>,
+}
+
+/// Simple status-only hook result (SubagentStop, Notification)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimpleHookResult {
+  pub status: String,
+}
+
+// ============================================================================
+// System tool result types
+// ============================================================================
+
+/// Database health status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbHealthStatus {
+  pub status: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub wal_mode: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub error: Option<String>,
+}
+
+/// Ollama health status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OllamaHealthStatus {
+  pub available: bool,
+  pub models_count: usize,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub configured_model: Option<String>,
+  pub configured_model_available: bool,
+}
+
+/// Embedding provider status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingHealthStatus {
+  pub configured: bool,
+  pub provider: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub model: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub dimensions: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub available: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub context_length: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub max_batch_size: Option<usize>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub warning: Option<String>,
+}
+
+/// Full health check response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullHealthCheckResult {
+  pub database: DbHealthStatus,
+  pub ollama: OllamaHealthStatus,
+  pub embedding: EmbeddingHealthStatus,
+}
+
+/// Migrate embedding response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MigrateEmbeddingResponse {
+  pub migrated_count: u64,
+  pub skipped_count: u64,
+  pub error_count: u64,
+  pub duration_ms: u64,
+  pub target_dimensions: usize,
+}
+
+// ============================================================================
+// Document tool result types
+// ============================================================================
+
+/// Document search result item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocSearchResultItem {
+  pub id: String,
+  pub document_id: String,
+  pub title: String,
+  pub source: String,
+  pub content: String,
+  pub chunk_index: usize,
+  pub total_chunks: usize,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub similarity: Option<f32>,
+}
+
+/// Document ingest response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocIngestResult {
+  pub document_id: String,
+  pub title: String,
+  pub source: String,
+  pub source_type: String,
+  pub content_hash: String,
+  pub char_count: usize,
+  pub chunks_created: usize,
+  pub total_chunks: usize,
+}
+
+/// Document context chunk
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocContextChunk {
+  pub chunk_index: usize,
+  pub content: String,
+}
+
+/// Document context sections
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocContextSections {
+  pub before: Vec<DocContextChunk>,
+  pub target: DocContextChunk,
+  pub after: Vec<DocContextChunk>,
+}
+
+/// Document context response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocContextResponse {
+  pub chunk_id: String,
+  pub document_id: String,
+  pub title: String,
+  pub source: String,
+  pub context: DocContextSections,
+  pub total_chunks: usize,
+}
+
+// ============================================================================
+// Entity tool result types
+// ============================================================================
+
+/// Entity list item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityListItem {
+  pub id: String,
+  pub name: String,
+  #[serde(rename = "type")]
+  pub entity_type: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub summary: Option<String>,
+  pub aliases: Vec<String>,
+  pub mention_count: u32,
+  pub first_seen_at: String,
+  pub last_seen_at: String,
+}
+
+/// Entity memory link
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityMemoryLink {
+  pub memory_id: String,
+  pub role: String,
+  pub confidence: f32,
+}
+
+/// Full entity with optional memories
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityFullResult {
+  pub id: String,
+  pub name: String,
+  #[serde(rename = "type")]
+  pub entity_type: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub summary: Option<String>,
+  pub aliases: Vec<String>,
+  pub mention_count: u32,
+  pub first_seen_at: String,
+  pub last_seen_at: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub memories: Option<Vec<EntityMemoryLink>>,
+}
+
+/// Top entity item (simplified)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopEntityItem {
+  pub id: String,
+  pub name: String,
+  #[serde(rename = "type")]
+  pub entity_type: String,
+  pub mention_count: u32,
+}
+
+/// Relationship result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipResult {
+  pub id: String,
+  pub from_memory_id: String,
+  pub to_memory_id: String,
+  pub relationship_type: String,
+  pub confidence: f32,
+}
+
+/// Relationship list item (with dates)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipListItem {
+  pub id: String,
+  pub from_memory_id: String,
+  pub to_memory_id: String,
+  pub relationship_type: String,
+  pub confidence: f32,
+  pub created_at: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub valid_until: Option<String>,
+}
+
+/// Delete result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletedResult {
+  pub deleted: bool,
+}
+
+/// Memory summary (for related memories)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySummary {
+  pub id: String,
+  pub content: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub summary: Option<String>,
+  pub sector: String,
+  pub salience: f32,
+}
+
+/// Relationship info (for related memories)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipInfo {
+  #[serde(rename = "type")]
+  pub relationship_type: String,
+  pub confidence: f32,
+  pub direction: String,
+}
+
+/// Related memory with relationship info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelatedMemoryItem {
+  pub memory: MemorySummary,
+  pub relationship: RelationshipInfo,
+}
+
+// ============================================================================
+// Memory tool result types (additional)
+// ============================================================================
+
+/// Memory session info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySessionInfo {
+  pub id: String,
+  pub started_at: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub ended_at: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub summary: Option<String>,
+}
+
+/// Memory timeline item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryTimelineItem {
+  pub id: String,
+  pub content: String,
+  pub sector: String,
+  pub salience: f32,
+  pub created_at: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub session_id: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub session: Option<MemorySessionInfo>,
+}
+
+/// Memory timeline response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryTimelineResponse {
+  pub anchor: MemoryTimelineItem,
+  pub before: Vec<MemoryTimelineItem>,
+  pub after: Vec<MemoryTimelineItem>,
+}
+
+/// Memory relationship in get response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRelationshipItem {
+  #[serde(rename = "type")]
+  pub relationship_type: String,
+  pub from_id: String,
+  pub to_id: String,
+  pub target_id: String,
+  pub confidence: f32,
+}
+
+/// Full memory detail response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryFullDetail {
+  pub id: String,
+  pub content: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub summary: Option<String>,
+  pub sector: String,
+  pub tier: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub memory_type: Option<String>,
+  pub salience: f32,
+  pub importance: f32,
+  pub confidence: f32,
+  pub access_count: u32,
+  pub is_deleted: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub superseded_by: Option<String>,
+  pub tags: Vec<String>,
+  pub categories: Vec<String>,
+  pub concepts: Vec<String>,
+  pub files: Vec<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub context: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub scope_path: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub scope_module: Option<String>,
+  pub created_at: String,
+  pub updated_at: String,
+  pub last_accessed: String,
+  pub valid_from: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub valid_until: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub relationships: Option<Vec<MemoryRelationshipItem>>,
+}
+
+/// Related memory search item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRelatedItem {
+  pub id: String,
+  pub content: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub summary: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub memory_type: Option<String>,
+  pub sector: String,
+  pub salience: f32,
+  pub score: f32,
+  pub relationship: String,
+  pub created_at: String,
+}
+
+/// Memory related response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRelatedResponse {
+  pub memory_id: String,
+  pub content: String,
+  pub related: Vec<MemoryRelatedItem>,
+  pub count: usize,
+}
+
+// ============================================================================
+// Code tool result types (additional)
+// ============================================================================
+
+/// Code search query info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeQueryInfo {
+  pub original: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub expanded: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub intent: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub search_mode: Option<String>,
+}
+
+/// Code search response - generic over result type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeSearchResponse<T: Serialize> {
+  pub results: Vec<T>,
+  pub query_info: CodeQueryInfo,
+}
+
+/// Code index response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeIndexResponse {
+  pub status: String,
+  pub files_scanned: usize,
+  pub files_indexed: usize,
+  pub chunks_created: usize,
+  pub failed_files: usize,
+  pub resumed_from_checkpoint: bool,
+  pub scan_duration_ms: u64,
+  pub index_duration_ms: u64,
+  pub total_duration_ms: u64,
+  pub files_per_second: f64,
+  pub bytes_processed: u64,
+  pub total_bytes: u64,
+}
+
+/// Code index file info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeIndexFileInfo {
+  pub path: String,
+  pub language: String,
+  pub chunks: usize,
+  pub skipped: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub reason: Option<String>,
+}
+
+/// Code index dry run response (simplified)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeIndexDryRunResponse {
+  pub status: String,
+  pub files_found: usize,
+  pub skipped: usize,
+  pub total_bytes: u64,
+  pub scan_duration_ms: u64,
+}
+
+/// JSON-RPC style request (wire format - supports any JSON id and string method)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
   #[serde(default)]
@@ -21,7 +595,7 @@ pub struct Request {
   pub params: serde_json::Value,
 }
 
-/// JSON-RPC style response
+/// JSON-RPC style response (wire format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -31,8 +605,6 @@ pub struct Response {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub error: Option<RpcError>,
   /// Progress update for streaming responses.
-  /// When present without result/error, this is an intermediate progress event.
-  /// The final response will have result (or error) with no progress.
   #[serde(skip_serializing_if = "Option::is_none")]
   pub progress: Option<IndexProgress>,
 }
@@ -40,27 +612,19 @@ pub struct Response {
 /// Progress information for long-running operations like indexing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexProgress {
-  /// Current phase: "scanning", "indexing", "embedding", "complete"
   pub phase: String,
-  /// Total files to process (known after scan phase)
   #[serde(skip_serializing_if = "Option::is_none")]
   pub total_files: Option<u32>,
-  /// Files processed so far
   #[serde(skip_serializing_if = "Option::is_none")]
   pub processed_files: Option<u32>,
-  /// Total chunks created so far
   #[serde(skip_serializing_if = "Option::is_none")]
   pub chunks_created: Option<u32>,
-  /// Current file being processed
   #[serde(skip_serializing_if = "Option::is_none")]
   pub current_file: Option<String>,
-  /// Bytes processed so far
   #[serde(skip_serializing_if = "Option::is_none")]
   pub bytes_processed: Option<u64>,
-  /// Total bytes to process
   #[serde(skip_serializing_if = "Option::is_none")]
   pub total_bytes: Option<u64>,
-  /// Human-readable status message
   #[serde(skip_serializing_if = "Option::is_none")]
   pub message: Option<String>,
 }
@@ -72,10 +636,11 @@ pub struct RpcError {
 }
 
 impl Response {
-  pub fn success(id: Option<serde_json::Value>, result: serde_json::Value) -> Self {
+  /// Create a success response with a typed result (serializes to JSON value)
+  pub fn success<T: Serialize>(id: Option<serde_json::Value>, result: T) -> Self {
     Self {
       id,
-      result: Some(result),
+      result: Some(serde_json::to_value(result).unwrap_or(serde_json::Value::Null)),
       error: None,
       progress: None,
     }
@@ -105,7 +670,6 @@ impl Response {
 }
 
 impl IndexProgress {
-  /// Create a scanning phase progress
   pub fn scanning(scanned: u32, current_file: Option<String>) -> Self {
     Self {
       phase: "scanning".to_string(),
@@ -119,7 +683,6 @@ impl IndexProgress {
     }
   }
 
-  /// Create an indexing phase progress
   pub fn indexing(processed: u32, total: u32, chunks: u32, current_file: Option<String>, bytes_processed: u64, total_bytes: u64) -> Self {
     let percent = if total > 0 { (processed * 100) / total } else { 0 };
     Self {
@@ -134,7 +697,6 @@ impl IndexProgress {
     }
   }
 
-  /// Create a completion progress
   pub fn complete(files: u32, chunks: u32) -> Self {
     Self {
       phase: "complete".to_string(),
@@ -302,7 +864,7 @@ impl Router {
 
     match request.method.as_str() {
       // Health/meta commands
-      "ping" => Response::success(request.id, serde_json::json!("pong")),
+      "ping" => Response::success(request.id, PingResult("pong".to_string())),
       "status" => self.handle_status(request).await,
       "metrics" => self.handle_metrics(request).await,
       "shutdown" => self.handle_shutdown(request).await,
@@ -441,16 +1003,16 @@ impl Router {
     // Get foreground mode
     let foreground = *self.foreground.lock().await;
 
-    let status = serde_json::json!({
-        "status": "running",
-        "version": env!("CARGO_PKG_VERSION"),
-        "projects": projects.len(),
-        "active_sessions": active_sessions,
-        "idle_seconds": idle_seconds,
-        "uptime_seconds": uptime_seconds,
-        "foreground": foreground,
-        "auto_shutdown": !foreground,
-    });
+    let status = StatusResult {
+      status: "running".to_string(),
+      version: env!("CARGO_PKG_VERSION").to_string(),
+      projects: projects.len(),
+      active_sessions,
+      idle_seconds,
+      uptime_seconds,
+      foreground,
+      auto_shutdown: !foreground,
+    };
     Response::success(request.id, status)
   }
 
@@ -489,48 +1051,43 @@ impl Router {
     // Get embedding provider info
     let embedding_info = {
       let guard = self.embedding_provider.lock().await;
-      match &*guard {
-        Some(provider) => serde_json::json!({
-          "name": provider.name(),
-          "model": provider.model_id(),
-          "dimensions": provider.dimensions(),
-        }),
-        None => serde_json::json!(null),
-      }
+      (*guard).as_ref().map(|provider| EmbeddingInfo {
+          name: provider.name().to_string(),
+          model: provider.model_id().to_string(),
+          dimensions: provider.dimensions(),
+        })
     };
 
     // Get process memory (if available on Linux)
     let memory_kb = Self::get_process_memory_kb();
 
-    let metrics = serde_json::json!({
-      "daemon": {
-        "version": env!("CARGO_PKG_VERSION"),
-        "uptime_seconds": uptime_seconds,
-        "idle_seconds": idle_seconds,
-        "foreground": foreground,
-        "auto_shutdown": !foreground,
+    let metrics = MetricsResponse {
+      daemon: DaemonInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        uptime_seconds,
+        idle_seconds,
+        foreground,
+        auto_shutdown: !foreground,
       },
-      "requests": {
-        "total": total_requests,
-        "per_second": if uptime_seconds > 0 {
+      requests: RequestsInfo {
+        total: total_requests,
+        per_second: if uptime_seconds > 0 {
           total_requests as f64 / uptime_seconds as f64
         } else {
           0.0
         },
       },
-      "sessions": {
-        "active": active_sessions,
-        "ids": session_list,
+      sessions: SessionsInfo {
+        active: active_sessions,
+        ids: session_list,
       },
-      "projects": {
-        "count": projects.len(),
-        "names": projects.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+      projects: ProjectsInfo {
+        count: projects.len(),
+        names: projects.iter().map(|p| p.name.clone()).collect(),
       },
-      "embedding": embedding_info,
-      "memory": {
-        "rss_kb": memory_kb,
-      },
-    });
+      embedding: embedding_info,
+      memory: MemoryInfo { rss_kb: memory_kb },
+    };
 
     Response::success(request.id, metrics)
   }
@@ -562,7 +1119,9 @@ impl Router {
     let guard = self.shutdown_handle.lock().await;
     if let Some(ref handle) = *guard {
       handle.shutdown();
-      Response::success(request.id, serde_json::json!({"status": "shutting_down"}))
+      Response::success(request.id, ShutdownResult {
+        message: "shutting_down".to_string(),
+      })
     } else {
       Response::error(request.id, -32000, "Shutdown handle not available")
     }
@@ -572,18 +1131,16 @@ impl Router {
   async fn handle_projects_list(&self, request: Request) -> Response {
     let projects = self.registry.list().await;
 
-    let project_list: Vec<serde_json::Value> = projects
+    let project_list: Vec<ProjectListItem> = projects
       .iter()
-      .map(|p| {
-        serde_json::json!({
-          "id": p.id.as_str(),
-          "path": p.path.to_string_lossy(),
-          "name": p.name,
-        })
+      .map(|p| ProjectListItem {
+        id: p.id.as_str().to_string(),
+        path: p.path.to_string_lossy().to_string(),
+        name: p.name.clone(),
       })
       .collect();
 
-    Response::success(request.id, serde_json::json!(project_list))
+    Response::success(request.id, project_list)
   }
 
   /// Get detailed info for a specific project
@@ -629,16 +1186,16 @@ impl Router {
 
         Response::success(
           request.id,
-          serde_json::json!({
-            "id": info.id.as_str(),
-            "path": info.path.to_string_lossy(),
-            "name": info.name,
-            "memory_count": memory_count,
-            "code_chunk_count": code_chunk_count,
-            "document_count": document_count,
-            "session_count": session_count,
-            "db_path": db.path.to_string_lossy(),
-          }),
+          ProjectInfoResult {
+            id: info.id.as_str().to_string(),
+            path: info.path.to_string_lossy().to_string(),
+            name: info.name.clone(),
+            memory_count,
+            code_chunk_count,
+            document_count,
+            session_count,
+            db_path: db.path.to_string_lossy().to_string(),
+          },
         )
       }
       Err(e) => Response::error(request.id, -32000, &format!("Failed to get project info: {}", e)),
@@ -701,12 +1258,12 @@ impl Router {
 
     Response::success(
       request.id,
-      serde_json::json!({
-        "path": project_info.path.to_string_lossy(),
-        "memories_deleted": counts.0,
-        "code_chunks_deleted": counts.1,
-        "documents_deleted": counts.2,
-      }),
+      ProjectCleanResponse {
+        path: project_info.path.to_string_lossy().to_string(),
+        memories_deleted: counts.0,
+        code_chunks_deleted: counts.1,
+        documents_deleted: counts.2,
+      },
     )
   }
 
@@ -731,12 +1288,7 @@ impl Router {
       );
     }
 
-    Response::success(
-      request.id,
-      serde_json::json!({
-        "projects_removed": count,
-      }),
-    )
+    Response::success(request.id, ProjectsCleanAllResult { projects_removed: count })
   }
 
   async fn handle_hook(&self, request: Request) -> Response {
@@ -754,7 +1306,11 @@ impl Router {
     };
 
     // Get the params for the hook
-    let params = request.params.get("params").cloned().unwrap_or(serde_json::json!({}));
+    let params = request
+      .params
+      .get("params")
+      .cloned()
+      .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
 
     // Delegate to hook handler
     match self.hook_handler.handle(event, params).await {
@@ -773,17 +1329,30 @@ impl Default for Router {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use ipc::{Method, PingParams, MetricsParams};
+
+  /// Helper to create a wire-format Request from typed IPC params
+  fn make_request<P: serde::Serialize>(id: u64, method: Method, params: P) -> Request {
+    Request {
+      id: Some(serde_json::Value::Number(id.into())),
+      method: serde_json::to_value(method)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default(),
+      params: serde_json::to_value(params).unwrap_or_default(),
+    }
+  }
 
   #[test]
   fn test_response_success() {
-    let response = Response::success(Some(serde_json::json!(1)), serde_json::json!("test"));
+    let response = Response::success(Some(serde_json::Value::Number(1.into())), "test");
     assert!(response.result.is_some());
     assert!(response.error.is_none());
   }
 
   #[test]
   fn test_response_error() {
-    let response = Response::error(Some(serde_json::json!(1)), -1, "test error");
+    let response = Response::error(Some(serde_json::Value::Number(1.into())), -1, "test error");
     assert!(response.result.is_none());
     assert!(response.error.is_some());
     assert_eq!(response.error.as_ref().unwrap().code, -1);
@@ -792,24 +1361,24 @@ mod tests {
   #[tokio::test]
   async fn test_ping() {
     let router = Router::new();
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "ping".to_string(),
-      params: serde_json::json!({}),
-    };
+    let request = make_request(1, Method::Ping, PingParams);
 
     let response = router.handle(request).await;
     assert!(response.result.is_some());
-    assert_eq!(response.result.unwrap(), serde_json::json!("pong"));
+
+    // Deserialize to typed result
+    let result: ipc::PingResult = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert_eq!(result.0, "pong");
   }
 
   #[tokio::test]
   async fn test_unknown_method() {
     let router = Router::new();
+    // Test with invalid method string (not using typed Method enum since we want to test error path)
     let request = Request {
-      id: Some(serde_json::json!(1)),
+      id: Some(serde_json::Value::Number(1.into())),
       method: "unknown_method".to_string(),
-      params: serde_json::json!({}),
+      params: serde_json::Value::Object(Default::default()),
     };
 
     let response = router.handle(request).await;
@@ -823,45 +1392,30 @@ mod tests {
 
     // Make a few requests to increment the counter
     for _ in 0..3 {
-      let request = Request {
-        id: Some(serde_json::json!(1)),
-        method: "ping".to_string(),
-        params: serde_json::json!({}),
-      };
+      let request = make_request(1, Method::Ping, PingParams);
       router.handle(request).await;
     }
 
     // Now request metrics
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "metrics".to_string(),
-      params: serde_json::json!({}),
-    };
+    let request = make_request(1, Method::Metrics, MetricsParams);
 
     let response = router.handle(request).await;
     assert!(response.result.is_some());
 
-    let result = response.result.unwrap();
+    // Deserialize to typed MetricsResponse
+    let result: MetricsResponse = serde_json::from_value(response.result.unwrap()).unwrap();
 
     // Check daemon info
-    assert!(result.get("daemon").is_some());
-    assert!(result["daemon"]["version"].is_string());
-    assert!(result["daemon"]["uptime_seconds"].is_u64());
+    assert!(!result.daemon.version.is_empty());
+    // uptime_seconds is u64 and always >= 0
 
-    // Check requests info
-    assert!(result.get("requests").is_some());
-    // 4 total requests: 3 pings + 1 metrics
-    assert_eq!(result["requests"]["total"], 4);
+    // Check requests info - 4 total requests: 3 pings + 1 metrics
+    assert_eq!(result.requests.total, 4);
 
     // Check sessions info
-    assert!(result.get("sessions").is_some());
-    assert_eq!(result["sessions"]["active"], 0);
+    assert_eq!(result.sessions.active, 0);
 
     // Check projects info
-    assert!(result.get("projects").is_some());
-    assert_eq!(result["projects"]["count"], 0);
-
-    // Check memory info
-    assert!(result.get("memory").is_some());
+    assert_eq!(result.projects.count, 0);
   }
 }

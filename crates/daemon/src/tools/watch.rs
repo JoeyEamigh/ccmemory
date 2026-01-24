@@ -1,7 +1,7 @@
 //! File watcher and code statistics tool methods
 
 use super::ToolHandler;
-use crate::router::{Request, Response};
+use crate::router::{Request, Response, WatchStartResult, WatchStopResult, WatchStatusResult, CodeStatsResult};
 use crate::startup_scan::StartupScanConfig;
 use engram_core::{Config, ScanMode};
 use serde::Deserialize;
@@ -74,11 +74,11 @@ impl ToolHandler {
 
     Response::success(
       request.id,
-      serde_json::json!({
-          "status": "started",
-          "path": project_path.to_string_lossy(),
-          "project_id": info.id.as_str(),
-      }),
+      WatchStartResult {
+        status: "started".to_string(),
+        path: project_path.to_string_lossy().to_string(),
+        project_id: info.id.as_str().to_string(),
+      },
     )
   }
 
@@ -113,11 +113,11 @@ impl ToolHandler {
 
     Response::success(
       request.id,
-      serde_json::json!({
-          "status": "stopped",
-          "path": project_path.to_string_lossy(),
-          "project_id": info.id.as_str(),
-      }),
+      WatchStopResult {
+        status: "stopped".to_string(),
+        path: project_path.to_string_lossy().to_string(),
+        project_id: info.id.as_str().to_string(),
+      },
     )
   }
 
@@ -157,14 +157,14 @@ impl ToolHandler {
 
     Response::success(
       request.id,
-      serde_json::json!({
-          "running": status.running,
-          "root": status.root.map(|p| p.to_string_lossy().to_string()),
-          "pending_changes": status.pending_changes,
-          "project_id": info.id.as_str(),
-          "scanning": status.scanning,
-          "scan_progress": scan_progress.map(|(p, t)| [p, t]),
-      }),
+      WatchStatusResult {
+        running: status.running,
+        root: status.root.map(|p| p.to_string_lossy().to_string()),
+        pending_changes: status.pending_changes,
+        project_id: info.id.as_str().to_string(),
+        scanning: status.scanning,
+        scan_progress: scan_progress.map(|(p, t)| [p, t]),
+      },
     )
   }
 
@@ -242,16 +242,16 @@ impl ToolHandler {
 
         Response::success(
           request.id,
-          serde_json::json!({
-              "total_chunks": total_chunks,
-              "total_files": total_files,
-              "total_tokens_estimate": total_tokens,
-              "total_lines": total_lines,
-              "average_chunks_per_file": avg_chunks_per_file,
-              "language_breakdown": language_counts,
-              "chunk_type_breakdown": chunk_type_counts,
-              "index_health_score": health_score.min(100.0).round() as u32,
-          }),
+          CodeStatsResult {
+            total_chunks,
+            total_files,
+            total_tokens_estimate: total_tokens,
+            total_lines,
+            average_chunks_per_file: avg_chunks_per_file,
+            language_breakdown: language_counts,
+            chunk_type_breakdown: chunk_type_counts,
+            index_health_score: health_score.min(100.0).round() as u32,
+          },
         )
       }
       Err(e) => Response::error(request.id, -32000, &format!("Stats error: {}", e)),

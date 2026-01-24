@@ -2,7 +2,9 @@
 
 use crate::IndexCommand;
 use anyhow::{Context, Result};
-use daemon::{Request, connect_or_start};
+use cli::to_daemon_request;
+use daemon::connect_or_start;
+use ipc::{CodeImportChunkParams, CodeIndexParams, CodeListParams, CodeStatsParams, DocsIngestParams, Method, ProjectStatsParams, Request};
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 use tracing::{debug, error, warn};
@@ -56,17 +58,18 @@ pub async fn cmd_index_file(path: &str, title: Option<&str>, _force: bool) -> Re
     // Index as document
     let doc_title = title.unwrap_or_else(|| abs_path.file_name().and_then(|n| n.to_str()).unwrap_or("Untitled"));
 
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "docs_ingest".to_string(),
-      params: serde_json::json!({
-          "path": abs_path.to_string_lossy(),
-          "title": doc_title,
-          "cwd": cwd.to_string_lossy(),
-      }),
+    let params = DocsIngestParams {
+      cwd: Some(cwd.to_string_lossy().to_string()),
+      directory: Some(abs_path.to_string_lossy().to_string()),
     };
 
-    let response = client.request(request).await.context("Failed to index document")?;
+    let request = Request {
+      id: Some(1),
+      method: Method::DocsIngest,
+      params,
+    };
+
+    let response = client.request(to_daemon_request(request)).await.context("Failed to index document")?;
 
     if let Some(err) = response.error {
       error!("Index error: {}", err.message);
@@ -84,17 +87,19 @@ pub async fn cmd_index_file(path: &str, title: Option<&str>, _force: bool) -> Re
       .map(|p| p.to_string_lossy().to_string())
       .unwrap_or_else(|_| abs_path.to_string_lossy().to_string());
 
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "code_index".to_string(),
-      params: serde_json::json!({
-          "cwd": cwd.to_string_lossy(),
-          "path": relative_path,
-          "force": true,
-      }),
+    let params = CodeIndexParams {
+      cwd: Some(cwd.to_string_lossy().to_string()),
+      force: true,
+      stream: false,
     };
 
-    let response = client.request(request).await.context("Failed to index code file")?;
+    let request = Request {
+      id: Some(1),
+      method: Method::CodeIndex,
+      params,
+    };
+
+    let response = client.request(to_daemon_request(request)).await.context("Failed to index code file")?;
 
     if let Some(err) = response.error {
       error!("Index error: {}", err.message);
@@ -141,13 +146,17 @@ pub async fn cmd_index_docs_impl(directory: Option<&str>, force: bool, stats: bo
 
   // Handle --stats
   if stats {
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "project_stats".to_string(),
-      params: serde_json::json!({ "cwd": cwd.to_string_lossy() }),
+    let params = ProjectStatsParams {
+      cwd: Some(cwd.to_string_lossy().to_string()),
     };
 
-    let response = client.request(request).await.context("Failed to get stats")?;
+    let request = Request {
+      id: Some(1),
+      method: Method::ProjectStats,
+      params,
+    };
+
+    let response = client.request(to_daemon_request(request)).await.context("Failed to get stats")?;
 
     if let Some(err) = response.error {
       error!("Stats error: {}", err.message);
@@ -231,35 +240,35 @@ pub async fn cmd_index_docs_impl(directory: Option<&str>, force: bool, stats: bo
       }
     };
 
-    let doc_title = abs_path.file_name().and_then(|n| n.to_str()).unwrap_or("Untitled");
+    let _doc_title = abs_path.file_name().and_then(|n| n.to_str()).unwrap_or("Untitled");
 
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "docs_ingest".to_string(),
-      params: serde_json::json!({
-          "path": abs_path.to_string_lossy(),
-          "title": doc_title,
-          "cwd": cwd.to_string_lossy(),
-          "force": force,
-      }),
+    let params = DocsIngestParams {
+      cwd: Some(cwd.to_string_lossy().to_string()),
+      directory: Some(abs_path.to_string_lossy().to_string()),
     };
 
-    match client.request(request).await {
+    let request = Request {
+      id: Some(1),
+      method: Method::DocsIngest,
+      params,
+    };
+
+    match client.request(to_daemon_request(request)).await {
       Ok(response) => {
         if let Some(err) = response.error {
           if err.message.contains("already indexed") && !force {
             skipped += 1;
           } else {
-            warn!("Failed to index {}: {}", doc_title, err.message);
+            warn!("Failed to index {}: {}", abs_path.display(), err.message);
             failed += 1;
           }
         } else {
           indexed += 1;
-          debug!("Indexed: {}", doc_title);
+          debug!("Indexed: {}", abs_path.display());
         }
       }
       Err(e) => {
-        warn!("Failed to index {}: {}", doc_title, e);
+        warn!("Failed to index {}: {}", abs_path.display(), e);
         failed += 1;
       }
     }
@@ -287,13 +296,17 @@ pub async fn cmd_index_code(force: bool, stats: bool, export: Option<&str>, load
 
   // Handle --stats
   if stats {
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "code_stats".to_string(),
-      params: serde_json::json!({ "cwd": cwd }),
+    let params = CodeStatsParams {
+      cwd: Some(cwd.clone()),
     };
 
-    let response = client.request(request).await.context("Failed to get index stats")?;
+    let request = Request {
+      id: Some(1),
+      method: Method::CodeStats,
+      params,
+    };
+
+    let response = client.request(to_daemon_request(request)).await.context("Failed to get index stats")?;
 
     if let Some(err) = response.error {
       error!("Stats error: {}", err.message);
@@ -351,13 +364,18 @@ pub async fn cmd_index_code(force: bool, stats: bool, export: Option<&str>, load
   if let Some(output) = export {
     println!("Exporting code index...");
 
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "code_list".to_string(),
-      params: serde_json::json!({ "cwd": cwd }),
+    let params = CodeListParams {
+      cwd: Some(cwd.clone()),
+      limit: None,
     };
 
-    let response = client.request(request).await.context("Failed to export index")?;
+    let request = Request {
+      id: Some(1),
+      method: Method::CodeList,
+      params,
+    };
+
+    let response = client.request(to_daemon_request(request)).await.context("Failed to export index")?;
 
     if let Some(err) = response.error {
       error!("Export error: {}", err.message);
@@ -365,11 +383,17 @@ pub async fn cmd_index_code(force: bool, stats: bool, export: Option<&str>, load
     }
 
     if let Some(result) = response.result {
-      let export_data = serde_json::json!({
-          "version": "1.0",
-          "exported_at": chrono::Utc::now().to_rfc3339(),
-          "chunks": result,
-      });
+      #[derive(serde::Serialize)]
+      struct ExportData {
+        version: &'static str,
+        exported_at: String,
+        chunks: serde_json::Value,
+      }
+      let export_data = ExportData {
+        version: "1.0",
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        chunks: result.clone(),
+      };
 
       let json = serde_json::to_string_pretty(&export_data)?;
       std::fs::write(output, &json)?;
@@ -397,16 +421,29 @@ pub async fn cmd_index_code(force: bool, stats: bool, export: Option<&str>, load
 
     let mut imported = 0;
     for chunk in chunks {
-      let request = Request {
-        id: Some(serde_json::json!(1)),
-        method: "code_import_chunk".to_string(),
-        params: serde_json::json!({
-            "cwd": cwd,
-            "chunk": chunk,
-        }),
+      // Extract fields from chunk for CodeImportChunkParams
+      let file_path = chunk
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+      let content = chunk.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+      let language = chunk.get("language").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+      let params = CodeImportChunkParams {
+        cwd: Some(cwd.clone()),
+        file_path,
+        content,
+        language,
       };
 
-      match client.request(request).await {
+      let request = Request {
+        id: Some(1),
+        method: Method::CodeImportChunk,
+        params,
+      };
+
+      match client.request(to_daemon_request(request)).await {
         Ok(resp) if resp.error.is_none() => imported += 1,
         Ok(resp) => {
           if let Some(err) = resp.error {
@@ -429,17 +466,19 @@ pub async fn cmd_index_code(force: bool, stats: bool, export: Option<&str>, load
     println!("Indexing code in {}...", cwd);
     println!();
 
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "code_index".to_string(),
-      params: serde_json::json!({
-          "cwd": cwd,
-          "force": force,
-          "stream": true,
-      }),
+    let params = CodeIndexParams {
+      cwd: Some(cwd.clone()),
+      force,
+      stream: true,
     };
 
-    let mut stream = client.request_streaming(request).await.context("Failed to start indexing")?;
+    let request = Request {
+      id: Some(1),
+      method: Method::CodeIndex,
+      params,
+    };
+
+    let mut stream = client.request_streaming(to_daemon_request(request)).await.context("Failed to start indexing")?;
 
     let mut last_progress_len = 0;
     let mut final_result = None;
@@ -482,7 +521,7 @@ pub async fn cmd_index_code(force: bool, stats: bool, export: Option<&str>, load
             let bar_width = 20;
             let filled = (bar_width * percent / 100) as usize;
             let empty = bar_width as usize - filled;
-            let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
+            let bar = format!("[{}{}]", "=".repeat(filled), " ".repeat(empty));
 
             if current.is_empty() {
               format!("{} {}% ({}/{}) {} chunks", bar, percent, processed, total, chunks)
@@ -532,16 +571,19 @@ pub async fn cmd_index_code(force: bool, stats: bool, export: Option<&str>, load
     // Non-TTY: use simple non-streaming request
     println!("Indexing code in {}...", cwd);
 
-    let request = Request {
-      id: Some(serde_json::json!(1)),
-      method: "code_index".to_string(),
-      params: serde_json::json!({
-          "cwd": cwd,
-          "force": force,
-      }),
+    let params = CodeIndexParams {
+      cwd: Some(cwd.clone()),
+      force,
+      stream: false,
     };
 
-    let response = client.request(request).await.context("Failed to index code")?;
+    let request = Request {
+      id: Some(1),
+      method: Method::CodeIndex,
+      params,
+    };
+
+    let response = client.request(to_daemon_request(request)).await.context("Failed to index code")?;
 
     if let Some(err) = response.error {
       error!("Index error: {}", err.message);

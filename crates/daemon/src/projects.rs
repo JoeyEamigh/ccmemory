@@ -244,17 +244,17 @@ impl ProjectRegistry {
   }
 
   async fn save_metadata(&self, info: &ProjectInfo, path: &Path) -> Result<(), ProjectError> {
-    use serde_json::json;
+    use ipc::ProjectMetadataJson;
 
     if let Some(parent) = path.parent() {
       tokio::fs::create_dir_all(parent).await?;
     }
 
-    let metadata = json!({
-        "id": info.id.as_str(),
-        "path": info.path.to_string_lossy(),
-        "name": info.name,
-    });
+    let metadata = ProjectMetadataJson {
+      id: info.id.as_str().to_string(),
+      path: info.path.to_string_lossy().to_string(),
+      name: info.name.clone(),
+    };
 
     let json = serde_json::to_string_pretty(&metadata).map_err(|e| ProjectError::Serialization(e.to_string()))?;
     tokio::fs::write(path, json).await?;
