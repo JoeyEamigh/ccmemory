@@ -25,7 +25,7 @@ futures = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
-toml = "0.8"
+toml = "0.9"
 
 # Logging
 tracing = { workspace = true }
@@ -39,24 +39,24 @@ thiserror = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 
 # Progress/UI
-indicatif = "0.17"
+indicatif = "0.18"
 
 # System monitoring
-sysinfo = "0.33"
+sysinfo = "0.37"
 
 # Graph analysis
-petgraph = "0.6"
+petgraph = "0.8"
 
 # Utilities
 tempfile = "3"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
-rayon = "1.10"
+rayon = "1.11"
 glob = "0.3"
 sha2 = "0.10"
 reqwest = { version = "0.13", features = ["stream"] }
 tokio-util = { version = "0.7", features = ["io"] }
-flate2 = "1.0"
+flate2 = "1.1"
 tar = "0.4"
 dirs = "6"
 hostname = "0.4"
