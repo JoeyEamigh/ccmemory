@@ -4,8 +4,11 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, warn};
+
+/// Sender type for streaming progress updates
+pub type ProgressSender = mpsc::Sender<Response>;
 
 #[derive(Error, Debug)]
 pub enum ServerError {
@@ -136,6 +139,15 @@ impl ShutdownHandle {
   }
 }
 
+/// Check if a request is for a streaming method
+fn is_streaming_request(request: &Request) -> bool {
+  // Check if the request has stream: true in params
+  if let Some(stream) = request.params.get("stream") {
+    return stream.as_bool().unwrap_or(false);
+  }
+  false
+}
+
 /// Handle a single client connection
 async fn handle_connection(stream: UnixStream, router: Arc<Router>) -> Result<(), ServerError> {
   let (reader, mut writer) = stream.into_split();
@@ -173,14 +185,40 @@ async fn handle_connection(stream: UnixStream, router: Arc<Router>) -> Result<()
 
     debug!("Request: {} (id={:?})", request.method, request.id);
 
-    // Route and handle
-    let response = router.handle(request).await;
+    // Check if this is a streaming request
+    if is_streaming_request(&request) {
+      // Handle streaming request
+      let (tx, mut rx) = mpsc::channel::<Response>(32);
 
-    // Send response
-    let json = serde_json::to_string(&response)?;
-    writer.write_all(json.as_bytes()).await?;
-    writer.write_all(b"\n").await?;
-    writer.flush().await?;
+      // Spawn the handler with progress sender
+      let router_clone = Arc::clone(&router);
+      let request_clone = request.clone();
+      tokio::spawn(async move {
+        router_clone.handle_streaming(request_clone, tx).await;
+      });
+
+      // Read from channel and write to socket until channel closes
+      while let Some(response) = rx.recv().await {
+        let json = serde_json::to_string(&response)?;
+        writer.write_all(json.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await?;
+
+        // If this response has a result or error, it's the final one
+        if response.result.is_some() || response.error.is_some() {
+          break;
+        }
+      }
+    } else {
+      // Route and handle normally (single response)
+      let response = router.handle(request).await;
+
+      // Send response
+      let json = serde_json::to_string(&response)?;
+      writer.write_all(json.as_bytes()).await?;
+      writer.write_all(b"\n").await?;
+      writer.flush().await?;
+    }
   }
 
   Ok(())
@@ -234,6 +272,59 @@ impl Client {
     };
 
     self.request(request).await
+  }
+
+  /// Send a streaming request and return a StreamingResponse for reading progress.
+  pub async fn request_streaming(self, request: Request) -> Result<StreamingResponse, ServerError> {
+    let (reader, mut writer) = self.stream.into_split();
+
+    // Send request
+    let json = serde_json::to_string(&request)?;
+    writer.write_all(json.as_bytes()).await?;
+    writer.write_all(b"\n").await?;
+    writer.flush().await?;
+
+    Ok(StreamingResponse {
+      reader: BufReader::new(reader),
+      line_buf: String::new(),
+    })
+  }
+}
+
+/// A streaming response reader that yields progress updates then final result
+pub struct StreamingResponse {
+  reader: BufReader<tokio::net::unix::OwnedReadHalf>,
+  line_buf: String,
+}
+
+impl StreamingResponse {
+  /// Receive the next response (progress or final result).
+  /// Returns None when the stream is closed.
+  pub async fn recv(&mut self) -> Option<Response> {
+    self.line_buf.clear();
+
+    match self.reader.read_line(&mut self.line_buf).await {
+      Ok(0) => None, // EOF
+      Ok(_) => {
+        let trimmed = self.line_buf.trim();
+        if trimmed.is_empty() {
+          // Skip empty lines, try again
+          return Box::pin(self.recv()).await;
+        }
+
+        match serde_json::from_str::<Response>(trimmed) {
+          Ok(response) => Some(response),
+          Err(e) => {
+            warn!("Failed to parse streaming response: {}", e);
+            None
+          }
+        }
+      }
+      Err(e) => {
+        warn!("Error reading streaming response: {}", e);
+        None
+      }
+    }
   }
 }
 

@@ -1,65 +1,89 @@
 # Zed Command System Exploration
-# Tests discovering how Zed handles editor commands
+#
+# Tests discovering how Zed handles editor commands starting from zero knowledge.
+# The agent doesn't know about "Actions", "GPUI", or any Zed-specific terminology.
+# They just know this is an editor and want to understand its command system.
 
 [scenario]
 id = "zed-command-system"
 name = "Understanding Zed Command Architecture"
 repo = "zed"
 difficulty = "hard"
-description = "Explore how Zed implements its command system, from keybindings to execution"
+description = "Explore how Zed implements its command system, starting with zero knowledge"
 
 [task]
-prompt = "How does Zed handle editor commands?"
+prompt = "Understand how keyboard shortcuts and commands work in this editor"
 intent = "architectural_discovery"
 
 [expected]
+# These are validation targets, but the queries shouldn't assume knowledge of them
 must_find_files = [
-    "**/commands.rs",
     "**/actions.rs",
     "**/keymap/**",
+    "**/gpui/src/action.rs",
 ]
-must_find_symbols = ["Action", "actions", "dispatch", "Keymap", "KeyBinding"]
-noise_patterns = ["**/tests/**", "test_*", "Mock*", "*_test.rs"]
+must_find_symbols = ["Action", "dispatch", "Keymap", "KeyBinding", "impl_actions"]
+noise_patterns = ["**/tests/**", "test_*", "Mock*", "*_test.rs", "**/fixtures/**"]
 
+# Step 1: Natural question - no jargon
 [[steps]]
-query = "How does Zed handle editor commands and actions?"
+query = "How do keyboard shortcuts trigger functionality in this editor?"
 expected_results = 5
 max_noise_ratio = 0.3
 scope = "code"
+expand_top = 4
 
+# Step 2: Follow up - still no assumed knowledge
 [[steps]]
-query = "Action trait definition and dispatch mechanism"
+query = "Where are these keyboard actions defined?"
+depends_on_previous = true
+expected_results = 4
+scope = "code"
+expand_top = 3
+
+# Step 3: Drill into discovered concept using adaptive template
+[[steps]]
+query = "How is {{previous.symbol}} implemented?"
 depends_on_previous = true
 expected_results = 3
-
-[[steps]]
-query = "keymap keybinding keyboard shortcuts"
-depends_on_previous = false
 scope = "code"
+expand_top = 3
+
+# Step 4: Understand the dispatch mechanism
+[[steps]]
+query = "How does a keypress become an action execution?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+context_ids = ["{{previous.id}}"]
+expand_top = 2
 
 [success]
-min_discovery_score = 0.7
-max_noise_ratio = 0.25
+min_discovery_score = 0.6
+max_noise_ratio = 0.30
 max_steps_to_core = 3
+min_convergence_rate = 0.5
+max_context_bloat = 0.35
+min_file_diversity = 0.5
 
-# LLM-as-judge comprehension testing (optional, requires --llm-judge flag)
+# LLM comprehension testing
 [llm_judge]
-min_comprehension_score = 0.6
+min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
-question = "How are commands represented in Zed's architecture?"
-expected_concepts = ["Action", "trait", "dispatch"]
-wrong_concepts = ["Command pattern", "EventEmitter"]
-weight = 1.0
-
-[[llm_judge.comprehension_questions]]
-question = "How does a keyboard shortcut trigger a command in Zed?"
-expected_concepts = ["keymap", "KeyBinding", "Action"]
-wrong_concepts = []
+question = "How are commands/actions represented in this editor's architecture?"
+expected_concepts = ["Action", "trait", "dispatch", "GPUI"]
+wrong_concepts = ["Command pattern class", "event listeners", "Redux"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
-question = "What is the relationship between Actions and the GPUI framework?"
-expected_concepts = ["gpui", "Action"]
-wrong_concepts = []
+question = "What is the flow from pressing a key to executing functionality?"
+expected_concepts = ["keymap", "binding", "Action", "dispatch"]
+wrong_concepts = ["DOM events", "event bubbling"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "How would you add a new keyboard shortcut for a custom action?"
+expected_concepts = ["Action", "keymap", "register", "impl"]
+wrong_concepts = ["config file only", "plugin"]
 weight = 1.0

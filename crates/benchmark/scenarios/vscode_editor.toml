@@ -1,47 +1,95 @@
 # VSCode Editor Core Exploration
-# Tests discovering how VSCode's editor works
+#
+# Tests discovering how VSCode's text editing works.
+# The agent sees a text editor but doesn't know about Monaco,
+# TextModel, ViewModel, or the piece tree buffer structure.
 
 [scenario]
 id = "vscode-editor-core"
 name = "Understanding VSCode Editor Core"
 repo = "vscode"
 difficulty = "hard"
-description = "Explore how VSCode's text editor and Monaco integration works"
+description = "Explore how VSCode's text editing and rendering works"
 
 [task]
-prompt = "How does VSCode's text editor work?"
+prompt = "Understand how text editing and display works in this editor"
 intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/editor/**/*.ts",
+    "**/editor/common/**/*.ts",
+    "**/editor/browser/**/*.ts",
     "**/textModel/**/*.ts",
-    "**/viewModel/**/*.ts",
 ]
-must_find_symbols = ["Editor", "TextModel", "ViewModel", "CodeEditor", "editorAction"]
+must_find_symbols = ["TextModel", "ViewModel", "CodeEditor", "ITextModel"]
 noise_patterns = ["**/test/**", "*.test.ts", "*.spec.ts", "__tests__/**", "mock*"]
 
+# Step 1: Start from observable behavior
 [[steps]]
-query = "VSCode text editor core implementation"
+query = "How is text stored and managed in the editor?"
 expected_results = 5
-max_noise_ratio = 0.3
+max_noise_ratio = 0.35
 scope = "code"
+expand_top = 4
 
+# Step 2: Editing operations
 [[steps]]
-query = "TextModel document text buffer"
+query = "How do edits and insertions modify the text?"
 depends_on_previous = true
-
-[[steps]]
-query = "editor actions commands keybindings"
-depends_on_previous = false
+expected_results = 4
 scope = "code"
+expand_top = 3
 
+# Step 3: Follow discovered abstraction
 [[steps]]
-query = "cursor selection text editing"
-depends_on_previous = false
+query = "What does {{previous.symbol}} do?"
+depends_on_previous = true
+expected_results = 3
 scope = "code"
+expand_top = 3
+
+# Step 4: Rendering
+[[steps]]
+query = "How is text rendered on screen?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+expand_top = 3
+
+# Step 5: Selection and cursor
+[[steps]]
+query = "How are cursor position and text selection tracked?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+expand_top = 2
 
 [success]
-min_discovery_score = 0.6
-max_noise_ratio = 0.30
-max_steps_to_core = 3
+min_discovery_score = 0.5
+max_noise_ratio = 0.35
+max_steps_to_core = 4
+min_convergence_rate = 0.4
+max_context_bloat = 0.45
+min_file_diversity = 0.4
+
+# LLM comprehension testing
+[llm_judge]
+min_comprehension_score = 0.5
+
+[[llm_judge.comprehension_questions]]
+question = "What data structure does VSCode use to store text efficiently?"
+expected_concepts = ["piece tree", "buffer", "TextModel", "lines"]
+wrong_concepts = ["single string", "array of characters", "DOM"]
+weight = 2.0
+
+[[llm_judge.comprehension_questions]]
+question = "What is the relationship between TextModel and ViewModel?"
+expected_concepts = ["model", "view", "separation", "rendering"]
+wrong_concepts = ["same thing", "no separation"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "How does the editor handle very large files efficiently?"
+expected_concepts = ["virtualization", "viewport", "piece tree", "lazy"]
+wrong_concepts = ["loads everything", "no optimization"]
+weight = 1.0

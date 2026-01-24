@@ -1,0 +1,95 @@
+# VSCode Service Architecture Exploration
+#
+# Tests discovering VSCode's dependency injection and service pattern.
+# This is a core architectural pattern that agents need to understand
+# before they can effectively work with VSCode code.
+
+[scenario]
+id = "vscode-services"
+name = "Understanding VSCode Service Architecture"
+repo = "vscode"
+difficulty = "hard"
+description = "Explore how VSCode's services and dependency injection work"
+
+[task]
+prompt = "Understand how components are connected and depend on each other"
+intent = "architectural_discovery"
+
+[expected]
+must_find_files = [
+    "**/instantiation/**/*.ts",
+    "**/services/**/*.ts",
+]
+must_find_symbols = ["IInstantiationService", "createDecorator", "registerSingleton", "inject"]
+noise_patterns = ["**/test/**", "*.test.ts", "*.spec.ts", "__tests__/**", "mock*"]
+
+# Step 1: Dependency question
+[[steps]]
+query = "How do components get access to other services they need?"
+expected_results = 5
+max_noise_ratio = 0.35
+scope = "code"
+expand_top = 4
+
+# Step 2: Injection pattern
+[[steps]]
+query = "How are dependencies provided to classes?"
+depends_on_previous = true
+expected_results = 4
+scope = "code"
+expand_top = 3
+
+# Step 3: Follow discovered mechanism
+[[steps]]
+query = "What is {{previous.symbol}} and how is it used?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+expand_top = 3
+
+# Step 4: Service registration
+[[steps]]
+query = "How are services registered with the system?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+expand_top = 3
+
+# Step 5: Service lifecycle
+[[steps]]
+query = "When are services created and destroyed?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+context_ids = ["{{previous.id}}"]
+expand_top = 2
+
+[success]
+min_discovery_score = 0.4
+max_noise_ratio = 0.40
+max_steps_to_core = 4
+min_convergence_rate = 0.35
+max_context_bloat = 0.45
+min_file_diversity = 0.4
+
+# Comprehension
+[llm_judge]
+min_comprehension_score = 0.5
+
+[[llm_judge.comprehension_questions]]
+question = "What pattern does VSCode use for dependency injection?"
+expected_concepts = ["decorator", "service", "instantiation", "inject"]
+wrong_concepts = ["manual wiring", "global variables", "singletons only"]
+weight = 2.0
+
+[[llm_judge.comprehension_questions]]
+question = "How would you add a new service that other components can use?"
+expected_concepts = ["interface", "decorator", "register", "singleton"]
+wrong_concepts = ["export function", "global object"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "How does a class declare what services it needs?"
+expected_concepts = ["constructor", "decorator", "interface"]
+wrong_concepts = ["import statement only", "call getInstance"]
+weight = 1.0

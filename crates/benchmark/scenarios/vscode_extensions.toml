@@ -1,5 +1,8 @@
 # VSCode Extension System Exploration
-# Tests discovering how VSCode handles extensions
+#
+# Tests discovering how VSCode's extension system works.
+# The agent knows VSCode has extensions but doesn't know about
+# ExtensionHost, activation events, or the contribution system.
 
 [scenario]
 id = "vscode-extension-system"
@@ -9,34 +12,85 @@ difficulty = "hard"
 description = "Explore how VSCode loads, manages, and runs extensions"
 
 [task]
-prompt = "How does VSCode handle extensions?"
+prompt = "Understand how plugins/extensions are loaded and run"
 intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/extensions/**/*.ts",
     "**/extensionHost/**/*.ts",
     "**/extensionManagement/**/*.ts",
+    "**/extensionsWorkbench/**/*.ts",
 ]
-must_find_symbols = ["Extension", "ExtensionHost", "activate", "deactivate", "ExtensionService"]
+must_find_symbols = ["ExtensionHost", "activate", "IExtension", "ExtensionService"]
 noise_patterns = ["**/test/**", "*.test.ts", "*.spec.ts", "__tests__/**", "mock*"]
 
+# Step 1: Observable behavior
 [[steps]]
-query = "VSCode extension system how extensions work"
+query = "How are extensions loaded when the application starts?"
 expected_results = 5
-max_noise_ratio = 0.3
+max_noise_ratio = 0.35
 scope = "code"
+expand_top = 4
 
+# Step 2: Lifecycle question
 [[steps]]
-query = "ExtensionHost how extensions are loaded and activated"
+query = "What happens when an extension is activated?"
 depends_on_previous = true
-
-[[steps]]
-query = "extension API contribute contributions"
-depends_on_previous = false
+expected_results = 4
 scope = "code"
+expand_top = 3
+
+# Step 3: Follow discovered concept
+[[steps]]
+query = "What is {{previous.symbol}} and what role does it play?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+expand_top = 3
+
+# Step 4: Extension API
+[[steps]]
+query = "How do extensions provide functionality to the editor?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+expand_top = 3
+
+# Step 5: Isolation/security
+[[steps]]
+query = "How are extensions isolated from the main application?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+context_ids = ["{{previous.id}}"]
+expand_top = 2
 
 [success]
-min_discovery_score = 0.6
-max_noise_ratio = 0.30
-max_steps_to_core = 3
+min_discovery_score = 0.5
+max_noise_ratio = 0.35
+max_steps_to_core = 4
+min_convergence_rate = 0.4
+max_context_bloat = 0.45
+min_file_diversity = 0.4
+
+# LLM comprehension testing
+[llm_judge]
+min_comprehension_score = 0.5
+
+[[llm_judge.comprehension_questions]]
+question = "How does VSCode isolate extensions from the main process?"
+expected_concepts = ["ExtensionHost", "process", "IPC", "separate"]
+wrong_concepts = ["same process", "no isolation", "iframe"]
+weight = 2.0
+
+[[llm_judge.comprehension_questions]]
+question = "What triggers an extension to be activated?"
+expected_concepts = ["activation", "event", "onCommand", "onLanguage"]
+wrong_concepts = ["always running", "manual only"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "How do extensions contribute features like commands or menus?"
+expected_concepts = ["contribution", "manifest", "package.json", "register"]
+wrong_concepts = ["monkey patch", "direct modification"]
+weight = 1.0

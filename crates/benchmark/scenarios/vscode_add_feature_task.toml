@@ -1,0 +1,122 @@
+# Task-Completion Scenario: Add a New Language Feature
+#
+# Tests whether exploration enables completing a specific task in VSCode:
+# Adding a new language-related feature.
+#
+# This tests the exploration needed before an agent can implement
+# a feature that integrates with VSCode's language infrastructure.
+
+[scenario]
+id = "vscode-add-feature-task"
+name = "Task: Add Syntax Highlighting Rule"
+repo = "vscode"
+difficulty = "medium"
+description = "Explore to find everything needed to add a new syntax highlighting feature"
+
+[task]
+prompt = "Find everything needed to add a custom syntax highlighting rule for a new token type"
+intent = "task_completion"
+
+[expected]
+must_find_files = []
+must_find_symbols = []
+noise_patterns = [
+    "**/test/**",
+    "*.test.ts",
+    "*.spec.ts",
+    "__tests__/**",
+    "mock*",
+]
+
+# Task requirements
+[task_requirements]
+must_identify_modification_points = true
+must_find_example = true
+must_find_related_concerns = [
+    "token types",
+    "textmate grammar",
+    "theme colors",
+]
+
+modification_point_indicators = [
+    "TokenType",
+    "TokenMetadata",
+    "registerTokenStyleDefault",
+    "contributes.languages",
+]
+
+example_indicators = [
+    "keyword",
+    "string",
+    "comment",
+    "semantic",
+]
+
+[task_requirements.concern_indicators]
+"token types" = ["Token", "TokenType", "TokenMetadata"]
+"textmate grammar" = ["TextMate", "grammar", "scope", "pattern"]
+"theme colors" = ["theme", "color", "foreground", "style"]
+
+# Step 1: How syntax highlighting works
+[[steps]]
+query = "How does syntax highlighting work in this editor?"
+scope = "code"
+expand_top = 4
+
+# Step 2: Token types
+[[steps]]
+query = "What are the different types of syntax tokens?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 3: Adding new tokens
+[[steps]]
+query = "How do I define a new token type?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 4: Grammar definition
+[[steps]]
+query = "How are language grammars defined?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 5: Theme integration
+[[steps]]
+query = "How do themes color different token types?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+[success]
+min_discovery_score = 0.0
+max_noise_ratio = 0.40
+max_steps_to_core = 4
+min_convergence_rate = 0.4
+max_context_bloat = 0.45
+max_dead_end_ratio = 0.40
+
+# Comprehension
+[llm_judge]
+min_comprehension_score = 0.5
+
+[[llm_judge.comprehension_questions]]
+question = "What files or systems would you modify to add a new token type?"
+expected_concepts = ["grammar", "token", "theme", "contribution"]
+wrong_concepts = ["single config file", "hardcode colors"]
+weight = 2.0
+
+[[llm_judge.comprehension_questions]]
+question = "How does the tokenizer work with themes to produce colored text?"
+expected_concepts = ["token", "scope", "theme", "color", "mapping"]
+wrong_concepts = ["inline styles", "CSS classes only"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "What is TextMate grammar and how does VSCode use it?"
+expected_concepts = ["TextMate", "scope", "pattern", "tokenize"]
+wrong_concepts = ["proprietary", "built-in only"]
+weight = 1.0

@@ -25,3 +25,6 @@ plugin/bin/
 
 # Coverage
 coverage/
+
+# bench results
+/bench-results

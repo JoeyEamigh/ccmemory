@@ -1,7 +1,8 @@
 //! Code indexing and search tool methods
 
 use super::ToolHandler;
-use crate::router::{Request, Response};
+use crate::router::{IndexProgress, Request, Response};
+use crate::server::ProgressSender;
 use db::{CheckpointType, IndexCheckpoint, ProjectDb};
 use engram_core::{CodeChunk, MemoryType};
 use index::{Chunker, Scanner, compute_gitignore_hash};
@@ -914,6 +915,297 @@ impl ToolHandler {
           "total_bytes": scan_result.total_bytes,
       }),
     )
+  }
+
+  /// Index code files with streaming progress updates
+  pub async fn code_index_streaming(&self, request: Request, progress_tx: ProgressSender) {
+    #[derive(Deserialize)]
+    struct Args {
+      #[serde(default)]
+      cwd: Option<String>,
+      #[serde(default)]
+      force: Option<bool>,
+      #[serde(default)]
+      dry_run: Option<bool>,
+      #[serde(default)]
+      resume: Option<bool>,
+    }
+
+    let args: Args = match serde_json::from_value(request.params.clone()) {
+      Ok(a) => a,
+      Err(e) => {
+        let _ = progress_tx
+          .send(Response::error(request.id, -32602, &format!("Invalid params: {}", e)))
+          .await;
+        return;
+      }
+    };
+
+    let project_path = args
+      .cwd
+      .map(PathBuf::from)
+      .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let force = args.force.unwrap_or(false);
+    let dry_run = args.dry_run.unwrap_or(false);
+    let resume = args.resume.unwrap_or(true);
+    let request_id = request.id.clone();
+
+    debug!(
+      "Code index (streaming): path={:?}, force={}, dry_run={}, resume={}",
+      project_path, force, dry_run, resume
+    );
+
+    let (info, db) = match self.registry.get_or_create(&project_path).await {
+      Ok(p) => p,
+      Err(e) => {
+        let _ = progress_tx
+          .send(Response::error(request_id, -32000, &format!("Project error: {}", e)))
+          .await;
+        return;
+      }
+    };
+
+    let project_id = info.id.as_str();
+    let config = engram_core::Config::load_for_project(&project_path);
+
+    // Send initial scanning progress
+    let _ = progress_tx
+      .send(Response::progress(request_id.clone(), IndexProgress::scanning(0, None)))
+      .await;
+
+    // Scan with progress callbacks
+    let scanner = Scanner::new().with_max_file_size(config.index.max_file_size as u64);
+    let progress_tx_scan = progress_tx.clone();
+    let request_id_scan = request_id.clone();
+    let scan_result = scanner.scan(&project_path, move |progress| {
+      // Send scanning progress (non-blocking attempt, we don't want to slow down scanning)
+      let _ = progress_tx_scan.try_send(Response::progress(
+        request_id_scan.clone(),
+        IndexProgress::scanning(progress.scanned, Some(progress.path.to_string_lossy().to_string())),
+      ));
+    });
+
+    let current_gitignore_hash = Some(compute_gitignore_hash(&project_path));
+
+    if dry_run {
+      let _ = progress_tx
+        .send(Response::success(
+          request_id,
+          serde_json::json!({
+              "status": "dry_run",
+              "files_found": scan_result.files.len(),
+              "skipped": scan_result.skipped_count,
+              "total_bytes": scan_result.total_bytes,
+              "scan_duration_ms": scan_result.scan_duration.as_millis(),
+          }),
+        ))
+        .await;
+      return;
+    }
+
+    // Checkpoint management (same as non-streaming version)
+    let mut checkpoint = if resume && !force {
+      match db.get_checkpoint(project_id, CheckpointType::Code).await {
+        Ok(Some(cp)) => {
+          if cp.gitignore_hash != current_gitignore_hash {
+            debug!("Gitignore changed, starting fresh index");
+            None
+          } else if cp.is_complete {
+            debug!("Previous indexing complete, starting fresh");
+            None
+          } else {
+            debug!("Resuming from checkpoint: {}% complete", cp.progress_percent());
+            Some(cp)
+          }
+        }
+        Ok(None) => None,
+        Err(e) => {
+          warn!("Failed to get checkpoint: {}", e);
+          None
+        }
+      }
+    } else {
+      None
+    };
+
+    // Clear and create checkpoint if needed
+    if force || checkpoint.is_none() {
+      if force {
+        for file in &scan_result.files {
+          if let Err(e) = db.delete_chunks_for_file(&file.relative_path).await {
+            warn!("Failed to clear chunks for {}: {}", file.relative_path, e);
+          }
+        }
+        let _ = db.clear_checkpoint(project_id, CheckpointType::Code).await;
+      }
+
+      let pending: Vec<String> = scan_result.files.iter().map(|f| f.relative_path.clone()).collect();
+      let mut new_cp = IndexCheckpoint::new(project_id, CheckpointType::Code, pending);
+      new_cp.gitignore_hash = current_gitignore_hash;
+      if let Err(e) = db.save_checkpoint(&new_cp).await {
+        warn!("Failed to save checkpoint: {}", e);
+      }
+      checkpoint = Some(new_cp);
+    }
+
+    let Some(mut checkpoint) = checkpoint else {
+      let _ = progress_tx
+        .send(Response::error(
+          request_id,
+          -32603,
+          "Internal error: checkpoint not initialized",
+        ))
+        .await;
+      return;
+    };
+
+    let file_map: std::collections::HashMap<_, _> =
+      scan_result.files.iter().map(|f| (f.relative_path.clone(), f)).collect();
+
+    let mut chunker = Chunker::default();
+    let mut total_chunks: u32 = 0;
+    let mut indexed_files: u32 = 0;
+    let mut failed_files = Vec::new();
+    let mut save_counter = 0;
+    let mut bytes_processed: u64 = 0;
+
+    let pending_to_process: Vec<String> = checkpoint.pending_files.clone();
+    let total_files = pending_to_process.len() as u32;
+    let total_bytes = scan_result.total_bytes;
+
+    let index_start = std::time::Instant::now();
+
+    // Send indexing start progress
+    let _ = progress_tx
+      .send(Response::progress(
+        request_id.clone(),
+        IndexProgress::indexing(0, total_files, 0, None, 0, total_bytes),
+      ))
+      .await;
+
+    for relative_path in &pending_to_process {
+      let file = match file_map.get(relative_path) {
+        Some(f) => *f,
+        None => {
+          checkpoint.mark_error(relative_path);
+          continue;
+        }
+      };
+
+      // Send progress for current file
+      let _ = progress_tx
+        .send(Response::progress(
+          request_id.clone(),
+          IndexProgress::indexing(
+            indexed_files,
+            total_files,
+            total_chunks,
+            Some(relative_path.clone()),
+            bytes_processed,
+            total_bytes,
+          ),
+        ))
+        .await;
+
+      let content = match std::fs::read_to_string(&file.path) {
+        Ok(c) => c,
+        Err(e) => {
+          warn!("Failed to read {}: {}", relative_path, e);
+          failed_files.push(relative_path.clone());
+          checkpoint.mark_error(relative_path);
+          save_counter += 1;
+          continue;
+        }
+      };
+
+      bytes_processed += file.size;
+
+      let chunks: Vec<_> = chunker.chunk(&content, relative_path, file.language, &file.checksum);
+      let chunk_count = chunks.len() as u32;
+
+      let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+      let embeddings = self.get_embeddings_batch(&texts).await;
+
+      let chunks_with_vectors: Vec<_> = chunks
+        .into_iter()
+        .zip(embeddings.into_iter())
+        .map(|(chunk, embedding)| {
+          let vector = embedding.unwrap_or_else(|| vec![0.0f32; db.vector_dim]);
+          (chunk, vector)
+        })
+        .collect();
+
+      if let Err(e) = db.add_code_chunks(&chunks_with_vectors).await {
+        warn!("Failed to batch insert chunks for {}: {}", relative_path, e);
+        checkpoint.mark_error(relative_path);
+        failed_files.push(relative_path.clone());
+      } else {
+        total_chunks += chunk_count;
+        checkpoint.mark_processed(relative_path);
+        indexed_files += 1;
+      }
+
+      save_counter += 1;
+
+      if save_counter >= 10 {
+        if let Err(e) = db.save_checkpoint(&checkpoint).await {
+          warn!("Failed to save checkpoint: {}", e);
+        }
+        save_counter = 0;
+      }
+    }
+
+    checkpoint.mark_complete();
+    if let Err(e) = db.save_checkpoint(&checkpoint).await {
+      warn!("Failed to save final checkpoint: {}", e);
+    }
+
+    if failed_files.is_empty() {
+      let _ = db.clear_checkpoint(project_id, CheckpointType::Code).await;
+    }
+
+    if let Err(e) = db.create_vector_indexes().await {
+      warn!("Failed to create vector indexes: {}", e);
+    }
+
+    // Send completion progress
+    let _ = progress_tx
+      .send(Response::progress(
+        request_id.clone(),
+        IndexProgress::complete(indexed_files, total_chunks),
+      ))
+      .await;
+
+    // Calculate metrics and send final response
+    let index_duration = index_start.elapsed();
+    let index_duration_ms = index_duration.as_millis() as u64;
+    let files_per_second = if index_duration_ms > 0 && indexed_files > 0 {
+      (indexed_files as f64 / index_duration_ms as f64) * 1000.0
+    } else {
+      0.0
+    };
+    let total_duration_ms = scan_result.scan_duration.as_millis() as u64 + index_duration_ms;
+
+    let _ = progress_tx
+      .send(Response::success(
+        request_id,
+        serde_json::json!({
+            "status": "complete",
+            "files_scanned": scan_result.files.len(),
+            "files_indexed": indexed_files,
+            "chunks_created": total_chunks,
+            "failed_files": failed_files,
+            "resumed_from_checkpoint": !pending_to_process.is_empty() && pending_to_process.len() < scan_result.files.len(),
+            "scan_duration_ms": scan_result.scan_duration.as_millis(),
+            "index_duration_ms": index_duration_ms,
+            "total_duration_ms": total_duration_ms,
+            "files_per_second": files_per_second,
+            "bytes_processed": bytes_processed,
+            "total_bytes": scan_result.total_bytes,
+        }),
+      ))
+      .await;
   }
 
   /// List all code chunks for export

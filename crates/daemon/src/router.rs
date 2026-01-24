@@ -1,7 +1,7 @@
 use crate::activity_tracker::ActivityTracker;
 use crate::hooks::{HookEvent, HookHandler};
 use crate::projects::ProjectRegistry;
-use crate::server::ShutdownHandle;
+use crate::server::{ProgressSender, ShutdownHandle};
 use crate::session_tracker::SessionTracker;
 use crate::tools::ToolHandler;
 use embedding::EmbeddingProvider;
@@ -30,6 +30,39 @@ pub struct Response {
   pub result: Option<serde_json::Value>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub error: Option<RpcError>,
+  /// Progress update for streaming responses.
+  /// When present without result/error, this is an intermediate progress event.
+  /// The final response will have result (or error) with no progress.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub progress: Option<IndexProgress>,
+}
+
+/// Progress information for long-running operations like indexing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexProgress {
+  /// Current phase: "scanning", "indexing", "embedding", "complete"
+  pub phase: String,
+  /// Total files to process (known after scan phase)
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub total_files: Option<u32>,
+  /// Files processed so far
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub processed_files: Option<u32>,
+  /// Total chunks created so far
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub chunks_created: Option<u32>,
+  /// Current file being processed
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub current_file: Option<String>,
+  /// Bytes processed so far
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub bytes_processed: Option<u64>,
+  /// Total bytes to process
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub total_bytes: Option<u64>,
+  /// Human-readable status message
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +77,7 @@ impl Response {
       id,
       result: Some(result),
       error: None,
+      progress: None,
     }
   }
 
@@ -55,6 +89,62 @@ impl Response {
         code,
         message: message.to_string(),
       }),
+      progress: None,
+    }
+  }
+
+  /// Create a progress event (intermediate response in a stream)
+  pub fn progress(id: Option<serde_json::Value>, progress: IndexProgress) -> Self {
+    Self {
+      id,
+      result: None,
+      error: None,
+      progress: Some(progress),
+    }
+  }
+}
+
+impl IndexProgress {
+  /// Create a scanning phase progress
+  pub fn scanning(scanned: u32, current_file: Option<String>) -> Self {
+    Self {
+      phase: "scanning".to_string(),
+      total_files: None,
+      processed_files: Some(scanned),
+      chunks_created: None,
+      current_file,
+      bytes_processed: None,
+      total_bytes: None,
+      message: Some(format!("Scanning... {} files found", scanned)),
+    }
+  }
+
+  /// Create an indexing phase progress
+  pub fn indexing(processed: u32, total: u32, chunks: u32, current_file: Option<String>, bytes_processed: u64, total_bytes: u64) -> Self {
+    let percent = if total > 0 { (processed * 100) / total } else { 0 };
+    Self {
+      phase: "indexing".to_string(),
+      total_files: Some(total),
+      processed_files: Some(processed),
+      chunks_created: Some(chunks),
+      current_file,
+      bytes_processed: Some(bytes_processed),
+      total_bytes: Some(total_bytes),
+      message: Some(format!("Indexing... {}% ({}/{})", percent, processed, total)),
+    }
+  }
+
+  /// Create a completion progress
+  pub fn complete(files: u32, chunks: u32) -> Self {
+    Self {
+      phase: "complete".to_string(),
+      total_files: Some(files),
+      processed_files: Some(files),
+      chunks_created: Some(chunks),
+      current_file: None,
+      bytes_processed: None,
+      total_bytes: None,
+      message: Some(format!("Complete: {} files, {} chunks", files, chunks)),
     }
   }
 }
@@ -291,6 +381,38 @@ impl Router {
       _ => {
         warn!("Unknown method: {}", request.method);
         Response::error(request.id, -32601, &format!("Method not found: {}", request.method))
+      }
+    }
+  }
+
+  /// Handle a streaming request that sends progress updates
+  pub async fn handle_streaming(&self, request: Request, progress_tx: ProgressSender) {
+    debug!("Handling streaming request: {}", request.method);
+
+    // Increment request counter
+    self.request_count.fetch_add(1, Ordering::Relaxed);
+
+    // Touch activity tracker
+    {
+      let guard = self.activity_tracker.lock().await;
+      if let Some(ref tracker) = *guard {
+        tracker.touch();
+      }
+    }
+
+    match request.method.as_str() {
+      // Streaming-enabled methods
+      "code_index" => {
+        self
+          .tool_handler
+          .code_index_streaming(request, progress_tx)
+          .await;
+      }
+
+      // All other methods fall back to single response
+      _ => {
+        let response = self.handle(request).await;
+        let _ = progress_tx.send(response).await;
       }
     }
   }

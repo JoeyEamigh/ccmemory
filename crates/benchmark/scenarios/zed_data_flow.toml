@@ -1,0 +1,107 @@
+# Data Flow Tracing Scenario
+#
+# Tests exploration when understanding how data flows through the system.
+# "How does X get from A to B?" is a common agent question.
+#
+# This scenario traces how user input becomes rendered text - a complete
+# data flow from input to output.
+
+[scenario]
+id = "zed-data-flow"
+name = "Data Flow: Keystroke to Screen"
+repo = "zed"
+difficulty = "hard"
+description = "Trace how a keystroke becomes rendered text on screen"
+
+[task]
+prompt = "Understand the complete flow: when I type a character, how does it get from keyboard to displayed on screen?"
+intent = "architectural_discovery"
+
+[expected]
+must_find_files = [
+    "**/input.rs",
+    "**/buffer.rs",
+    "**/editor.rs",
+    "**/element.rs",
+]
+must_find_symbols = ["input", "Buffer", "Editor", "render", "insert", "paint"]
+noise_patterns = [
+    "**/tests/**",
+    "**/test/**",
+    "test_*",
+    "Mock*",
+    "**/fixtures/**",
+]
+
+# Step 1: Input handling
+[[steps]]
+query = "How are keyboard events received and processed?"
+scope = "code"
+expand_top = 4
+
+# Step 2: Event dispatch
+[[steps]]
+query = "How do keyboard events reach the text editor?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 3: Text insertion
+[[steps]]
+query = "How does {{previous.symbol}} insert text into the document?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 4: Buffer update
+[[steps]]
+query = "How is the text buffer modified when text is inserted?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 5: Rendering trigger
+[[steps]]
+query = "What triggers the screen to update after text changes?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 6: Actual rendering
+[[steps]]
+query = "How is text rendered to the screen?"
+depends_on_previous = true
+scope = "code"
+context_ids = ["{{previous.id}}"]
+expand_top = 2
+
+[success]
+min_discovery_score = 0.4
+max_noise_ratio = 0.40
+max_steps_to_core = 4
+min_convergence_rate = 0.35
+max_context_bloat = 0.45
+min_navigation_efficiency = 0.25
+max_dead_end_ratio = 0.40
+
+# Comprehension: Does the agent understand the full flow?
+[llm_judge]
+min_comprehension_score = 0.5
+
+[[llm_judge.comprehension_questions]]
+question = "Describe the path a keystroke takes from keyboard to screen."
+expected_concepts = ["input", "event", "buffer", "render", "GPUI"]
+wrong_concepts = []
+weight = 2.0
+
+[[llm_judge.comprehension_questions]]
+question = "What component owns the text content?"
+expected_concepts = ["Buffer", "model", "state"]
+wrong_concepts = ["DOM", "string variable"]
+weight = 1.0
+
+[[llm_judge.comprehension_questions]]
+question = "How does the editor know to repaint after an edit?"
+expected_concepts = ["notify", "invalidate", "observable", "model"]
+wrong_concepts = ["timer", "polling"]
+weight = 1.5

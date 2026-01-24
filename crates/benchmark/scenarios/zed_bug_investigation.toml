@@ -1,0 +1,111 @@
+# Bug Investigation Scenario
+#
+# Tests exploration when investigating a bug or unexpected behavior.
+# This is a common agent workflow: "Something isn't working, help me understand why."
+#
+# The agent must:
+# 1. Understand the feature's normal behavior
+# 2. Trace the relevant code paths
+# 3. Identify potential failure points
+#
+# This tests exploration depth without prescribing what to find.
+
+[scenario]
+id = "zed-bug-investigation"
+name = "Bug Investigation: File Not Saving"
+repo = "zed"
+difficulty = "medium"
+description = "Investigate why a file might not be saving - trace the save flow"
+
+[task]
+prompt = "A user reports that their file changes aren't being saved. Understand how file saving works to identify potential failure points."
+intent = "bug_investigation"
+
+[expected]
+# Investigation targets - but agent doesn't know these upfront
+must_find_files = [
+    "**/buffer.rs",
+    "**/worktree.rs",
+    "**/project.rs",
+]
+must_find_symbols = ["save", "Buffer", "dirty", "write", "flush"]
+noise_patterns = [
+    "**/tests/**",
+    "**/test/**",
+    "test_*",
+    "Mock*",
+    "**/fixtures/**",
+]
+
+# Step 1: Start with the symptom
+[[steps]]
+query = "How does file saving work in this editor?"
+scope = "code"
+expand_top = 4
+
+# Step 2: Trace the happy path
+[[steps]]
+query = "What triggers a file save operation?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 3: Follow discovered type
+[[steps]]
+query = "How does {{previous.symbol}} handle save requests?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 4: Error handling
+[[steps]]
+query = "What errors can occur during file save?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 5: Disk interaction
+[[steps]]
+query = "How does the editor write to the filesystem?"
+depends_on_previous = true
+scope = "code"
+context_ids = ["{{previous.id}}"]
+expand_top = 2
+
+# Step 6: State tracking
+[[steps]]
+query = "How does the editor track if a file has unsaved changes?"
+depends_on_previous = true
+scope = "code"
+expand_top = 2
+
+[success]
+min_discovery_score = 0.5
+max_noise_ratio = 0.35
+max_steps_to_core = 3
+min_convergence_rate = 0.4
+max_context_bloat = 0.40
+min_navigation_efficiency = 0.3
+max_dead_end_ratio = 0.35
+
+# Comprehension: Can the agent identify failure points?
+[llm_judge]
+min_comprehension_score = 0.5
+
+[[llm_judge.comprehension_questions]]
+question = "What are the key steps in the save operation flow?"
+expected_concepts = ["Buffer", "write", "file system", "dirty"]
+wrong_concepts = []
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "What could cause a save to fail silently?"
+expected_concepts = ["error", "async", "permission", "path"]
+wrong_concepts = []
+weight = 2.0
+
+[[llm_judge.comprehension_questions]]
+question = "How would you debug a save failure based on what you found?"
+expected_concepts = ["log", "trace", "Buffer", "dirty flag"]
+wrong_concepts = []
+weight = 1.5

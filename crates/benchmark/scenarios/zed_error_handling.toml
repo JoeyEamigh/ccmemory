@@ -1,0 +1,96 @@
+# Error Handling Exploration Scenario
+#
+# Tests exploration when understanding error handling patterns.
+# Agents often need to understand how errors propagate and are handled
+# before they can add proper error handling to new code.
+
+[scenario]
+id = "zed-error-handling"
+name = "Understanding Error Handling Patterns"
+repo = "zed"
+difficulty = "medium"
+description = "Explore how errors are handled and reported in this application"
+
+[task]
+prompt = "Understand how errors are handled, propagated, and reported to users"
+intent = "architectural_discovery"
+
+[expected]
+must_find_files = [
+    "**/error.rs",
+    "**/notification.rs",
+    "**/result.rs",
+]
+must_find_symbols = ["Error", "Result", "anyhow", "notify", "Notification"]
+noise_patterns = [
+    "**/tests/**",
+    "**/test/**",
+    "test_*",
+    "Mock*",
+    "**/fixtures/**",
+]
+
+# Step 1: Error definition
+[[steps]]
+query = "How are errors defined in this codebase?"
+scope = "code"
+expand_top = 4
+
+# Step 2: Error propagation
+[[steps]]
+query = "How do errors propagate through function calls?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 3: User notification
+[[steps]]
+query = "How are errors shown to users?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 4: Error recovery
+[[steps]]
+query = "How does the application recover from errors?"
+depends_on_previous = true
+scope = "code"
+expand_top = 3
+
+# Step 5: Specific error type
+[[steps]]
+query = "How does {{previous.symbol}} work?"
+depends_on_previous = true
+scope = "code"
+context_ids = ["{{previous.id}}"]
+expand_top = 2
+
+[success]
+min_discovery_score = 0.4
+max_noise_ratio = 0.35
+max_steps_to_core = 3
+min_convergence_rate = 0.4
+max_context_bloat = 0.40
+min_file_diversity = 0.4
+
+# Comprehension
+[llm_judge]
+min_comprehension_score = 0.5
+
+[[llm_judge.comprehension_questions]]
+question = "What error handling pattern does this codebase use?"
+expected_concepts = ["Result", "anyhow", "propagate", "?"]
+wrong_concepts = ["try-catch", "exceptions", "panic everywhere"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "How are errors communicated to users?"
+expected_concepts = ["notification", "message", "UI"]
+wrong_concepts = ["console only", "crash dialog"]
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "How would you add error handling to a new feature?"
+expected_concepts = ["Result", "anyhow", "context", "notify"]
+wrong_concepts = ["unwrap", "panic"]
+weight = 1.0

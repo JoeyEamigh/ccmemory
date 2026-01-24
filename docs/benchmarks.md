@@ -1,579 +1,213 @@
 # CCEngram Benchmark Harness
 
-Comprehensive benchmarking for testing the exploration capabilities of CCEngram's `explore` and `context` tools against large real-world codebases.
+Benchmarking for testing the **exploration** capabilities of CCEngram's `explore` and `context` tools against large real-world codebases.
 
-## Overview
+## Philosophy: Exploration vs Search
 
-The benchmark harness tests how well CCEngram helps agents discover important code without prior context. Unlike search benchmarks that test finding known items, this tests **exploration** - the ability to navigate unfamiliar codebases and find architecturally significant code.
+| Search | Exploration |
+|--------|-------------|
+| "Find the `LanguageServer` struct" | "How does code intelligence work?" |
+| Agent knows what to look for | Agent has no prior knowledge |
+| Needle in a haystack | Building a mental map |
+| Measure: Did we find the exact thing? | Measure: Can the agent now do useful work? |
+
+**Key insight:** Agents are dropped into unfamiliar codebases. They don't know the terminology (`Action`, `GPUI`, `ExtensionHost`). They need to discover architecture through natural questions.
 
 ## Quick Start
 
 ```bash
-# Build the benchmark tool
+# 1. Start the daemon (required - leave running in background)
+ccengram daemon &
+
+# 2. Build the benchmark tool
 cargo build -p benchmark
 
-# Download and cache test repositories
-cargo run -p benchmark -- index --repos zed,vscode
+# 3. Download test repositories
+cargo run -p benchmark -- index --repos zed
 
-# List available scenarios
-cargo run -p benchmark -- list --detailed
+# 4. Index the repositories (with progress)
+cargo run -p benchmark -- index-code --repos zed
 
-# Run all benchmarks
-cargo run -p benchmark -- run --output ./results
-
-# Run specific scenarios (glob patterns supported)
+# 5. Run benchmarks
 cargo run -p benchmark -- run --scenarios "zed*" --output ./results
 
-# Run in parallel (faster, less detailed progress)
-cargo run -p benchmark -- run --parallel --output ./results
-
-# Compare two runs for regressions
+# 6. Compare runs for regressions
 cargo run -p benchmark -- compare baseline.json current.json --threshold 10
 ```
 
-## CLI Commands
+The flow is: **download → index → run**. Each step is explicit:
+- `index` downloads repos to cache
+- `index-code` indexes via daemon (with streaming progress)
+- `run` checks repos are indexed, then executes scenarios
 
-### `run` - Execute Benchmark Scenarios
+## How Benchmarks Work
+
+### Execution Flow
+
+1. **Load scenarios** from TOML files
+2. **Group by repository** (scenarios specify `repo = "zed"` or `repo = "vscode"`)
+3. **Verify each repo** is downloaded and indexed (fails with helpful message if not)
+4. **Execute steps** sequentially:
+   - Run `explore` query against daemon with `cwd` = repo path
+   - Optionally fetch `context` for top N results
+   - Resolve templates (`{{previous.symbol}}`) from previous results
+5. **Collect metrics** at each step (latency, recall, noise)
+6. **Evaluate success criteria** against thresholds
+7. **Generate reports** (JSON for CI, Markdown for humans)
+
+### What Gets Measured
+
+The benchmark measures whether exploration:
+- **Finds important files/symbols** (recall)
+- **Avoids test/mock code** (noise ratio)
+- **Converges quickly** (discoveries per step)
+- **Doesn't waste context budget** (bloat)
+- **Enables understanding** (LLM comprehension, optional)
+
+## CLI Reference
+
+### `run` - Execute Benchmarks
 
 ```bash
-ccengram-bench run [OPTIONS]
+cargo run -p benchmark -- run [OPTIONS]
 
 Options:
-  -o, --output <DIR>         Output directory for results [default: ./benchmark-results]
-  -s, --scenarios <PATTERN>  Filter scenarios by glob pattern
+  -o, --output <DIR>         Output directory [default: ./benchmark-results]
+  -s, --scenarios <PATTERN>  Filter by glob pattern (e.g., "zed*", "*blind*")
       --parallel             Run scenarios concurrently
-      --llm-judge            Enable LLM-as-judge evaluation
+      --llm-judge            Enable LLM comprehension evaluation
       --scenarios-dir <DIR>  Custom scenarios directory
-      --name <NAME>          Name for this benchmark run
+```
+
+### `list` - Show Available Scenarios
+
+```bash
+cargo run -p benchmark -- list [OPTIONS]
+
+Options:
+  -d, --detailed    Show full scenario details including steps
 ```
 
 ### `compare` - Regression Detection
 
 ```bash
-ccengram-bench compare <BASELINE> <CURRENT> [OPTIONS]
+cargo run -p benchmark -- compare <BASELINE> <CURRENT> [OPTIONS]
 
 Arguments:
-  <BASELINE>  Baseline results JSON file
+  <BASELINE>  Previous results JSON file
   <CURRENT>   Current results JSON file
 
 Options:
-  -t, --threshold <PCT>  Regression threshold percentage [default: 10]
-  -o, --output <FILE>    Save comparison report
+  -t, --threshold <PCT>  Regression threshold [default: 10]
 ```
 
-### `index` - Prepare Repositories
+### `index` - Download Repositories
 
 ```bash
-ccengram-bench index [OPTIONS]
+cargo run -p benchmark -- index [OPTIONS]
 
 Options:
-  -r, --repos <LIST>      Repositories to prepare: zed, vscode, or 'all' [default: all]
-      --force             Force re-download even if cached
-      --cache-dir <DIR>   Custom cache directory
+  -r, --repos <LIST>   Repositories: zed, vscode, or 'all' [default: all]
+      --force          Force re-download
 ```
 
-### `index-perf` - Initial Indexing Performance
+Downloads repository tarballs from GitHub to `~/.cache/ccengram-bench/repos/`.
+
+### `index-code` - Index Repositories
 
 ```bash
-ccengram-bench index-perf [OPTIONS]
+cargo run -p benchmark -- index-code [OPTIONS]
 
 Options:
-  -r, --repos <LIST>      Repositories to benchmark: zed, vscode, or 'all' [default: all]
-  -i, --iterations <N>    Number of iterations per repo [default: 3]
-  -o, --output <DIR>      Output directory for results [default: ./benchmark-results]
-      --cold              Clear index between iterations (cold start testing)
-      --cache-dir <DIR>   Custom cache directory
+  -r, --repos <LIST>   Repositories: zed, vscode, or 'all' [default: all]
+      --force          Force re-index even if already indexed
 ```
 
-Measures initial indexing performance including scan time, chunking throughput, and resource usage.
+Indexes repositories via the daemon with streaming progress display. Creates CCEngram databases at `~/.local/share/ccengram/projects/`.
 
-### `list` - Show Available Scenarios
+### `index-perf` - Indexing Performance
 
 ```bash
-ccengram-bench list [OPTIONS]
+cargo run -p benchmark -- index-perf [OPTIONS]
 
 Options:
-  -d, --detailed          Show full scenario details
-      --scenarios-dir     Custom scenarios directory
+  -r, --repos <LIST>      Repos to benchmark [default: all]
+  -i, --iterations <N>    Iterations per repo [default: 3]
+      --cold              Clear index between iterations
 ```
 
-### `clean` - Remove Cached Data
+## Creating Scenarios
 
-```bash
-ccengram-bench clean [OPTIONS]
+Scenarios are TOML files in `crates/benchmark/scenarios/`. Run `list --detailed` to see existing ones.
 
-Options:
-  --all           Clean all cached data
-  --repo <NAME>   Clean specific repository cache
-```
-
-## Target Repositories
-
-| Repository | Language | Size | Use Case |
-|------------|----------|------|----------|
-| **Zed** | Rust | ~1M LOC | Editor architecture, commands, LSP integration |
-| **VSCode** | TypeScript | ~1M LOC | Large codebase stress test, extension system |
-
-Both are editor codebases with complex architectural discovery scenarios.
-
-## Built-in Scenarios
-
-| Scenario | Repo | Pattern | Difficulty | Description |
-|----------|------|---------|------------|-------------|
-| `zed-blind-exploration` | zed | True Blind | hard | Explore from zero knowledge (LLM-judged) |
-| `zed-add-command-task` | zed | Task Completion | medium | Find everything to add a new command |
-| `zed-command-system` | zed | Architectural | hard | Command/action system discovery |
-| `zed-lsp-integration` | zed | Architectural | hard | LSP integration patterns |
-| `zed-feature-exploration` | zed | Feature | medium | "How does file saving work?" |
-| `zed-location-exploration` | zed | Location | medium | "Where to add new commands?" |
-| `zed-pattern-exploration` | zed | Pattern | hard | HTTP/external service patterns |
-| `vscode-blind-exploration` | vscode | True Blind | hard | Explore from zero knowledge (LLM-judged) |
-| `vscode-editor-core` | vscode | Architectural | hard | Core editor discovery |
-| `vscode-extension-system` | vscode | Architectural | hard | Extension API patterns |
-
-Run specific scenarios with glob patterns:
-```bash
-cargo run -p benchmark -- run --scenarios "zed-feature*"
-cargo run -p benchmark -- run --scenarios "*blind*"
-```
-
-## Scenario Types
-
-The benchmark supports three types of scenarios, each measuring different aspects of exploration:
-
-### 1. Recall-Based Scenarios (Traditional)
-
-Measure whether exploration finds specific expected files and symbols. Good for regression testing.
-
-```toml
-[expected]
-must_find_files = ["**/commands.rs", "**/actions.rs"]
-must_find_symbols = ["Action", "dispatch"]
-```
-
-### 2. True Blind Exploration Scenarios
-
-Measure understanding without specifying expected items. Success is determined by LLM comprehension questions.
-
-```toml
-[expected]
-# INTENTIONALLY EMPTY - this is blind exploration
-must_find_files = []
-must_find_symbols = []
-
-[llm_judge]
-min_comprehension_score = 0.5  # PRIMARY success metric
-
-[[llm_judge.comprehension_questions]]
-question = "What is the core UI framework?"
-expected_concepts = ["GPUI", "View", "Model"]
-```
-
-### 3. Task-Completion Scenarios
-
-Measure whether exploration enables completing a specific task (e.g., "add a new command").
-
-```toml
-[task]
-intent = "task_completion"
-
-[task_requirements]
-must_identify_modification_points = true
-must_find_example = true
-must_find_related_concerns = ["action definition", "keybinding"]
-modification_point_indicators = ["impl_actions", "register_action"]
-example_indicators = ["SelectAll", "Copy"]
-```
-
-## Scenario Definition Format
-
-Scenarios are defined in TOML files in `crates/benchmark/scenarios/`:
+### Scenario Structure
 
 ```toml
 [scenario]
-id = "zed-command-system"
-name = "Understanding Zed Command Architecture"
-repo = "zed"
-difficulty = "hard"  # easy, medium, hard
+id = "unique-id"
+name = "Human-Readable Name"
+repo = "zed"              # or "vscode"
+difficulty = "medium"     # easy, medium, hard
+description = "What this tests"
 
 [task]
-prompt = "How does Zed handle editor commands?"
-intent = "architectural_discovery"  # or: symbol_lookup, flow_tracing, bug_investigation
+prompt = "High-level exploration goal"
+intent = "architectural_discovery"  # See intent types below
 
 [expected]
-must_find_files = [
-    "**/commands.rs",
-    "**/actions.rs",
-    "**/keymap/**",
-]
-must_find_symbols = ["Action", "actions", "dispatch", "Keymap", "KeyBinding"]
+# Validation targets - queries should NOT use these terms
+must_find_files = ["**/buffer.rs", "**/editor.rs"]
+must_find_symbols = ["Buffer", "save", "write"]
 noise_patterns = ["**/tests/**", "test_*", "Mock*"]
 
 [[steps]]
-query = "How does Zed handle editor commands and actions?"
-expected_results = 5
-max_noise_ratio = 0.3
-scope = "code"  # code, memory, docs, all
-expand_top = 3  # Include full context for top N results (default: 3)
+query = "How does file saving work?"  # Natural language, no jargon
+scope = "code"
+expand_top = 4
 
 [[steps]]
-query = "What is the Action type and how is it dispatched?"
+query = "What triggers a save operation?"
 depends_on_previous = true
-expand_top = 5  # More context when following up
+expand_top = 3
+
+[[steps]]
+query = "How does {{previous.symbol}} handle errors?"
+depends_on_previous = true
 
 [success]
-min_discovery_score = 0.7       # File recall target
-max_noise_ratio = 0.25          # Maximum acceptable noise
-max_steps_to_core = 3           # Steps to find first core result
-min_convergence_rate = 0.7      # How quickly discoveries plateau
-max_context_bloat = 0.3         # Max % of useless context calls
-min_navigation_efficiency = 0.5 # optimal/actual hops
-min_suggestion_quality = 0.5    # % of useful suggestions
-max_dead_end_ratio = 0.2        # Max % of wasted queries
-max_time_to_first_relevant_ms = 5000  # Max time to first useful result
-min_file_diversity = 0.6        # Min unique files in top-5 results (0.6 = 3/5)
+min_discovery_score = 0.6
+max_noise_ratio = 0.3
+min_convergence_rate = 0.5
 ```
 
-## Metrics
+### Intent Types
 
-### Indexing Performance Metrics
+| Intent | Use For |
+|--------|---------|
+| `architectural_discovery` | Understanding system structure |
+| `feature_exploration` | "How does X work?" |
+| `bug_investigation` | Tracing failure paths |
+| `flow_tracing` | Following data through system |
+| `task_completion` | Finding everything to complete a task |
 
-| Metric | Description |
-|--------|-------------|
-| **Scan Duration** | Time to scan repository files |
-| **Index Duration** | Time to chunk, embed, and store |
-| **Files/Second** | Indexing throughput |
-| **Peak Memory** | Maximum memory during indexing |
+### Query Patterns
 
-### Search Performance Metrics
-
-| Metric | Description |
-|--------|-------------|
-| **Search Latency** | p50/p95/p99 latency for explore queries |
-| **Context Latency** | p50/p95/p99 latency for context fetches |
-| **Total Time** | End-to-end scenario execution time |
-| **Peak Memory** | Maximum memory usage during execution |
-| **Avg CPU** | Average CPU utilization |
-
-### Accuracy Metrics
-
-| Metric | Description | Target |
-|--------|-------------|--------|
-| **File Recall** | % of must-find files discovered | >= 70% |
-| **Symbol Recall** | % of must-find symbols discovered | >= 70% |
-| **Steps to Core** | Queries needed to find first core result | <= 3 |
-| **MRR** | Mean reciprocal rank of first correct result | >= 0.5 |
-| **Noise Ratio** | % of results matching noise patterns | <= 25% |
-| **Top-3 Noise** | Noise in top 3 results | <= 10% |
-| **Hint Utility** | % of callers/callees that are relevant | >= 60% |
-| **Suggestion Quality** | % of suggestions leading to useful results | >= 50% |
-| **Time to First Relevant** | Milliseconds until first useful result found | <= 5000ms |
-| **File Diversity (Top-5)** | Unique files / top-5 results (1.0 = all different files) | >= 60% |
-
-### Exploration Quality Metrics
-
-| Metric | Description | Target |
-|--------|-------------|--------|
-| **Convergence Rate** | How quickly discoveries plateau (1.0 = finds things early) | >= 70% |
-| **Navigation Efficiency** | optimal_hops / actual_hops to reach targets | >= 50% |
-| **Context Bloat** | % of context calls that provided no new information | <= 30% |
-| **Dead End Ratio** | % of queries that found nothing useful | <= 20% |
-| **Info Gain** | Average new discoveries per step | >= 0.3 |
-
-### Context Budget Metrics
-
-| Metric | Description | Target |
-|--------|-------------|--------|
-| **Context Budget Efficiency** | useful_bytes / total_bytes returned | >= 50% |
-| **Total Bytes Returned** | Cumulative bytes across all explore/context calls | - |
-| **Useful Bytes** | Bytes containing expected symbols/files | - |
-
-### Path-Based Failure Metrics (Rabbit Holes)
-
-| Metric | Description | Target |
-|--------|-------------|--------|
-| **Max Consecutive Failures** | Longest streak of steps without finding expected items | <= 3 |
-| **Rabbit Hole Steps** | Total steps spent in rabbit holes (2+ consecutive failures) | <= 2 |
-| **Rabbit Hole Ratio** | % of steps spent in rabbit holes | <= 20% |
-
-### LLM Comprehension Metrics
-
-| Metric | Description | Target |
-|--------|-------------|--------|
-| **Comprehension Score** | Weighted average of question scores | >= 60% |
-| **Concepts Found** | % of expected concepts mentioned in answers | >= 70% |
-| **Wrong Concepts** | Incorrect concepts indicating misunderstanding | 0 |
-
-## Adaptive Exploration Templates
-
-Steps can use templates to build queries based on previous step results:
+**The key rule:** Write queries as a zero-knowledge agent would ask. Never use codebase-specific terms in queries.
 
 ```toml
-[[steps]]
-query = "What does {{previous.symbol}} do?"
-depends_on_previous = true
+# ❌ Bad - assumes knowledge
+query = "What is the Action trait?"
+query = "Show me LanguageServer"
 
-[[steps]]
-query = "Show me the implementation of {{previous.symbols[0]}}"
-context_ids = ["{{previous.id}}"]
+# ✅ Good - describes observable behavior
+query = "How do keyboard shortcuts trigger functionality?"
+query = "How does code intelligence work?"
 ```
 
-Available templates:
-- `{{previous.symbol}}` - First symbol from previous step
-- `{{previous.symbols[N]}}` - Nth symbol from previous step
-- `{{previous.file}}` - First file from previous step
-- `{{previous.files[N]}}` - Nth file from previous step
-- `{{previous.id}}` - First result ID from previous step
-- `{{previous.caller}}` - First caller symbol from previous context
-- `{{previous.callee}}` - First callee symbol from previous context
-
-## Blind Exploration Scenarios
-
-For testing true discovery capability without prior knowledge:
-
-```toml
-[scenario]
-id = "zed-blind-exploration"
-name = "Blind Exploration of Zed Editor"
-difficulty = "hard"
-
-[[steps]]
-# Generic questions - no codebase-specific terms
-query = "What is the main entry point of this application?"
-
-[[steps]]
-query = "How is the user interface organized?"
-depends_on_previous = true
-
-[[steps]]
-# Adaptive template - follow what was discovered
-query = "What does {{previous.symbol}} do?"
-depends_on_previous = true
-```
-
-## LLM-as-Judge Comprehension Testing
-
-Test whether exploration results enable understanding:
-
-```toml
-[llm_judge]
-min_comprehension_score = 0.6
-
-[[llm_judge.comprehension_questions]]
-question = "How are commands represented?"
-expected_concepts = ["Action", "trait", "dispatch"]
-wrong_concepts = ["Command pattern"]
-weight = 1.0
-```
-
-Run with `--llm-judge` flag:
-
-```bash
-cargo run -p benchmark -- run --llm-judge --output ./results
-```
-
-Requires the `claude` CLI to be available in your PATH (same as the existing `llm` crate).
-
-## Ground Truth
-
-The benchmark uses a hybrid approach for validation:
-
-### 1. Noise Pattern Detection (Automatic)
-
-Default patterns that identify test/mock code:
-
-**File Patterns:**
-- `**/tests/**`, `**/test/**`, `**/__tests__/**`
-- `*_test.rs`, `*_test.go`, `*.test.ts`
-- `**/fixtures/**`, `**/mocks/**`
-
-**Symbol Patterns:**
-- `test_*`, `Test*`, `Mock*`, `Stub*`, `Fake*`
-- `_*` (internal/private symbols)
-
-**Content Patterns:**
-- `#[test]`, `#[cfg(test)]`
-- `describe(`, `it(`, `expect(`
-
-### 2. Manual Annotations (Optional)
-
-JSON files in `crates/benchmark/annotations/<repo>/`:
-
-```json
-{
-  "scenario_id": "zed-command-system",
-  "critical_files": ["crates/gpui/src/action.rs"],
-  "critical_symbols": ["Action", "ActionRegistry"],
-  "key_locations": ["crates/gpui/src/action.rs:42"],
-  "exploration_paths": [
-    {
-      "start": "Action",
-      "through": ["ActionRegistry"],
-      "target": "dispatch",
-      "max_hops": 3
-    }
-  ],
-  "notes": ["The Action trait is the core abstraction"]
-}
-```
-
-### 3. Call Graph Analysis
-
-Petgraph-based analysis for:
-- Verifying reachability between symbols
-- Scoring navigation hints (callers/callees)
-- Measuring path lengths
-
-## Reports
-
-### JSON Report
-
-Machine-readable format for CI integration:
-
-```json
-{
-  "metadata": {
-    "timestamp": "2024-01-15T10:30:00Z",
-    "version": "0.1.0",
-    "git_commit": "abc123",
-    "hostname": "benchmark-runner",
-    "total_scenarios": 4
-  },
-  "summary": {
-    "passed": 3,
-    "failed": 1,
-    "pass_rate": 0.75,
-    "performance": {
-      "avg_search_latency_p50_ms": 45,
-      "avg_search_latency_p95_ms": 120,
-      "avg_context_latency_p50_ms": 28,
-      "total_queries": 42
-    },
-    "accuracy": {
-      "avg_file_recall": 0.82,
-      "avg_symbol_recall": 0.78,
-      "avg_mrr": 0.58,
-      "avg_noise_ratio": 0.18,
-      "avg_convergence_rate": 0.75,
-      "avg_hint_utility": 0.62,
-      "avg_suggestion_quality": 0.55,
-      "avg_context_bloat": 0.22,
-      "avg_dead_end_ratio": 0.15
-    }
-  },
-  "scenarios": [...]
-}
-```
-
-### Markdown Report
-
-Human-readable summary with pass/fail indicators:
-
-```markdown
-# Benchmark Results
-
-**Run:** 2024-01-15 10:30:00
-**Pass Rate:** 75% (3/4)
-
-## Accuracy
-
-| Scenario | File Recall | Symbol Recall | MRR | Noise | Steps |
-|----------|-------------|---------------|-----|-------|-------|
-| zed-command-system | ✅ 85% | ✅ 78% | ✅ 0.65 | ✅ 15% | ✅ 2 |
-| zed-lsp-integration | ✅ 78% | ✅ 72% | ✅ 0.58 | ⚠️ 22% | ✅ 3 |
-| vscode-extensions | ❌ 45% | ❌ 40% | ❌ 0.32 | ❌ 35% | ❌ 5 |
-
-## Exploration Quality
-
-| Scenario | Convergence | Nav Efficiency | Hint Utility | Context Bloat | Dead Ends |
-|----------|-------------|----------------|--------------|---------------|-----------|
-| zed-command-system | ✅ 85% | ✅ 72% | ⚠️ 58% | ✅ 18% | ✅ 10% |
-| zed-lsp-integration | ✅ 78% | ✅ 65% | ✅ 68% | ✅ 22% | ✅ 15% |
-| vscode-extensions | ❌ 45% | ❌ 35% | ❌ 42% | ❌ 45% | ❌ 38% |
-```
-
-### Comparison Report
-
-Regression detection between runs:
-
-```markdown
-# Comparison: baseline vs current
-
-## Regressions (threshold: 10%)
-
-| Scenario | Metric | Baseline | Current | Change |
-|----------|--------|----------|---------|--------|
-| vscode-extensions | file_recall | 0.65 | 0.45 | -30.8% |
-
-## Improvements
-
-| Scenario | Metric | Baseline | Current | Change |
-|----------|--------|----------|---------|--------|
-| zed-commands | latency_p50 | 65ms | 42ms | -35.4% |
-```
-
-## Architecture
-
-```
-crates/benchmark/
-├── Cargo.toml
-├── src/
-│   ├── lib.rs                # Public API
-│   ├── main.rs               # CLI (ccengram-bench)
-│   ├── session.rs            # Multi-step exploration state
-│   ├── indexing.rs           # Initial indexing benchmarks
-│   ├── repos/
-│   │   ├── mod.rs            # Repository management
-│   │   ├── registry.rs       # Zed/VSCode configs
-│   │   └── clone.rs          # Tarball download & caching
-│   ├── scenarios/
-│   │   ├── mod.rs            # Scenario loader
-│   │   ├── definition.rs     # TOML schema types
-│   │   └── runner.rs         # Daemon communication
-│   ├── metrics/
-│   │   ├── mod.rs            # Metric types
-│   │   ├── performance.rs    # Latency, memory, CPU
-│   │   └── accuracy.rs       # Recall, noise, MRR
-│   ├── ground_truth/
-│   │   ├── mod.rs            # Ground truth API
-│   │   ├── call_graph.rs     # Petgraph analysis
-│   │   ├── patterns.rs       # Noise detection
-│   │   └── annotations.rs    # Manual annotations
-│   └── reports/
-│       ├── mod.rs            # Report generation
-│       ├── json.rs           # Machine-readable
-│       ├── markdown.rs       # Human-readable
-│       └── comparison.rs     # Regression detection
-├── scenarios/                # Built-in scenarios
-│   ├── zed_commands.toml
-│   ├── zed_lsp.toml
-│   ├── zed_blind_exploration.toml      # True blind (LLM-judged)
-│   ├── zed_add_command_task.toml       # Task-completion scenario
-│   ├── zed_feature_exploration.toml
-│   ├── zed_location_exploration.toml
-│   ├── zed_pattern_exploration.toml
-│   ├── vscode_extensions.toml
-│   ├── vscode_editor.toml
-│   └── vscode_blind_exploration.toml   # True blind (LLM-judged)
-└── annotations/              # Optional ground truth
-    ├── zed/
-    │   └── zed-command-system.json
-    └── vscode/
-```
-
-## Writing New Scenarios
-
-### Exploration Query Patterns
-
-Different exploration goals require different query patterns. The benchmark includes scenarios for each major pattern:
-
-#### 1. Feature-Based Exploration
-Questions like "How does X work?" - understanding functionality without knowing implementation details.
-
+#### Pattern 1: Feature Exploration
 ```toml
 [[steps]]
 query = "How does file saving work?"
-expand_top = 4
 
 [[steps]]
 query = "What triggers a save operation?"
@@ -584,55 +218,41 @@ query = "How are unsaved changes tracked?"
 depends_on_previous = true
 ```
 
-**Use when:** Agent needs to understand a feature's behavior and implementation.
-
-#### 2. Location-Based Exploration
-Questions like "Where is X defined?" or "Where would I add Y?" - finding where to modify code.
-
+#### Pattern 2: Bug Investigation
 ```toml
 [[steps]]
-query = "Where are editor commands defined?"
-expand_top = 3
+query = "How does file saving work?"
 
 [[steps]]
-query = "How do I register a new command?"
+query = "What errors can occur during save?"
 depends_on_previous = true
 
 [[steps]]
-query = "What's the pattern for {{previous.symbol}}?"
+query = "How is {{previous.symbol}} handled when it fails?"
 depends_on_previous = true
 ```
 
-**Use when:** Agent needs to add or modify functionality.
-
-#### 3. Pattern-Based Exploration
-Questions like "What handles X?" - understanding cross-cutting architectural patterns.
-
+#### Pattern 3: Data Flow
 ```toml
 [[steps]]
-query = "What makes HTTP requests to external services?"
-expand_top = 5
+query = "How are keyboard events received?"
 
 [[steps]]
-query = "How is authentication handled for external APIs?"
+query = "How do events reach the text editor?"
 depends_on_previous = true
 
 [[steps]]
-query = "Where is {{previous.symbol}} configured?"
+query = "How does {{previous.symbol}} insert text?"
 depends_on_previous = true
 ```
 
-**Use when:** Agent needs to understand how the codebase handles a concern (auth, logging, errors, etc.).
-
-#### 4. Blind Exploration
-Generic questions without codebase-specific terms - testing true discovery capability.
-
+#### Pattern 4: Blind Exploration
 ```toml
 [[steps]]
-query = "What is the main entry point of this application?"
+query = "What is the main entry point?"
 
 [[steps]]
-query = "How is the user interface organized?"
+query = "How is the UI organized?"
 depends_on_previous = true
 
 [[steps]]
@@ -640,290 +260,173 @@ query = "What does {{previous.symbol}} do?"
 depends_on_previous = true
 ```
 
-**Use when:** Testing exploration from zero knowledge.
+### Adaptive Templates
 
-### Step-by-Step Guide
+Use templates to follow discoveries from previous steps:
 
-1. **Identify the exploration goal**: What should an agent discover?
+| Template | Resolves To |
+|----------|-------------|
+| `{{previous.symbol}}` | First symbol from previous step |
+| `{{previous.symbols[N]}}` | Nth symbol |
+| `{{previous.file}}` | First file path |
+| `{{previous.id}}` | First result ID |
+| `{{previous.caller}}` | First caller (from context) |
+| `{{previous.callee}}` | First callee (from context) |
 
-2. **Choose a query pattern**: Feature, location, pattern, or blind exploration?
-
-3. **Define expected outcomes**: Which files/symbols are critical?
-
-4. **Create multi-step queries**: How would an agent naturally explore?
-
-5. **Set realistic thresholds**: Based on difficulty level
-
-6. **Tune `expand_top`**: More context (4-5) for broad queries, less (2-3) for focused ones
-
-### Example scenario creation:
-
-```toml
-# scenarios/my_new_scenario.toml
-
-[scenario]
-id = "my-new-scenario"
-name = "Exploring Feature X"
-repo = "zed"
-difficulty = "medium"
-description = "Explore how feature X is implemented and used"
-
-[task]
-prompt = "How does feature X work?"
-intent = "architectural_discovery"
-
-[expected]
-must_find_files = ["**/feature_x.rs", "**/feature_x/**"]
-must_find_symbols = ["FeatureX", "init_feature_x"]
-noise_patterns = ["**/tests/**"]
-
-[[steps]]
-query = "Where is feature X implemented?"
-expected_results = 3
-expand_top = 4  # Get more context for initial broad query
-scope = "code"
-
-[[steps]]
-query = "How is FeatureX initialized?"
-depends_on_previous = true
-expand_top = 3
-
-[[steps]]
-query = "What calls {{previous.symbol}}?"
-depends_on_previous = true
-context_ids = ["{{previous.id}}"]
-
-[success]
-min_discovery_score = 0.6
-max_noise_ratio = 0.3
-max_steps_to_core = 2
-min_convergence_rate = 0.6
-max_context_bloat = 0.35
-min_file_diversity = 0.5
-max_time_to_first_relevant_ms = 3000
-
-# Optional: LLM comprehension testing
-[llm_judge]
-min_comprehension_score = 0.5
-
-[[llm_judge.comprehension_questions]]
-question = "How is feature X structured?"
-expected_concepts = ["FeatureX", "init", "module"]
-wrong_concepts = []
-weight = 1.0
-```
-
-### Step Configuration Reference
+### Step Options
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `query` | string | required | The exploration query |
-| `scope` | string | `"all"` | Search scope: `code`, `memory`, `docs`, `all` |
-| `expand_top` | int | `3` | Include full context for top N results |
-| `expected_results` | int | none | Expected number of results |
-| `max_noise_ratio` | float | none | Max acceptable noise for this step |
+| `scope` | string | `"all"` | `code`, `memory`, `docs`, `all` |
+| `expand_top` | int | `3` | Get full context for top N results |
 | `depends_on_previous` | bool | `false` | Enable template resolution |
-| `context_ids` | array | none | IDs to fetch context for |
+| `context_ids` | array | `[]` | Specific IDs to fetch context for |
 
-### Success Criteria Reference
+### Success Criteria
 
-| Criterion | Type | Description |
-|-----------|------|-------------|
-| `min_discovery_score` | float | Minimum file recall (0.0-1.0) |
-| `max_noise_ratio` | float | Maximum noise in results |
-| `max_steps_to_core` | int | Max steps to find first core result |
-| `min_convergence_rate` | float | How quickly discoveries plateau |
-| `max_context_bloat` | float | Max % of useless context calls |
-| `min_navigation_efficiency` | float | optimal_hops / actual_hops |
-| `min_suggestion_quality` | float | % of useful suggestions |
-| `max_dead_end_ratio` | float | Max % of wasted queries |
-| `max_time_to_first_relevant_ms` | int | Max ms to first useful result |
-| `min_file_diversity` | float | Min unique files / top-5 results |
+| Criterion | Type | Target | Description |
+|-----------|------|--------|-------------|
+| `min_discovery_score` | float | 0.7 | File recall |
+| `max_noise_ratio` | float | 0.25 | Max noise in results |
+| `max_steps_to_core` | int | 3 | Steps to first useful result |
+| `min_convergence_rate` | float | 0.7 | Discovery rate per step |
+| `max_context_bloat` | float | 0.3 | Wasted context calls |
+| `max_dead_end_ratio` | float | 0.2 | Steps with no discoveries |
+| `min_file_diversity` | float | 0.6 | Unique files in top-5 |
 
-## Diagnostic Breakdowns
+### LLM Comprehension Testing
 
-When exploration metrics fall below thresholds, the benchmark automatically generates diagnostic breakdowns explaining **why** and providing actionable recommendations. This transforms metrics from pass/fail indicators into debugging tools.
+Test whether exploration enables understanding (requires `--llm-judge` flag):
 
-### Convergence Diagnosis
+```toml
+[llm_judge]
+min_comprehension_score = 0.5
 
-Generated when `convergence_rate < threshold` (default 0.7):
-
-```json
-{
-  "convergence": {
-    "empty_steps": [2, 5],
-    "productive_steps": [0, 1, 3, 4],
-    "discovery_pattern": "early_plateau",
-    "query_issues": [
-      { "step": 2, "issue": "too_specific", "query": "Find FooBarBazHandler" },
-      { "step": 5, "issue": "too_broad", "query": "How does everything work?" }
-    ],
-    "recommendation": "Steps 2, 5 found nothing. Try broader queries for step 2 (too_specific) and narrower queries for step 5 (too_broad)."
-  }
-}
+[[llm_judge.comprehension_questions]]
+question = "How are commands represented?"
+expected_concepts = ["Action", "trait", "dispatch"]
+wrong_concepts = ["Redux", "event listeners"]
+weight = 1.0
 ```
 
-**Discovery Patterns:**
-- `front_loaded` - Most discoveries in early steps (good)
-- `back_loaded` - Most discoveries in late steps (slow start)
-- `early_plateau` - Discoveries stop mid-exploration
-- `late_plateau` - Discoveries continue until end (good)
-- `scattered` - Inconsistent discovery pattern
+### Task-Completion Scenarios
 
-### Bloat Diagnosis
+For scenarios measuring whether exploration enables a specific task:
 
-Generated when `context_bloat > threshold` (default 0.3):
+```toml
+[task]
+intent = "task_completion"
 
-```json
-{
-  "bloat": {
-    "redundant_expansion_pct": 0.25,
-    "unhelpful_hints_pct": 0.15,
-    "over_expansion_pct": 0.40,
-    "over_expanded_steps": [
-      { "step": 1, "requested": 5, "useful": 2 }
-    ],
-    "redundant_chunks": ["chunk_abc123", "chunk_def456"],
-    "wasted_bytes": 15000,
-    "recommendation": "Step 1 over-expanded (requested 5, only 2 useful). Consider using expand_top=2 for focused queries."
-  }
-}
+[task_requirements]
+must_identify_modification_points = true
+must_find_example = true
+must_find_related_concerns = ["action definition", "keybinding"]
+
+modification_point_indicators = ["register", "impl Action"]
+example_indicators = ["SelectAll", "Copy"]
+
+[task_requirements.concern_indicators]
+"action definition" = ["Action", "impl_actions"]
+"keybinding" = ["keymap", "KeyBinding"]
 ```
 
-**Bloat Categories:**
-- `redundant_expansion_pct` - Context fetched for already-seen chunks
-- `unhelpful_hints_pct` - Callers/callees that led nowhere
-- `over_expansion_pct` - Expanded more results than were useful
+## Metrics Reference
 
-### Recall Diagnosis
+### Performance
 
-Generated when `file_recall < threshold` or `symbol_recall < threshold` (default 0.7):
+| Metric | Description |
+|--------|-------------|
+| Search Latency | p50/p95/p99 for explore queries |
+| Context Latency | p50/p95/p99 for context fetches |
+| Total Time | End-to-end scenario time |
 
-```json
-{
-  "recall": {
-    "in_index_not_retrieved": ["crates/gpui/src/action.rs"],
-    "not_in_index": [],
-    "retrieved_low_rank": [
-      ["crates/editor/src/actions.rs", 8]
-    ],
-    "files_found": ["crates/commands.rs", "crates/dispatch.rs"],
-    "symbols_found": ["dispatch", "ActionRegistry"],
-    "category_breakdown": {
-      "core_files_found": 2,
-      "core_files_missed": 1,
-      "peripheral_files_found": 3,
-      "symbols_in_found_files": 4,
-      "symbols_in_missed_files": 1
-    },
-    "recommendation": "1/3 core files missed. action.rs was indexed but not retrieved - may need better query terms."
-  }
-}
-```
+### Accuracy
 
-**Recall Categories:**
-- `in_index_not_retrieved` - Files exist in index but queries didn't surface them
-- `not_in_index` - Files not indexed (glob pattern issue or file too new)
-- `retrieved_low_rank` - Files found but ranked too low to be useful
+| Metric | Target | Description |
+|--------|--------|-------------|
+| File Recall | >= 70% | % of expected files found |
+| Symbol Recall | >= 70% | % of expected symbols found |
+| Noise Ratio | <= 25% | % of results matching noise patterns |
+| MRR | >= 0.5 | Mean reciprocal rank |
 
-### Using Diagnostics
+### Exploration Quality
 
-Diagnostics appear in JSON reports under each scenario:
+| Metric | Target | Description |
+|--------|--------|-------------|
+| Convergence Rate | >= 70% | Discoveries plateau early (good) |
+| Context Bloat | <= 30% | Empty/useless context calls |
+| Dead End Ratio | <= 20% | Steps with no discoveries |
+| File Diversity | >= 60% | Unique files in top-5 |
+
+## Diagnostic Reports
+
+When metrics fail, the JSON report includes diagnostics explaining why:
 
 ```json
 {
-  "scenario_id": "zed-command-system",
-  "passed": false,
-  "accuracy": { ... },
   "diagnostics": {
-    "convergence": { ... },
-    "bloat": { ... },
-    "recall": { ... },
-    "has_issues": true
+    "convergence": {
+      "empty_steps": [2, 5],
+      "discovery_pattern": "early_plateau",
+      "recommendation": "Steps 2, 5 found nothing. Try broader queries."
+    },
+    "recall": {
+      "in_index_not_retrieved": ["action.rs"],
+      "recommendation": "File indexed but not retrieved - improve query terms."
+    },
+    "bloat": {
+      "over_expanded_steps": [{"step": 1, "requested": 5, "useful": 2}],
+      "recommendation": "Use expand_top=2 for focused queries."
+    }
   }
 }
 ```
-
-The `has_issues` flag indicates whether any diagnostic was generated. Use this for quick filtering in CI.
-
-## Task Requirements Results
-
-For task-completion scenarios, results include a `task_requirements_result`:
-
-```json
-{
-  "scenario_id": "zed-add-command-task",
-  "task_requirements_result": {
-    "modification_points_found": true,
-    "example_found": true,
-    "concerns_found": ["action definition", "keybinding"],
-    "concerns_missed": ["command registration"],
-    "modification_point_evidence": ["impl_actions! macro in actions.rs:42"],
-    "example_evidence": ["SelectAll action in editor/actions.rs:156"],
-    "passed": false
-  }
-}
-```
-
-This tells you exactly what the exploration discovered vs what it missed for completing the task.
 
 ## Troubleshooting
 
-### "Daemon not running" error
+### "Daemon not running"
 
 ```bash
-# Start the daemon first
-ccengram daemon
-
-# Then run benchmarks
+ccengram daemon  # Start daemon first
 cargo run -p benchmark -- run
 ```
 
-### Repository download fails
+### Low recall
 
-```bash
-# Check network connectivity
-curl -I https://github.com/zed-industries/zed/archive/refs/tags/v0.220.3.tar.gz
+1. Check `diagnostics.recall.in_index_not_retrieved` - files indexed but queries miss them
+2. Improve query terms to be more natural/behavioral
+3. Verify daemon has indexed the repository
 
-# Force re-download
-cargo run -p benchmark -- index --repos zed --force
-```
+### High noise
 
-### Low recall scores
+1. Add more specific noise patterns
+2. Check if test files appear in top results
 
-1. Check the recall diagnosis in the JSON report:
-   - `in_index_not_retrieved` - Files are indexed but queries don't surface them (improve query terms)
-   - `not_in_index` - Files aren't indexed (check glob patterns, run re-index)
-   - `retrieved_low_rank` - Files found but ranked too low (ranking issue)
-2. Review `category_breakdown` to see if core vs peripheral files are the issue
-3. Verify the daemon has indexed the repository
+### Low convergence
 
-### High noise ratio
-
-1. Add more specific noise patterns to scenario
-2. Check if test files are being returned as top results
-3. Consider adjusting ranking weights in the daemon
-
-### Low convergence rate
-
-1. Check the convergence diagnosis for `empty_steps` - which steps found nothing?
-2. Review `query_issues` for specific problems:
-   - `too_specific` - Query uses terms not in codebase
-   - `too_broad` - Query returns too many irrelevant results
-   - `too_similar` - Query overlaps with previous step
-3. Look at `discovery_pattern` - `back_loaded` suggests slow start, `early_plateau` suggests giving up too soon
+1. Check which steps found nothing (`empty_steps`)
+2. Are queries too specific (using jargon)?
+3. Are queries too broad (returning everything)?
 
 ### High context bloat
 
-1. Check `over_expanded_steps` - reduce `expand_top` for those steps
-2. Look at `redundant_chunks` - same content fetched multiple times
-3. Review `unhelpful_hints_pct` - callers/callees leading nowhere suggests navigation hints need tuning
+1. Reduce `expand_top` for focused queries
+2. Check for redundant context fetches
 
-### Task completion scenarios failing
+## Storage and Cleanup
 
-1. Check `task_requirements_result` for what's missing:
-   - `modification_points_found: false` - Exploration didn't find where to make changes
-   - `example_found: false` - No similar code to follow
-   - `concerns_missed` - Related concepts not discovered
-2. Review the indicators in the scenario definition - are they too specific?
-3. Consider adding more indicator patterns
+Benchmarks create data in three locations:
+
+| Location | Contents | Size | Clean Command |
+|----------|----------|------|---------------|
+| `~/.cache/ccengram-bench/repos/` | Downloaded repos | ~2GB | `benchmark clean --all` |
+| `~/.local/share/ccengram/projects/` | CCEngram indexes | ~500MB | `ccengram projects clean-all` |
+| `./benchmark-results/` | Reports | ~1MB | `rm -rf ./benchmark-results` |
+
+**Full cleanup:**
+```bash
+cargo run -p benchmark -- clean --all      # Remove downloaded repos
+ccengram projects clean-all                 # Remove CCEngram indexes
+rm -rf ./benchmark-results                  # Remove reports
+```

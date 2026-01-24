@@ -1,47 +1,96 @@
 # Zed LSP Integration Exploration
-# Tests discovering how Zed integrates with Language Server Protocol
+#
+# Tests discovering how Zed provides code intelligence features.
+# The agent knows this is an editor with autocomplete/go-to-definition,
+# but doesn't know about LSP, LanguageServer, or any implementation details.
 
 [scenario]
 id = "zed-lsp-integration"
-name = "Understanding Zed LSP Integration"
+name = "Understanding Zed Code Intelligence"
 repo = "zed"
 difficulty = "hard"
-description = "Explore how Zed integrates with language servers for code intelligence"
+description = "Explore how Zed provides autocomplete, go-to-definition, and other smart features"
 
 [task]
-prompt = "How does Zed integrate with language servers?"
+prompt = "Understand how code intelligence features like autocomplete and go-to-definition work"
 intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
     "**/lsp/**/*.rs",
     "**/language.rs",
-    "**/language_server.rs",
+    "**/languages/**",
 ]
-must_find_symbols = ["LanguageServer", "LspAdapter", "completion", "hover", "goto_definition"]
-noise_patterns = ["**/tests/**", "test_*", "Mock*", "*_test.rs"]
+must_find_symbols = ["LanguageServer", "LspAdapter", "completion", "hover", "definition"]
+noise_patterns = ["**/tests/**", "test_*", "Mock*", "*_test.rs", "**/fixtures/**"]
 
+# Step 1: Start from what the agent can observe
 [[steps]]
-query = "Language Server Protocol LSP integration"
+query = "How does autocomplete work in this editor?"
 expected_results = 5
-max_noise_ratio = 0.3
+max_noise_ratio = 0.35
 scope = "code"
+expand_top = 4
 
+# Step 2: Another observable feature
 [[steps]]
-query = "LanguageServer struct how it connects to language servers"
+query = "How does go-to-definition find where something is defined?"
 depends_on_previous = true
-
-[[steps]]
-query = "completion provider autocomplete suggestions"
-depends_on_previous = false
+expected_results = 4
 scope = "code"
+expand_top = 3
 
+# Step 3: Follow discovered abstraction
 [[steps]]
-query = "go to definition jump to definition"
-depends_on_previous = false
+query = "What is {{previous.symbol}} and how does it provide these features?"
+depends_on_previous = true
+expected_results = 3
 scope = "code"
+expand_top = 3
+
+# Step 4: Understand the communication pattern
+[[steps]]
+query = "How does the editor communicate with external language tools?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+context_ids = ["{{previous.id}}"]
+expand_top = 3
+
+# Step 5: Language-specific handling
+[[steps]]
+query = "How are different programming languages supported?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+expand_top = 2
 
 [success]
-min_discovery_score = 0.6
-max_noise_ratio = 0.30
+min_discovery_score = 0.5
+max_noise_ratio = 0.35
 max_steps_to_core = 4
+min_convergence_rate = 0.4
+max_context_bloat = 0.40
+min_file_diversity = 0.4
+
+# LLM comprehension testing
+[llm_judge]
+min_comprehension_score = 0.5
+
+[[llm_judge.comprehension_questions]]
+question = "What protocol or mechanism does Zed use to get code intelligence?"
+expected_concepts = ["Language Server Protocol", "LSP", "JSON-RPC", "language server"]
+wrong_concepts = ["built-in parser only", "regex", "ctags"]
+weight = 2.0
+
+[[llm_judge.comprehension_questions]]
+question = "How does Zed support multiple programming languages?"
+expected_concepts = ["adapter", "language", "server", "extension"]
+wrong_concepts = ["hardcoded", "one language"]
+weight = 1.0
+
+[[llm_judge.comprehension_questions]]
+question = "What happens when you trigger autocomplete?"
+expected_concepts = ["request", "server", "completion", "response"]
+wrong_concepts = ["local dictionary", "spell check"]
+weight = 1.0

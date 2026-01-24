@@ -3,6 +3,7 @@
 use crate::IndexCommand;
 use anyhow::{Context, Result};
 use daemon::{Request, connect_or_start};
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 use tracing::{debug, error, warn};
 
@@ -420,61 +421,195 @@ pub async fn cmd_index_code(force: bool, stats: bool, export: Option<&str>, load
     return Ok(());
   }
 
-  // Default: run indexing
-  println!("Indexing code in {}...", cwd);
+  // Default: run indexing with streaming progress
+  let is_tty = std::io::stdout().is_terminal();
 
-  let request = Request {
-    id: Some(serde_json::json!(1)),
-    method: "code_index".to_string(),
-    params: serde_json::json!({
-        "cwd": cwd,
-        "force": force,
-    }),
-  };
-
-  let response = client.request(request).await.context("Failed to index code")?;
-
-  if let Some(err) = response.error {
-    error!("Index error: {}", err.message);
-    std::process::exit(1);
-  }
-
-  if let Some(result) = response.result {
-    let files_scanned = result.get("files_scanned").and_then(|v| v.as_u64()).unwrap_or(0);
-    let files_indexed = result.get("files_indexed").and_then(|v| v.as_u64()).unwrap_or(0);
-    let chunks_created = result.get("chunks_created").and_then(|v| v.as_u64()).unwrap_or(0);
-    let scan_duration_ms = result.get("scan_duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-    let index_duration_ms = result.get("index_duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-    let total_duration_ms = result.get("total_duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
-    let files_per_second = result.get("files_per_second").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let bytes_processed = result.get("bytes_processed").and_then(|v| v.as_u64()).unwrap_or(0);
-
-    println!("Indexing complete:");
-    println!("  Files scanned: {}", files_scanned);
-    println!("  Files indexed: {}", files_indexed);
-    println!("  Chunks created: {}", chunks_created);
+  // Use streaming for TTY, fall back to non-streaming otherwise
+  if is_tty {
+    println!("Indexing code in {}...", cwd);
     println!();
-    println!("Performance:");
-    println!("  Scan time:  {} ms", scan_duration_ms);
-    println!("  Index time: {} ms", index_duration_ms);
-    println!(
-      "  Total time: {} ms ({:.1}s)",
-      total_duration_ms,
-      total_duration_ms as f64 / 1000.0
-    );
-    if files_per_second > 0.0 {
-      println!("  Speed:      {:.1} files/second", files_per_second);
-    }
-    if bytes_processed > 0 {
-      let kb = bytes_processed as f64 / 1024.0;
-      let mb = kb / 1024.0;
-      if mb >= 1.0 {
-        println!("  Processed:  {:.1} MB", mb);
-      } else {
-        println!("  Processed:  {:.1} KB", kb);
+
+    let request = Request {
+      id: Some(serde_json::json!(1)),
+      method: "code_index".to_string(),
+      params: serde_json::json!({
+          "cwd": cwd,
+          "force": force,
+          "stream": true,
+      }),
+    };
+
+    let mut stream = client.request_streaming(request).await.context("Failed to start indexing")?;
+
+    let mut last_progress_len = 0;
+    let mut final_result = None;
+
+    while let Some(response) = stream.recv().await {
+      // Handle progress updates
+      if let Some(progress) = &response.progress {
+        // Clear the previous line
+        if last_progress_len > 0 {
+          print!("\r{}\r", " ".repeat(last_progress_len));
+        }
+
+        // Format progress message
+        let msg = match progress.phase.as_str() {
+          "scanning" => {
+            let files = progress.processed_files.unwrap_or(0);
+            let current = progress
+              .current_file
+              .as_ref()
+              .map(|f| truncate_path(f, 40))
+              .unwrap_or_default();
+            if current.is_empty() {
+              format!("Scanning... {} files found", files)
+            } else {
+              format!("Scanning... {} files found ({})", files, current)
+            }
+          }
+          "indexing" => {
+            let processed = progress.processed_files.unwrap_or(0);
+            let total = progress.total_files.unwrap_or(0);
+            let chunks = progress.chunks_created.unwrap_or(0);
+            let percent = if total > 0 { (processed * 100) / total } else { 0 };
+            let current = progress
+              .current_file
+              .as_ref()
+              .map(|f| truncate_path(f, 30))
+              .unwrap_or_default();
+
+            // Progress bar
+            let bar_width = 20;
+            let filled = (bar_width * percent / 100) as usize;
+            let empty = bar_width as usize - filled;
+            let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
+
+            if current.is_empty() {
+              format!("{} {}% ({}/{}) {} chunks", bar, percent, processed, total, chunks)
+            } else {
+              format!("{} {}% ({}/{}) {} chunks - {}", bar, percent, processed, total, chunks, current)
+            }
+          }
+          "complete" => {
+            let files = progress.processed_files.unwrap_or(0);
+            let chunks = progress.chunks_created.unwrap_or(0);
+            format!("Complete: {} files, {} chunks", files, chunks)
+          }
+          _ => progress.message.clone().unwrap_or_default(),
+        };
+
+        print!("{}", msg);
+        std::io::stdout().flush().ok();
+        last_progress_len = msg.len();
       }
+
+      // Check for final response
+      if response.result.is_some() || response.error.is_some() {
+        // Clear progress line before final output
+        if last_progress_len > 0 {
+          print!("\r{}\r", " ".repeat(last_progress_len));
+        }
+        final_result = Some(response);
+        break;
+      }
+    }
+
+    // Handle final response
+    let Some(response) = final_result else {
+      error!("Connection closed without response");
+      std::process::exit(1);
+    };
+
+    if let Some(err) = response.error {
+      error!("Index error: {}", err.message);
+      std::process::exit(1);
+    }
+
+    if let Some(result) = response.result {
+      print_index_result(&result);
+    }
+  } else {
+    // Non-TTY: use simple non-streaming request
+    println!("Indexing code in {}...", cwd);
+
+    let request = Request {
+      id: Some(serde_json::json!(1)),
+      method: "code_index".to_string(),
+      params: serde_json::json!({
+          "cwd": cwd,
+          "force": force,
+      }),
+    };
+
+    let response = client.request(request).await.context("Failed to index code")?;
+
+    if let Some(err) = response.error {
+      error!("Index error: {}", err.message);
+      std::process::exit(1);
+    }
+
+    if let Some(result) = response.result {
+      print_index_result(&result);
     }
   }
 
   Ok(())
+}
+
+/// Print the final index result
+fn print_index_result(result: &serde_json::Value) {
+  let files_scanned = result.get("files_scanned").and_then(|v| v.as_u64()).unwrap_or(0);
+  let files_indexed = result.get("files_indexed").and_then(|v| v.as_u64()).unwrap_or(0);
+  let chunks_created = result.get("chunks_created").and_then(|v| v.as_u64()).unwrap_or(0);
+  let scan_duration_ms = result.get("scan_duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+  let index_duration_ms = result.get("index_duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+  let total_duration_ms = result.get("total_duration_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+  let files_per_second = result.get("files_per_second").and_then(|v| v.as_f64()).unwrap_or(0.0);
+  let bytes_processed = result.get("bytes_processed").and_then(|v| v.as_u64()).unwrap_or(0);
+
+  println!("Indexing complete:");
+  println!("  Files scanned: {}", files_scanned);
+  println!("  Files indexed: {}", files_indexed);
+  println!("  Chunks created: {}", chunks_created);
+  println!();
+  println!("Performance:");
+  println!("  Scan time:  {} ms", scan_duration_ms);
+  println!("  Index time: {} ms", index_duration_ms);
+  println!(
+    "  Total time: {} ms ({:.1}s)",
+    total_duration_ms,
+    total_duration_ms as f64 / 1000.0
+  );
+  if files_per_second > 0.0 {
+    println!("  Speed:      {:.1} files/second", files_per_second);
+  }
+  if bytes_processed > 0 {
+    let kb = bytes_processed as f64 / 1024.0;
+    let mb = kb / 1024.0;
+    if mb >= 1.0 {
+      println!("  Processed:  {:.1} MB", mb);
+    } else {
+      println!("  Processed:  {:.1} KB", kb);
+    }
+  }
+}
+
+/// Truncate a file path for display
+fn truncate_path(path: &str, max_len: usize) -> String {
+  if path.len() <= max_len {
+    return path.to_string();
+  }
+
+  // Try to show just the filename
+  if let Some(pos) = path.rfind('/') {
+    let filename = &path[pos + 1..];
+    if filename.len() <= max_len {
+      return filename.to_string();
+    }
+    // Truncate filename with ellipsis
+    return format!("...{}", &filename[filename.len().saturating_sub(max_len - 3)..]);
+  }
+
+  // Just truncate with ellipsis
+  format!("...{}", &path[path.len().saturating_sub(max_len - 3)..])
 }

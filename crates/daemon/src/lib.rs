@@ -19,9 +19,9 @@ pub use db::{default_cache_dir, default_config_dir, default_data_dir, default_po
 pub use hooks::{HookError, HookEvent, HookHandler};
 pub use lifecycle::{Daemon, DaemonConfig, LifecycleError, is_running};
 pub use projects::{ProjectError, ProjectInfo, ProjectRegistry, WatcherStatus};
-pub use router::{Request, Response, Router, RpcError};
+pub use router::{IndexProgress, Request, Response, Router, RpcError};
 pub use scheduler::{Scheduler, SchedulerConfig, spawn_scheduler};
-pub use server::{Client, Server, ServerError, ShutdownHandle, default_socket_path};
+pub use server::{Client, ProgressSender, Server, ServerError, ShutdownHandle, StreamingResponse, default_socket_path};
 pub use session_tracker::{SessionId, SessionTracker};
 pub use shutdown_watcher::ShutdownWatcher;
 pub use startup_scan::{ApplyResult, ScanError, ScanResult, ScanState, StartupScanConfig, StartupScanner};
