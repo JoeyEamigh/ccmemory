@@ -1,0 +1,86 @@
+# Blind Exploration Scenario: Understanding an unfamiliar codebase
+#
+# This scenario tests exploration from a position of zero knowledge.
+# The queries are generic - the kind an agent would ask when landing
+# in a completely new codebase.
+#
+# Success is measured by whether the agent discovers key abstractions
+# and entry points organically, without being given specific terms.
+
+[scenario]
+id = "zed-blind-exploration"
+name = "Blind Exploration of Zed Editor"
+repo = "zed"
+difficulty = "hard"
+
+[task]
+prompt = "Understand the high-level architecture of this editor codebase"
+intent = "architectural_discovery"
+
+[expected]
+# These are what we HOPE the agent discovers, not what it's told to find
+must_find_files = [
+    "**/app.rs",
+    "**/workspace/**",
+    "**/editor/**",
+    "**/gpui/**",
+]
+must_find_symbols = [
+    "App",
+    "Workspace",
+    "Editor",
+    "View",
+    "Model",
+]
+noise_patterns = [
+    "**/tests/**",
+    "**/test/**",
+    "test_*",
+    "Mock*",
+    "**/fixtures/**",
+]
+
+# Step 1: Start with the most generic question possible
+[[steps]]
+query = "What is the main entry point of this application?"
+expected_results = 3
+max_noise_ratio = 0.3
+scope = "code"
+
+# Step 2: Try to understand the architecture without knowing terms
+[[steps]]
+query = "How is the user interface organized?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+
+# Step 3: Follow up on what we found using adaptive templates
+[[steps]]
+query = "What does {{previous.symbol}} do and how is it used?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+
+# Step 4: Try to understand data flow
+[[steps]]
+query = "How does data flow between components?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+
+# Step 5: Drill into a specific discovered component
+[[steps]]
+query = "Show me the implementation of {{previous.symbol}}"
+depends_on_previous = true
+scope = "code"
+context_ids = ["{{previous.id}}"]
+
+[success]
+min_discovery_score = 0.5       # Lower threshold for blind exploration
+max_noise_ratio = 0.35          # Allow more noise since we're exploring blindly
+max_steps_to_core = 4           # May take longer without guidance
+min_convergence_rate = 0.5      # May be more spread out
+max_context_bloat = 0.4         # May need more context calls
+min_navigation_efficiency = 0.3 # May take less efficient paths
+min_suggestion_quality = 0.3    # Suggestions may be less targeted
+max_dead_end_ratio = 0.35       # May hit more dead ends

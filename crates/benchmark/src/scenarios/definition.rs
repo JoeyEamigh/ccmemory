@@ -74,7 +74,15 @@ pub struct Expected {
 /// A single step in a multi-step scenario.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Step {
-  /// Query to execute
+  /// Query to execute (supports template syntax for adaptive exploration)
+  ///
+  /// Template syntax:
+  /// - `{{previous.symbol}}` - First symbol from previous step
+  /// - `{{previous.symbols[N]}}` - Nth symbol from previous step
+  /// - `{{previous.file}}` - First file from previous step
+  /// - `{{previous.files[N]}}` - Nth file from previous step
+  /// - `{{previous.caller}}` - First caller symbol from previous context
+  /// - `{{previous.callee}}` - First callee symbol from previous context
   pub query: String,
   /// Expected number of useful results
   #[serde(default)]
@@ -89,8 +97,134 @@ pub struct Step {
   #[serde(default)]
   pub scope: Option<String>,
   /// Optional: IDs to fetch context for (simulating follow-up)
+  /// Also supports templates: `{{previous.id}}`, `{{previous.ids[N]}}`
   #[serde(default)]
   pub context_ids: Vec<String>,
+}
+
+impl Step {
+  /// Check if this step's query contains templates.
+  pub fn has_templates(&self) -> bool {
+    self.query.contains("{{") || self.context_ids.iter().any(|id| id.contains("{{"))
+  }
+}
+
+/// Results from a previous step, used for template resolution.
+#[derive(Debug, Clone, Default)]
+pub struct PreviousStepResults {
+  /// Result IDs
+  pub ids: Vec<String>,
+  /// Files found
+  pub files: Vec<String>,
+  /// Symbols found
+  pub symbols: Vec<String>,
+  /// Caller symbols (from expanded context)
+  pub callers: Vec<String>,
+  /// Callee symbols (from expanded context)
+  pub callees: Vec<String>,
+}
+
+impl PreviousStepResults {
+  /// Resolve template placeholders in a string.
+  pub fn resolve_template(&self, template: &str) -> String {
+    use regex::Regex;
+
+    let mut result = template.to_string();
+
+    // Simple replacements
+    result = result.replace("{{previous.symbol}}", self.symbols.first().unwrap_or(&String::new()));
+    result = result.replace("{{previous.file}}", self.files.first().unwrap_or(&String::new()));
+    result = result.replace("{{previous.id}}", self.ids.first().unwrap_or(&String::new()));
+    result = result.replace("{{previous.caller}}", self.callers.first().unwrap_or(&String::new()));
+    result = result.replace("{{previous.callee}}", self.callees.first().unwrap_or(&String::new()));
+
+    // Indexed replacements (e.g., {{previous.symbols[1]}})
+    if let Ok(re) = Regex::new(r"\{\{previous\.symbols\[(\d+)\]\}\}") {
+      result = re
+        .replace_all(&result, |caps: &regex::Captures| -> String {
+          let idx: usize = caps[1].parse().unwrap_or(0);
+          self.symbols.get(idx).cloned().unwrap_or_default()
+        })
+        .to_string();
+    }
+
+    if let Ok(re) = Regex::new(r"\{\{previous\.files\[(\d+)\]\}\}") {
+      result = re
+        .replace_all(&result, |caps: &regex::Captures| -> String {
+          let idx: usize = caps[1].parse().unwrap_or(0);
+          self.files.get(idx).cloned().unwrap_or_default()
+        })
+        .to_string();
+    }
+
+    if let Ok(re) = Regex::new(r"\{\{previous\.ids\[(\d+)\]\}\}") {
+      result = re
+        .replace_all(&result, |caps: &regex::Captures| -> String {
+          let idx: usize = caps[1].parse().unwrap_or(0);
+          self.ids.get(idx).cloned().unwrap_or_default()
+        })
+        .to_string();
+    }
+
+    if let Ok(re) = Regex::new(r"\{\{previous\.callers\[(\d+)\]\}\}") {
+      result = re
+        .replace_all(&result, |caps: &regex::Captures| -> String {
+          let idx: usize = caps[1].parse().unwrap_or(0);
+          self.callers.get(idx).cloned().unwrap_or_default()
+        })
+        .to_string();
+    }
+
+    if let Ok(re) = Regex::new(r"\{\{previous\.callees\[(\d+)\]\}\}") {
+      result = re
+        .replace_all(&result, |caps: &regex::Captures| -> String {
+          let idx: usize = caps[1].parse().unwrap_or(0);
+          self.callees.get(idx).cloned().unwrap_or_default()
+        })
+        .to_string();
+    }
+
+    result
+  }
+
+  /// Resolve template in a step, creating a new step with resolved query.
+  pub fn resolve_step(&self, step: &Step) -> Step {
+    let mut resolved = step.clone();
+    resolved.query = self.resolve_template(&step.query);
+    resolved.context_ids = step.context_ids.iter().map(|id| self.resolve_template(id)).collect();
+    resolved
+  }
+}
+
+/// Comprehension question for LLM-as-judge evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComprehensionQuestion {
+  /// The question to ask
+  pub question: String,
+  /// Key concepts or facts that should be mentioned in the answer
+  #[serde(default)]
+  pub expected_concepts: Vec<String>,
+  /// Incorrect concepts that should NOT appear (indicates misunderstanding)
+  #[serde(default)]
+  pub wrong_concepts: Vec<String>,
+  /// Weight of this question (1.0 = standard, higher = more important)
+  #[serde(default = "default_weight")]
+  pub weight: f64,
+}
+
+fn default_weight() -> f64 {
+  1.0
+}
+
+/// LLM judge configuration for comprehension testing.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LlmJudgeConfig {
+  /// Comprehension questions to evaluate understanding
+  #[serde(default)]
+  pub comprehension_questions: Vec<ComprehensionQuestion>,
+  /// Minimum comprehension score required (0.0-1.0)
+  #[serde(default)]
+  pub min_comprehension_score: Option<f64>,
 }
 
 /// Success criteria for a scenario.
@@ -176,6 +310,9 @@ pub struct Scenario {
   /// Success criteria
   #[serde(default, rename = "success")]
   pub success_criteria: SuccessCriteria,
+  /// LLM judge configuration for comprehension testing
+  #[serde(default)]
+  pub llm_judge: LlmJudgeConfig,
 }
 
 impl Scenario {
@@ -237,6 +374,7 @@ impl Scenario {
         context_ids: vec![],
       }],
       success_criteria: SuccessCriteria::default(),
+      llm_judge: LlmJudgeConfig::default(),
     }
   }
 }

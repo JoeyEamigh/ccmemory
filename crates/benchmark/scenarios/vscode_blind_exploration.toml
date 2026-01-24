@@ -1,0 +1,83 @@
+# Blind Exploration Scenario: Understanding VSCode architecture
+#
+# This scenario tests exploration from a position of zero knowledge.
+# The queries are generic - the kind an agent would ask when landing
+# in a completely new codebase.
+
+[scenario]
+id = "vscode-blind-exploration"
+name = "Blind Exploration of VSCode"
+repo = "vscode"
+difficulty = "hard"
+
+[task]
+prompt = "Understand the high-level architecture of this code editor"
+intent = "architectural_discovery"
+
+[expected]
+# These are what we HOPE the agent discovers organically
+must_find_files = [
+    "**/workbench/**",
+    "**/editor/**",
+    "**/services/**",
+    "**/platform/**",
+]
+must_find_symbols = [
+    "IWorkbench",
+    "IEditorService",
+    "ITextModel",
+    "registerService",
+    "createInstance",
+]
+noise_patterns = [
+    "**/test/**",
+    "**/tests/**",
+    "*.test.ts",
+    "test*",
+    "**/mocks/**",
+]
+
+# Step 1: Generic entry point question
+[[steps]]
+query = "Where is the main entry point of this application?"
+expected_results = 3
+max_noise_ratio = 0.3
+scope = "code"
+
+# Step 2: Architecture question without knowing the terms
+[[steps]]
+query = "How is the application structured into modules or services?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+
+# Step 3: Follow discovered term with adaptive template
+[[steps]]
+query = "What is the purpose of {{previous.symbol}}?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+
+# Step 4: Understand dependency injection without knowing "DI"
+[[steps]]
+query = "How are components connected or wired together?"
+depends_on_previous = true
+expected_results = 3
+scope = "code"
+
+# Step 5: Drill into discovered file
+[[steps]]
+query = "Show me more details about {{previous.file}}"
+depends_on_previous = true
+scope = "code"
+context_ids = ["{{previous.id}}"]
+
+[success]
+min_discovery_score = 0.4       # TypeScript codebase may be harder
+max_noise_ratio = 0.4           # Allow more noise for large codebase
+max_steps_to_core = 5           # May take longer
+min_convergence_rate = 0.4      # May be more spread out
+max_context_bloat = 0.45        # Large files may bloat context
+min_navigation_efficiency = 0.25
+min_suggestion_quality = 0.25
+max_dead_end_ratio = 0.4

@@ -41,3 +41,25 @@ scope = "code"
 min_discovery_score = 0.7
 max_noise_ratio = 0.25
 max_steps_to_core = 3
+
+# LLM-as-judge comprehension testing (optional, requires --llm-judge flag)
+[llm_judge]
+min_comprehension_score = 0.6
+
+[[llm_judge.comprehension_questions]]
+question = "How are commands represented in Zed's architecture?"
+expected_concepts = ["Action", "trait", "dispatch"]
+wrong_concepts = ["Command pattern", "EventEmitter"]
+weight = 1.0
+
+[[llm_judge.comprehension_questions]]
+question = "How does a keyboard shortcut trigger a command in Zed?"
+expected_concepts = ["keymap", "KeyBinding", "Action"]
+wrong_concepts = []
+weight = 1.5
+
+[[llm_judge.comprehension_questions]]
+question = "What is the relationship between Actions and the GPUI framework?"
+expected_concepts = ["gpui", "Action"]
+wrong_concepts = []
+weight = 1.0

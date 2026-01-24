@@ -6,7 +6,10 @@
 mod definition;
 mod runner;
 
-pub use definition::{Expected, Scenario, ScenarioMetadata, Step, SuccessCriteria, Task};
+pub use definition::{
+  ComprehensionQuestion, Expected, LlmJudgeConfig, PreviousStepResults, Scenario, ScenarioMetadata, Step,
+  SuccessCriteria, Task,
+};
 pub use runner::{ScenarioResult, ScenarioRunner, StepResult, run_scenarios_parallel};
 
 use crate::Result;

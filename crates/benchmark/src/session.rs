@@ -11,8 +11,11 @@
 //! - **Context value**: Whether context calls provide new information
 //! - **Hint tracking**: Navigation hints shown vs followed
 //! - **MRR tracking**: Rank of first relevant result
+//! - **Navigation efficiency**: Optimal hops vs actual hops to reach targets
+//! - **Path-based failures**: Consecutive steps in wrong direction (rabbit holes)
+//! - **Context budget**: Cumulative bytes returned vs useful bytes
 
-use crate::ground_truth::NoisePatterns;
+use crate::ground_truth::{CallGraph, ExplorationPath, NoisePatterns};
 use crate::metrics::{AccuracyMetrics, LatencyTracker, PerformanceMetrics, StepMetrics};
 use crate::scenarios::{Expected, SuccessCriteria};
 use std::collections::HashSet;
@@ -70,6 +73,47 @@ pub struct ContextCallRecord {
   pub new_files: usize,
   /// Number of new symbols discovered from this context call
   pub new_symbols: usize,
+  /// Bytes returned by this context call
+  pub bytes_returned: usize,
+  /// Bytes that contained useful information (expected symbols/files)
+  pub useful_bytes: usize,
+}
+
+/// Record of a call relationship discovered during exploration.
+#[derive(Debug, Clone)]
+pub struct CallRelation {
+  /// Caller symbol
+  pub caller: String,
+  /// Callee symbol
+  pub callee: String,
+  /// Step when this was discovered
+  pub step: usize,
+}
+
+/// Per-step relevance tracking for path-based failure detection.
+#[derive(Debug, Clone)]
+pub struct StepRelevance {
+  /// Step index
+  pub step: usize,
+  /// Whether this step found any expected files
+  pub found_expected_file: bool,
+  /// Whether this step found any expected symbols
+  pub found_expected_symbol: bool,
+  /// Count of relevant results in this step
+  pub relevant_count: usize,
+  /// Total results in this step
+  pub total_count: usize,
+}
+
+/// Context budget tracking for cumulative efficiency.
+#[derive(Debug, Clone, Default)]
+pub struct ContextBudget {
+  /// Total bytes returned across all explore/context calls
+  pub total_bytes: usize,
+  /// Bytes containing expected symbols or files
+  pub useful_bytes: usize,
+  /// Per-step breakdown of bytes
+  pub step_bytes: Vec<(usize, usize)>, // (step_total_bytes, step_useful_bytes)
 }
 
 /// State for a multi-step exploration session.
@@ -115,6 +159,22 @@ pub struct ExplorationSession {
   files_before_step: usize,
   /// Symbols discovered before each step
   symbols_before_step: usize,
+
+  // === Navigation efficiency tracking ===
+  /// Call graph built from exploration (callers/callees from hints)
+  call_graph: CallGraph,
+  /// Call relations discovered during exploration
+  call_relations: Vec<CallRelation>,
+  /// When each symbol was first discovered (symbol -> step index)
+  symbol_discovery_step: std::collections::HashMap<String, usize>,
+
+  // === Path-based failure tracking (rabbit holes) ===
+  /// Per-step relevance for detecting consecutive failures
+  step_relevance: Vec<StepRelevance>,
+
+  // === Context budget tracking ===
+  /// Cumulative context budget tracking
+  context_budget: ContextBudget,
 }
 
 impl ExplorationSession {
@@ -141,6 +201,14 @@ impl ExplorationSession {
       suggestions_used: HashSet::new(),
       files_before_step: 0,
       symbols_before_step: 0,
+      // Navigation efficiency
+      call_graph: CallGraph::new(),
+      call_relations: Vec::new(),
+      symbol_discovery_step: std::collections::HashMap::new(),
+      // Path-based failure tracking
+      step_relevance: Vec::new(),
+      // Context budget
+      context_budget: ContextBudget::default(),
     }
   }
 
@@ -245,11 +313,72 @@ impl ExplorationSession {
 
   /// Record a context call with its value (whether it provided new info).
   pub fn record_context_value(&mut self, chunk_id: &str, new_files: usize, new_symbols: usize) {
+    self.record_context_value_with_bytes(chunk_id, new_files, new_symbols, 0, 0);
+  }
+
+  /// Record a context call with full byte tracking.
+  pub fn record_context_value_with_bytes(
+    &mut self,
+    chunk_id: &str,
+    new_files: usize,
+    new_symbols: usize,
+    bytes_returned: usize,
+    useful_bytes: usize,
+  ) {
     self.context_calls.push(ContextCallRecord {
       chunk_id: chunk_id.to_string(),
       step: self.current_step.saturating_sub(1),
       new_files,
       new_symbols,
+      bytes_returned,
+      useful_bytes,
+    });
+
+    // Update context budget
+    self.context_budget.total_bytes += bytes_returned;
+    self.context_budget.useful_bytes += useful_bytes;
+  }
+
+  /// Record bytes from an explore step for context budget tracking.
+  pub fn record_explore_bytes(&mut self, total_bytes: usize, useful_bytes: usize) {
+    self.context_budget.total_bytes += total_bytes;
+    self.context_budget.useful_bytes += useful_bytes;
+    self
+      .context_budget
+      .step_bytes
+      .push((total_bytes, useful_bytes));
+  }
+
+  /// Record a call relationship discovered from explore/context hints.
+  pub fn record_call_relation(&mut self, caller: &str, callee: &str) {
+    self.call_graph.add_call(caller, callee);
+    self.call_relations.push(CallRelation {
+      caller: caller.to_string(),
+      callee: callee.to_string(),
+      step: self.current_step.saturating_sub(1),
+    });
+  }
+
+  /// Record when a symbol was first discovered (for navigation efficiency).
+  pub fn record_symbol_discovery(&mut self, symbol: &str) {
+    let step = self.current_step.saturating_sub(1);
+    self.symbol_discovery_step.entry(symbol.to_string()).or_insert(step);
+  }
+
+  /// Record step relevance for path-based failure tracking.
+  pub fn record_step_relevance(
+    &mut self,
+    found_expected_file: bool,
+    found_expected_symbol: bool,
+    relevant_count: usize,
+    total_count: usize,
+  ) {
+    self.step_relevance.push(StepRelevance {
+      step: self.current_step.saturating_sub(1),
+      found_expected_file,
+      found_expected_symbol,
+      relevant_count,
+      total_count,
     });
   }
 
@@ -384,6 +513,104 @@ impl ExplorationSession {
     dead_ends as f64 / self.step_discoveries.len() as f64
   }
 
+  /// Calculate navigation efficiency using exploration paths.
+  /// Returns optimal_hops / actual_hops averaged across all paths.
+  /// A value of 1.0 means optimal navigation, lower means less efficient.
+  pub fn calculate_navigation_efficiency(&self, paths: &[ExplorationPath]) -> f64 {
+    if paths.is_empty() {
+      return 1.0; // No paths defined = no penalty
+    }
+
+    let mut total_efficiency = 0.0;
+    let mut valid_paths = 0;
+
+    for path in paths {
+      // Check if both start and target were discovered
+      let start_step = self.symbol_discovery_step.get(&path.start);
+      let target_step = self.symbol_discovery_step.get(&path.target);
+
+      if let (Some(&start), Some(&target)) = (start_step, target_step) {
+        // Actual hops = steps between discovering start and target
+        let actual_hops = if target >= start { target - start + 1 } else { 1 };
+
+        // Use the call graph to check if there's a shorter path
+        let graph_hops = self.call_graph.path_length(&path.start, &path.target);
+
+        // Optimal = min of annotated max_hops and graph path (if available)
+        let optimal_hops = graph_hops.map(|g| g.min(path.max_hops)).unwrap_or(path.max_hops);
+
+        // Efficiency = optimal / actual (capped at 1.0)
+        let efficiency = (optimal_hops as f64 / actual_hops as f64).min(1.0);
+        total_efficiency += efficiency;
+        valid_paths += 1;
+      }
+    }
+
+    if valid_paths == 0 {
+      return 0.0; // No paths were completed
+    }
+
+    total_efficiency / valid_paths as f64
+  }
+
+  /// Calculate cumulative context budget efficiency.
+  /// Returns the ratio of useful_bytes / total_bytes.
+  pub fn calculate_context_budget_efficiency(&self) -> f64 {
+    if self.context_budget.total_bytes == 0 {
+      return 1.0; // No bytes = no waste
+    }
+
+    self.context_budget.useful_bytes as f64 / self.context_budget.total_bytes as f64
+  }
+
+  /// Get context budget summary.
+  pub fn get_context_budget(&self) -> &ContextBudget {
+    &self.context_budget
+  }
+
+  /// Calculate path-based failure metrics (rabbit holes).
+  /// Returns (max_consecutive_failures, total_rabbit_hole_steps, rabbit_hole_ratio).
+  pub fn calculate_rabbit_holes(&self) -> (usize, usize, f64) {
+    if self.step_relevance.is_empty() {
+      return (0, 0, 0.0);
+    }
+
+    let mut max_consecutive = 0;
+    let mut current_consecutive = 0;
+    let mut total_rabbit_hole_steps = 0;
+    let mut in_rabbit_hole = false;
+
+    for step in &self.step_relevance {
+      let is_relevant = step.found_expected_file || step.found_expected_symbol || step.relevant_count > 0;
+
+      if !is_relevant {
+        current_consecutive += 1;
+        if current_consecutive >= 2 {
+          // 2+ consecutive failures = rabbit hole
+          if !in_rabbit_hole {
+            in_rabbit_hole = true;
+            // Count the first step too
+            total_rabbit_hole_steps += current_consecutive;
+          } else {
+            total_rabbit_hole_steps += 1;
+          }
+        }
+        max_consecutive = max_consecutive.max(current_consecutive);
+      } else {
+        current_consecutive = 0;
+        in_rabbit_hole = false;
+      }
+    }
+
+    let ratio = total_rabbit_hole_steps as f64 / self.step_relevance.len() as f64;
+    (max_consecutive, total_rabbit_hole_steps, ratio)
+  }
+
+  /// Get the call graph built during exploration.
+  pub fn call_graph(&self) -> &CallGraph {
+    &self.call_graph
+  }
+
   /// Check if a file matches expected files (with glob support).
   pub fn file_matches_expected(&self, file: &str, expected: &[String]) -> bool {
     for pattern in expected {
@@ -500,9 +727,34 @@ impl ExplorationSession {
       .set_context_bloat(self.calculate_context_bloat())
       .set_dead_end_ratio(self.calculate_dead_end_ratio(expected));
 
-    // Note: navigation_efficiency requires call graph data, set externally by runner
+    // Set context budget metrics
+    let budget = self.get_context_budget();
+    builder = builder.set_context_budget(
+      self.calculate_context_budget_efficiency(),
+      budget.total_bytes,
+      budget.useful_bytes,
+    );
+
+    // Set rabbit hole metrics
+    let (max_consecutive, total_rabbit, ratio) = self.calculate_rabbit_holes();
+    builder = builder.set_rabbit_holes(max_consecutive, total_rabbit, ratio);
 
     builder.build()
+  }
+
+  /// Compute accuracy metrics with navigation efficiency from exploration paths.
+  pub fn compute_accuracy_metrics_with_paths(
+    &self,
+    expected: &Expected,
+    criteria: &SuccessCriteria,
+    exploration_paths: &[ExplorationPath],
+  ) -> AccuracyMetrics {
+    let mut metrics = self.compute_accuracy_metrics(expected, criteria);
+
+    // Calculate and set navigation efficiency
+    metrics.navigation_efficiency = self.calculate_navigation_efficiency(exploration_paths);
+
+    metrics
   }
 
   /// Get the number of steps executed.

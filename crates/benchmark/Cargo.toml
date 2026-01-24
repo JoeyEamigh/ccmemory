@@ -17,6 +17,7 @@ db = { workspace = true }
 daemon = { workspace = true }
 index = { workspace = true }
 embedding = { workspace = true }
+llm = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
@@ -53,6 +54,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 rayon = "1.11"
 glob = "0.3"
+regex = "1"
 sha2 = "0.10"
 reqwest = { version = "0.13", features = ["stream"] }
 tokio-util = { version = "0.7", features = ["io"] }

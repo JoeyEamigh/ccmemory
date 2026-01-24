@@ -13,6 +13,7 @@
 
 pub mod ground_truth;
 pub mod indexing;
+pub mod llm_judge;
 pub mod metrics;
 pub mod reports;
 pub mod repos;
@@ -21,6 +22,7 @@ pub mod session;
 
 pub use ground_truth::{Annotations, CallGraph, NoisePatterns};
 pub use indexing::{IndexingBenchmark, IndexingComparison, IndexingReport};
+pub use llm_judge::{ComprehensionResult, LlmJudge};
 pub use metrics::{AccuracyMetrics, PerformanceMetrics};
 pub use reports::{BenchmarkReport, ComparisonReport};
 pub use repos::{RepoConfig, RepoRegistry};

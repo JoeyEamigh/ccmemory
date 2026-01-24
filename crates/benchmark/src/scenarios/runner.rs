@@ -1,6 +1,6 @@
 //! Scenario execution against the daemon.
 
-use super::{Expected, Scenario, Step};
+use super::{Expected, PreviousStepResults, Scenario, Step};
 use crate::ground_truth::load_scenario_annotations;
 use crate::metrics::{AccuracyMetrics, PerformanceMetrics, ResourceMonitor};
 use crate::session::{ExplorationSession, HintType};
@@ -50,6 +50,12 @@ pub struct StepResult {
   pub files_found: Vec<String>,
   /// Symbols found in results
   pub symbols_found: Vec<String>,
+  /// Caller symbols from expanded context (for adaptive templates)
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub callers: Vec<String>,
+  /// Callee symbols from expanded context (for adaptive templates)
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub callees: Vec<String>,
   /// Latency in milliseconds
   pub latency_ms: u64,
   /// Whether expected criteria were met
@@ -100,6 +106,8 @@ impl ScenarioRunner {
 
     // Load annotations if available and merge with expected values
     let mut expected = scenario.expected.clone();
+    let mut exploration_paths = Vec::new();
+
     if let Some(annotations_dir) = &self.annotations_dir {
       // Determine repo-specific annotations directory
       let repo_annotations_dir = annotations_dir.join(scenario.metadata.repo.to_string());
@@ -107,9 +115,10 @@ impl ScenarioRunner {
 
       if !annotations.is_empty() {
         debug!(
-          "Loaded {} critical files and {} critical symbols from annotations",
+          "Loaded {} critical files, {} critical symbols, {} exploration paths from annotations",
           annotations.critical_files.len(),
-          annotations.critical_symbols.len()
+          annotations.critical_symbols.len(),
+          annotations.exploration_paths.len()
         );
 
         // Merge annotations into expected values
@@ -123,16 +132,37 @@ impl ScenarioRunner {
             expected.must_find_symbols.push(symbol.clone());
           }
         }
+
+        // Store exploration paths for navigation efficiency calculation
+        exploration_paths = annotations.exploration_paths.clone();
       }
     }
 
+    // Track previous step results for adaptive template resolution
+    let mut previous_results = PreviousStepResults::default();
+
     for (i, step) in scenario.steps.iter().enumerate() {
-      debug!("Executing step {}: {}", i + 1, step.query);
+      // Resolve templates in step if it depends on previous results
+      let resolved_step = if step.has_templates() {
+        let resolved = previous_results.resolve_step(step);
+        debug!(
+          "Executing step {} (resolved): {}",
+          i + 1,
+          resolved.query
+        );
+        resolved
+      } else {
+        debug!("Executing step {}: {}", i + 1, step.query);
+        step.clone()
+      };
 
       // Take resource snapshot before step
       resource_monitor.snapshot();
 
-      match self.execute_step(step, i, &mut session, &expected).await {
+      match self
+        .execute_step_with_context(&resolved_step, i, &mut session, &expected, &mut previous_results)
+        .await
+      {
         Ok(result) => {
           step_results.push(result);
         }
@@ -142,12 +172,14 @@ impl ScenarioRunner {
           // Create a failed step result
           step_results.push(StepResult {
             step_index: i,
-            query: step.query.clone(),
+            query: resolved_step.query.clone(),
             result_count: 0,
             noise_ratio: 1.0,
             result_ids: vec![],
             files_found: vec![],
             symbols_found: vec![],
+            callers: vec![],
+            callees: vec![],
             latency_ms: 0,
             passed: false,
           });
@@ -165,7 +197,7 @@ impl ScenarioRunner {
     performance.peak_memory_bytes = Some(resource_monitor.peak_memory());
     performance.avg_cpu_percent = Some(resource_monitor.avg_cpu());
 
-    let accuracy = session.compute_accuracy_metrics(&expected, &scenario.success_criteria);
+    let accuracy = session.compute_accuracy_metrics_with_paths(&expected, &scenario.success_criteria, &exploration_paths);
 
     // Determine if scenario passed
     let passed = errors.is_empty()
@@ -265,23 +297,98 @@ impl ScenarioRunner {
       session.record_result_rank(is_relevant, rank + 1);
     }
 
-    // Extract hints from expanded context
+    // Track context budget - calculate bytes returned
+    let response_str = serde_json::to_string(&response).unwrap_or_default();
+    let total_bytes = response_str.len();
+
+    // Calculate useful bytes - content containing expected files/symbols
+    let mut useful_bytes = 0;
+    for expected_file in &expected.must_find_files {
+      if response_str.contains(expected_file) {
+        useful_bytes += expected_file.len();
+      }
+    }
+    for expected_symbol in &expected.must_find_symbols {
+      if response_str.contains(expected_symbol) {
+        useful_bytes += expected_symbol.len();
+      }
+    }
+
+    // Record explore bytes for context budget tracking
+    session.record_explore_bytes(total_bytes, useful_bytes);
+
+    // Track step relevance for rabbit hole detection
+    let found_expected_file = files_found
+      .iter()
+      .any(|f| self.file_matches_expected(f, &expected.must_find_files));
+    let found_expected_symbol = symbols_found.iter().any(|s| expected.must_find_symbols.contains(s));
+    let relevant_count = results
+      .iter()
+      .filter(|r| {
+        let file = r.get("file").and_then(|f| f.as_str()).unwrap_or("");
+        let result_symbols: Vec<&str> = r
+          .get("symbols")
+          .and_then(|s| s.as_array())
+          .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+          .unwrap_or_default();
+        self.is_result_relevant(file, &result_symbols, expected)
+      })
+      .count();
+
+    session.record_step_relevance(found_expected_file, found_expected_symbol, relevant_count, results.len());
+
+    // Track callers and callees for adaptive templates
+    let mut all_callers = Vec::new();
+    let mut all_callees = Vec::new();
+
+    // Extract hints from expanded context and build call graph
     for r in results {
       let id = r.get("id").and_then(|id| id.as_str()).unwrap_or("");
+
+      // Get the main symbols of this result for call graph
+      let source_symbols: Vec<&str> = r
+        .get("symbols")
+        .and_then(|s| s.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+      // Record symbol discovery times
+      for symbol in &source_symbols {
+        session.record_symbol_discovery(symbol);
+      }
+
       if let Some(context) = r.get("context") {
-        // Record caller hints
+        // Record caller hints and build call graph
         if let Some(callers) = context.get("callers").and_then(|c| c.as_array()) {
           for caller in callers {
             if let Some(target) = caller.get("file").and_then(|f| f.as_str()) {
               session.record_hint(id, HintType::Caller, target);
             }
+            // Build call graph: caller_symbol -> source_symbol
+            if let Some(caller_symbols) = caller.get("symbols").and_then(|s| s.as_array()) {
+              for caller_sym in caller_symbols.iter().filter_map(|v| v.as_str()) {
+                all_callers.push(caller_sym.to_string());
+                for source_sym in &source_symbols {
+                  session.record_call_relation(caller_sym, source_sym);
+                }
+              }
+            }
           }
         }
-        // Record callee hints
+        // Record callee hints and build call graph
         if let Some(callees) = context.get("callees").and_then(|c| c.as_array()) {
           for callee in callees {
             if let Some(target) = callee.get("file").and_then(|f| f.as_str()) {
               session.record_hint(id, HintType::Callee, target);
+            }
+            // Build call graph: source_symbol -> callee_symbol
+            if let Some(callee_symbols) = callee.get("symbols").and_then(|s| s.as_array()) {
+              for callee_sym in callee_symbols.iter().filter_map(|v| v.as_str()) {
+                all_callees.push(callee_sym.to_string());
+                for source_sym in &source_symbols {
+                  session.record_call_relation(source_sym, callee_sym);
+                }
+              }
             }
           }
         }
@@ -338,23 +445,39 @@ impl ScenarioRunner {
       result_ids,
       files_found,
       symbols_found,
+      callers: all_callers,
+      callees: all_callees,
       latency_ms: latency.as_millis() as u64,
       passed,
     })
   }
 
+  /// Execute a single step and update previous results for template resolution.
+  async fn execute_step_with_context(
+    &self,
+    step: &Step,
+    index: usize,
+    session: &mut ExplorationSession,
+    expected: &Expected,
+    previous_results: &mut PreviousStepResults,
+  ) -> Result<StepResult> {
+    let result = self.execute_step(step, index, session, expected).await?;
+
+    // Update previous_results for next step's template resolution
+    previous_results.ids = result.result_ids.clone();
+    previous_results.files = result.files_found.clone();
+    previous_results.symbols = result.symbols_found.clone();
+    previous_results.callers = result.callers.clone();
+    previous_results.callees = result.callees.clone();
+
+    Ok(result)
+  }
+
   /// Check if a result is relevant to the expected values.
   fn is_result_relevant(&self, file: &str, symbols: &[&str], expected: &Expected) -> bool {
     // Check if file matches expected files
-    for expected_file in &expected.must_find_files {
-      if let Ok(pattern) = glob::Pattern::new(expected_file)
-        && pattern.matches(file)
-      {
-        return true;
-      }
-      if file.ends_with(expected_file) || file == expected_file {
-        return true;
-      }
+    if self.file_matches_expected(file, &expected.must_find_files) {
+      return true;
     }
 
     // Check if any symbol matches expected symbols
@@ -364,6 +487,21 @@ impl ScenarioRunner {
       }
     }
 
+    false
+  }
+
+  /// Check if a file matches expected files (with glob support).
+  fn file_matches_expected(&self, file: &str, expected_files: &[String]) -> bool {
+    for expected_file in expected_files {
+      if let Ok(pattern) = glob::Pattern::new(expected_file)
+        && pattern.matches(file)
+      {
+        return true;
+      }
+      if file.ends_with(expected_file) || file == expected_file {
+        return true;
+      }
+    }
     false
   }
 
@@ -508,6 +646,8 @@ mod tests {
       result_ids: vec!["id1".to_string()],
       files_found: vec!["file.rs".to_string()],
       symbols_found: vec!["func".to_string()],
+      callers: vec!["caller_func".to_string()],
+      callees: vec!["callee_func".to_string()],
       latency_ms: 100,
       passed: true,
     };

@@ -40,6 +40,28 @@ pub struct AccuracyMetrics {
   #[serde(default)]
   pub dead_end_ratio: f64,
 
+  // === Context budget metrics ===
+  /// Context budget efficiency: useful_bytes / total_bytes (target ≥0.5)
+  #[serde(default)]
+  pub context_budget_efficiency: f64,
+  /// Total bytes returned across all explore/context calls
+  #[serde(default)]
+  pub total_bytes_returned: usize,
+  /// Bytes containing expected symbols or files
+  #[serde(default)]
+  pub useful_bytes_returned: usize,
+
+  // === Path-based failure metrics (rabbit holes) ===
+  /// Maximum consecutive steps without finding expected items
+  #[serde(default)]
+  pub max_consecutive_failures: usize,
+  /// Total steps spent in rabbit holes (2+ consecutive failures)
+  #[serde(default)]
+  pub rabbit_hole_steps: usize,
+  /// Ratio of steps spent in rabbit holes
+  #[serde(default)]
+  pub rabbit_hole_ratio: f64,
+
   // === Debug fields ===
   /// Files found (for debugging)
   #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -95,6 +117,16 @@ pub struct AccuracyMetricsBuilder {
   context_bloat: Option<f64>,
   navigation_efficiency: Option<f64>,
   dead_end_ratio: Option<f64>,
+
+  // Context budget metrics
+  context_budget_efficiency: Option<f64>,
+  total_bytes_returned: Option<usize>,
+  useful_bytes_returned: Option<usize>,
+
+  // Rabbit hole metrics
+  max_consecutive_failures: Option<usize>,
+  rabbit_hole_steps: Option<usize>,
+  rabbit_hole_ratio: Option<f64>,
 }
 
 impl AccuracyMetricsBuilder {
@@ -203,6 +235,22 @@ impl AccuracyMetricsBuilder {
     self
   }
 
+  /// Set context budget metrics.
+  pub fn set_context_budget(mut self, efficiency: f64, total_bytes: usize, useful_bytes: usize) -> Self {
+    self.context_budget_efficiency = Some(efficiency);
+    self.total_bytes_returned = Some(total_bytes);
+    self.useful_bytes_returned = Some(useful_bytes);
+    self
+  }
+
+  /// Set rabbit hole metrics.
+  pub fn set_rabbit_holes(mut self, max_consecutive: usize, total_steps: usize, ratio: f64) -> Self {
+    self.max_consecutive_failures = Some(max_consecutive);
+    self.rabbit_hole_steps = Some(total_steps);
+    self.rabbit_hole_ratio = Some(ratio);
+    self
+  }
+
   /// Build the final metrics.
   pub fn build(self) -> AccuracyMetrics {
     // Calculate file recall
@@ -238,6 +286,14 @@ impl AccuracyMetricsBuilder {
       context_bloat: self.context_bloat.unwrap_or(0.0),
       navigation_efficiency: self.navigation_efficiency.unwrap_or(1.0),
       dead_end_ratio: self.dead_end_ratio.unwrap_or(0.0),
+      // Context budget metrics
+      context_budget_efficiency: self.context_budget_efficiency.unwrap_or(1.0),
+      total_bytes_returned: self.total_bytes_returned.unwrap_or(0),
+      useful_bytes_returned: self.useful_bytes_returned.unwrap_or(0),
+      // Rabbit hole metrics
+      max_consecutive_failures: self.max_consecutive_failures.unwrap_or(0),
+      rabbit_hole_steps: self.rabbit_hole_steps.unwrap_or(0),
+      rabbit_hole_ratio: self.rabbit_hole_ratio.unwrap_or(0.0),
       // Debug fields
       files_found,
       files_missed,

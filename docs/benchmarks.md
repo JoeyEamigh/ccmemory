@@ -42,7 +42,7 @@ Options:
   -o, --output <DIR>         Output directory for results [default: ./benchmark-results]
   -s, --scenarios <PATTERN>  Filter scenarios by glob pattern
       --parallel             Run scenarios concurrently
-      --llm-judge            Enable LLM-as-judge evaluation (not yet implemented)
+      --llm-judge            Enable LLM-as-judge evaluation
       --scenarios-dir <DIR>  Custom scenarios directory
       --name <NAME>          Name for this benchmark run
 ```
@@ -204,6 +204,100 @@ max_dead_end_ratio = 0.2        # Max % of wasted queries
 | **Context Bloat** | % of context calls that provided no new information | <= 30% |
 | **Dead End Ratio** | % of queries that found nothing useful | <= 20% |
 | **Info Gain** | Average new discoveries per step | >= 0.3 |
+
+### Context Budget Metrics
+
+| Metric | Description | Target |
+|--------|-------------|--------|
+| **Context Budget Efficiency** | useful_bytes / total_bytes returned | >= 50% |
+| **Total Bytes Returned** | Cumulative bytes across all explore/context calls | - |
+| **Useful Bytes** | Bytes containing expected symbols/files | - |
+
+### Path-Based Failure Metrics (Rabbit Holes)
+
+| Metric | Description | Target |
+|--------|-------------|--------|
+| **Max Consecutive Failures** | Longest streak of steps without finding expected items | <= 3 |
+| **Rabbit Hole Steps** | Total steps spent in rabbit holes (2+ consecutive failures) | <= 2 |
+| **Rabbit Hole Ratio** | % of steps spent in rabbit holes | <= 20% |
+
+### LLM Comprehension Metrics
+
+| Metric | Description | Target |
+|--------|-------------|--------|
+| **Comprehension Score** | Weighted average of question scores | >= 60% |
+| **Concepts Found** | % of expected concepts mentioned in answers | >= 70% |
+| **Wrong Concepts** | Incorrect concepts indicating misunderstanding | 0 |
+
+## Adaptive Exploration Templates
+
+Steps can use templates to build queries based on previous step results:
+
+```toml
+[[steps]]
+query = "What does {{previous.symbol}} do?"
+depends_on_previous = true
+
+[[steps]]
+query = "Show me the implementation of {{previous.symbols[0]}}"
+context_ids = ["{{previous.id}}"]
+```
+
+Available templates:
+- `{{previous.symbol}}` - First symbol from previous step
+- `{{previous.symbols[N]}}` - Nth symbol from previous step
+- `{{previous.file}}` - First file from previous step
+- `{{previous.files[N]}}` - Nth file from previous step
+- `{{previous.id}}` - First result ID from previous step
+- `{{previous.caller}}` - First caller symbol from previous context
+- `{{previous.callee}}` - First callee symbol from previous context
+
+## Blind Exploration Scenarios
+
+For testing true discovery capability without prior knowledge:
+
+```toml
+[scenario]
+id = "zed-blind-exploration"
+name = "Blind Exploration of Zed Editor"
+difficulty = "hard"
+
+[[steps]]
+# Generic questions - no codebase-specific terms
+query = "What is the main entry point of this application?"
+
+[[steps]]
+query = "How is the user interface organized?"
+depends_on_previous = true
+
+[[steps]]
+# Adaptive template - follow what was discovered
+query = "What does {{previous.symbol}} do?"
+depends_on_previous = true
+```
+
+## LLM-as-Judge Comprehension Testing
+
+Test whether exploration results enable understanding:
+
+```toml
+[llm_judge]
+min_comprehension_score = 0.6
+
+[[llm_judge.comprehension_questions]]
+question = "How are commands represented?"
+expected_concepts = ["Action", "trait", "dispatch"]
+wrong_concepts = ["Command pattern"]
+weight = 1.0
+```
+
+Run with `--llm-judge` flag:
+
+```bash
+cargo run -p benchmark -- run --llm-judge --output ./results
+```
+
+Requires the `claude` CLI to be available in your PATH (same as the existing `llm` crate).
 
 ## Ground Truth
 
