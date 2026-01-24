@@ -187,6 +187,15 @@ impl App {
         if let Ok(health) = client.health_check().await {
           self.dashboard.set_health(health);
         }
+        if let Ok(watch) = client.watch_status().await {
+          self.dashboard.set_watch_status(watch);
+        }
+        if let Ok(stats) = client.code_stats().await {
+          self.dashboard.set_code_stats(stats);
+        }
+        if let Ok(metrics) = client.metrics().await {
+          self.dashboard.set_daemon_metrics(metrics);
+        }
         self.dashboard.loading = false;
       }
       View::Memory => {
@@ -696,8 +705,9 @@ pub async fn run(project_path: PathBuf) -> Result<()> {
   // Initial data load
   app.refresh_current_view().await;
 
-  // Event loop
-  let mut refresh_interval = interval(Duration::from_secs(30));
+  // Event loop with adaptive refresh
+  let mut current_refresh_interval = Duration::from_secs(30);
+  let mut refresh_interval = interval(current_refresh_interval);
 
   loop {
     // Draw
@@ -709,6 +719,15 @@ pub async fn run(project_path: PathBuf) -> Result<()> {
     tokio::select! {
         _ = refresh_interval.tick() => {
             app.refresh_current_view().await;
+
+            // Check if refresh interval should change (only on Dashboard view)
+            if app.current_view == View::Dashboard {
+                let suggested = app.dashboard.suggested_refresh_interval();
+                if suggested != current_refresh_interval {
+                    current_refresh_interval = suggested;
+                    refresh_interval = interval(current_refresh_interval);
+                }
+            }
         }
         result = tokio::task::spawn_blocking(|| {
             if event::poll(Duration::from_millis(100)).ok()? {

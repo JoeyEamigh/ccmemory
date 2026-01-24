@@ -69,9 +69,10 @@ pub async fn cmd_watch(
             && let (Some(processed), Some(total)) = (
               progress.get(0).and_then(|v| v.as_u64()),
               progress.get(1).and_then(|v| v.as_u64()),
-            ) {
-              println!("  Progress: {}/{}", processed, total);
-            }
+            )
+          {
+            println!("  Progress: {}/{}", processed, total);
+          }
         }
         if let Some(paths) = result.get("watched_paths").and_then(|v| v.as_u64()) {
           println!("Watched Paths: {}", paths);

@@ -323,7 +323,11 @@ impl MarkdownReport {
           );
         }
         None => {
-          let _ = writeln!(out, "| {} | ➖ N/A | - | - | No comprehension questions defined |", result.scenario_id);
+          let _ = writeln!(
+            out,
+            "| {} | ➖ N/A | - | - | No comprehension questions defined |",
+            result.scenario_id
+          );
         }
       }
     }

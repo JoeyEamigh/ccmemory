@@ -369,7 +369,10 @@ impl ProjectRegistry {
 
       if scan_config.blocking {
         // Blocking mode: run scan before starting watcher
-        info!("Running blocking startup scan for project {} ({} indexed chunks)", id, chunk_count);
+        info!(
+          "Running blocking startup scan for project {} ({} indexed chunks)",
+          id, chunk_count
+        );
 
         match scanner.scan(&db, root).await {
           Ok(result) => {
@@ -406,7 +409,10 @@ impl ProjectRegistry {
         }
       } else {
         // Non-blocking mode: start scan in background
-        info!("Starting background startup scan for project {} ({} indexed chunks)", id, chunk_count);
+        info!(
+          "Starting background startup scan for project {} ({} indexed chunks)",
+          id, chunk_count
+        );
 
         let db_clone = Arc::clone(&db);
         let root_clone = root.to_path_buf();
@@ -427,7 +433,10 @@ impl ProjectRegistry {
                   result.modified.len()
                 );
 
-                if let Err(e) = scanner.apply(&result, &db_clone, &root_clone, embedding_clone, &config_clone).await {
+                if let Err(e) = scanner
+                  .apply(&result, &db_clone, &root_clone, embedding_clone, &config_clone)
+                  .await
+                {
                   warn!("Failed to apply startup scan results: {}", e);
                 }
               } else {
@@ -572,10 +581,7 @@ impl ProjectRegistry {
   /// Check if a startup scan is in progress for a project
   pub async fn is_scanning(&self, id: &str) -> bool {
     let scan_states = self.scan_states.read().await;
-    scan_states
-      .get(id)
-      .map(|state| state.is_in_progress())
-      .unwrap_or(false)
+    scan_states.get(id).map(|state| state.is_in_progress()).unwrap_or(false)
   }
 
   /// Wait for the startup scan to complete for a project
@@ -872,10 +878,17 @@ async fn finalize_file_change(
         .collect();
 
       if let Err(e) = db.add_document_chunks(&doc.chunks, &vectors).await {
-        warn!("Failed to batch insert document chunks for {}: {}", doc.relative_path, e);
+        warn!(
+          "Failed to batch insert document chunks for {}: {}",
+          doc.relative_path, e
+        );
         (false, false)
       } else {
-        debug!("Batch inserted {} document chunks for {}", doc.chunks.len(), doc.relative_path);
+        debug!(
+          "Batch inserted {} document chunks for {}",
+          doc.chunks.len(),
+          doc.relative_path
+        );
         (false, true)
       }
     }

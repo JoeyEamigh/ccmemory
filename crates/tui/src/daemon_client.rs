@@ -368,4 +368,28 @@ impl DaemonClient {
 
     Ok(())
   }
+
+  /// Get file watcher status
+  pub async fn watch_status(&mut self) -> Result<Value> {
+    let response = self.call("watch_status", serde_json::json!({})).await?;
+    response.result.ok_or_else(|| {
+      let msg = response
+        .error
+        .map(|e| e.message)
+        .unwrap_or_else(|| "Unknown error".to_string());
+      anyhow::anyhow!("{}", msg)
+    })
+  }
+
+  /// Get daemon metrics
+  pub async fn metrics(&mut self) -> Result<Value> {
+    let response = self.call("metrics", serde_json::json!({})).await?;
+    response.result.ok_or_else(|| {
+      let msg = response
+        .error
+        .map(|e| e.message)
+        .unwrap_or_else(|| "Unknown error".to_string());
+      anyhow::anyhow!("{}", msg)
+    })
+  }
 }

@@ -7,6 +7,7 @@ use ratatui::{
   widgets::{Block, Borders, Widget},
 };
 use serde_json::Value;
+use std::time::Duration;
 
 /// Dashboard view state
 #[derive(Debug, Default)]
@@ -16,6 +17,22 @@ pub struct DashboardState {
   pub recent_activity: Vec<ActivityItem>,
   pub loading: bool,
   pub error: Option<String>,
+
+  // Watcher status
+  pub watcher_running: bool,
+  pub watcher_scanning: bool,
+  pub watcher_pending_changes: usize,
+  pub watcher_scan_progress: Option<(usize, usize)>, // (processed, total)
+
+  // Index quality (from code_stats)
+  pub index_health_score: u32,
+  pub index_total_lines: u64,
+
+  // Daemon metrics
+  pub daemon_uptime_seconds: u64,
+  pub daemon_requests_per_second: f64,
+  pub daemon_memory_kb: Option<u64>,
+  pub daemon_active_sessions: usize,
 }
 
 /// A recent activity item
@@ -137,6 +154,59 @@ impl DashboardState {
       .and_then(|a| a.as_bool())
       .unwrap_or(false)
   }
+
+  /// Update watch status from daemon response
+  pub fn set_watch_status(&mut self, status: Value) {
+    self.watcher_running = status.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
+    self.watcher_scanning = status.get("scanning").and_then(|v| v.as_bool()).unwrap_or(false);
+    self.watcher_pending_changes = status.get("pending_changes").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+    // Parse scan progress if available
+    if let Some(progress) = status.get("scan_progress") {
+      let processed = progress.get("processed").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+      let total = progress.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+      if total > 0 {
+        self.watcher_scan_progress = Some((processed, total));
+      } else {
+        self.watcher_scan_progress = None;
+      }
+    } else {
+      self.watcher_scan_progress = None;
+    }
+  }
+
+  /// Update code stats (extracts health score and total lines)
+  pub fn set_code_stats(&mut self, stats: Value) {
+    self.index_health_score = stats.get("health_score").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    self.index_total_lines = stats.get("total_lines").and_then(|v| v.as_u64()).unwrap_or(0);
+  }
+
+  /// Update daemon metrics from daemon response
+  pub fn set_daemon_metrics(&mut self, metrics: Value) {
+    self.daemon_uptime_seconds = metrics.get("uptime_seconds").and_then(|v| v.as_u64()).unwrap_or(0);
+    self.daemon_requests_per_second = metrics
+      .get("requests_per_second")
+      .and_then(|v| v.as_f64())
+      .unwrap_or(0.0);
+    self.daemon_memory_kb = metrics.get("memory_kb").and_then(|v| v.as_u64());
+    self.daemon_active_sessions = metrics.get("active_sessions").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+  }
+
+  /// Check if we need fast refresh (scanning or pending changes)
+  pub fn needs_fast_refresh(&self) -> bool {
+    self.watcher_scanning || self.watcher_pending_changes > 0
+  }
+
+  /// Get suggested refresh interval based on current state
+  pub fn suggested_refresh_interval(&self) -> Duration {
+    if self.watcher_scanning {
+      Duration::from_secs(2)
+    } else if self.watcher_pending_changes > 0 {
+      Duration::from_secs(5)
+    } else {
+      Duration::from_secs(30)
+    }
+  }
 }
 
 /// Dashboard view widget
@@ -158,14 +228,18 @@ impl Widget for DashboardView<'_> {
       return;
     }
 
-    // Main layout: stats row + activity section
+    // Main layout: two stats rows + activity section
     let chunks = Layout::default()
       .direction(Direction::Vertical)
-      .constraints([Constraint::Length(8), Constraint::Min(5)])
+      .constraints([
+        Constraint::Length(7), // Row 1: existing cards
+        Constraint::Length(7), // Row 2: new cards
+        Constraint::Min(5),    // Activity section
+      ])
       .split(area);
 
-    // Stats row: three stat cards
-    let stat_chunks = Layout::default()
+    // Row 1: Memories, Code Index, Health
+    let row1_chunks = Layout::default()
       .direction(Direction::Horizontal)
       .constraints([
         Constraint::Percentage(33),
@@ -174,17 +248,26 @@ impl Widget for DashboardView<'_> {
       ])
       .split(chunks[0]);
 
-    // Memory stats card
-    self.render_memory_card(stat_chunks[0], buf);
+    self.render_memory_card(row1_chunks[0], buf);
+    self.render_code_card(row1_chunks[1], buf);
+    self.render_health_card(row1_chunks[2], buf);
 
-    // Code stats card
-    self.render_code_card(stat_chunks[1], buf);
+    // Row 2: File Watcher, Index Quality, Daemon
+    let row2_chunks = Layout::default()
+      .direction(Direction::Horizontal)
+      .constraints([
+        Constraint::Percentage(33),
+        Constraint::Percentage(33),
+        Constraint::Percentage(34),
+      ])
+      .split(chunks[1]);
 
-    // Health card
-    self.render_health_card(stat_chunks[2], buf);
+    self.render_watcher_card(row2_chunks[0], buf);
+    self.render_index_quality_card(row2_chunks[1], buf);
+    self.render_daemon_card(row2_chunks[2], buf);
 
     // Recent activity section
-    self.render_activity(chunks[1], buf);
+    self.render_activity(chunks[2], buf);
   }
 }
 
@@ -331,6 +414,156 @@ impl DashboardView<'_> {
     }
   }
 
+  fn render_watcher_card(&self, area: Rect, buf: &mut Buffer) {
+    let block = Block::default()
+      .title("FILE WATCHER")
+      .title_style(Style::default().fg(Theme::EPISODIC).bold())
+      .borders(Borders::ALL)
+      .border_style(Style::default().fg(Theme::OVERLAY));
+
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    let mut y = inner.y;
+
+    // Status indicator
+    let (indicator, status_text, color) = if self.state.watcher_scanning {
+      ("◐", "Scanning", Theme::WARNING)
+    } else if self.state.watcher_running {
+      ("●", "Running", Theme::SUCCESS)
+    } else {
+      ("○", "Stopped", Theme::MUTED)
+    };
+
+    buf.set_string(inner.x, y, "Status: ", Style::default().fg(Theme::TEXT));
+    buf.set_string(
+      inner.x + 8,
+      y,
+      format!("{} {}", indicator, status_text),
+      Style::default().fg(color),
+    );
+    y += 1;
+
+    // Scan progress bar (when scanning)
+    if let Some((processed, total)) = self.state.watcher_scan_progress
+      && total > 0
+      && y < inner.y + inner.height
+    {
+      let pct = (processed as f32 / total as f32 * 100.0).min(100.0);
+      let progress_text = format!("Progress: {:.0}%", pct);
+      buf.set_string(inner.x, y, &progress_text, Style::default().fg(Theme::TEXT));
+      y += 1;
+
+      // Simple progress bar
+      if y < inner.y + inner.height {
+        let bar_width = inner.width.min(15) as usize;
+        let filled = (pct / 100.0 * bar_width as f32) as usize;
+        let bar: String = "█".repeat(filled) + &"░".repeat(bar_width.saturating_sub(filled));
+        buf.set_string(inner.x, y, &bar, Style::default().fg(Theme::ACCENT));
+        y += 1;
+      }
+    }
+
+    // Pending changes
+    if y < inner.y + inner.height {
+      let pending = self.state.watcher_pending_changes;
+      let pending_color = if pending > 0 { Theme::WARNING } else { Theme::TEXT };
+      let line = format!("Pending: {}", pending);
+      buf.set_string(inner.x, y, &line, Style::default().fg(pending_color));
+    }
+  }
+
+  fn render_index_quality_card(&self, area: Rect, buf: &mut Buffer) {
+    let block = Block::default()
+      .title("INDEX QUALITY")
+      .title_style(Style::default().fg(Theme::REFLECTIVE).bold())
+      .borders(Borders::ALL)
+      .border_style(Style::default().fg(Theme::OVERLAY));
+
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    let mut y = inner.y;
+
+    // Health score with color coding
+    let score = self.state.index_health_score;
+    let score_color = if score >= 80 {
+      Theme::SUCCESS
+    } else if score >= 50 {
+      Theme::WARNING
+    } else {
+      Theme::ERROR
+    };
+
+    buf.set_string(inner.x, y, "Health: ", Style::default().fg(Theme::TEXT));
+    buf.set_string(inner.x + 8, y, format!("{}%", score), Style::default().fg(score_color));
+    y += 1;
+
+    // Health bar
+    if y < inner.y + inner.height {
+      let bar_width = inner.width.min(15) as usize;
+      let filled = (score as f32 / 100.0 * bar_width as f32) as usize;
+      let bar: String = "█".repeat(filled) + &"░".repeat(bar_width.saturating_sub(filled));
+      buf.set_string(inner.x, y, &bar, Style::default().fg(score_color));
+      y += 1;
+    }
+
+    // Total lines
+    if y < inner.y + inner.height {
+      let lines = self.state.index_total_lines;
+      let line = format!("Lines: {}", format_number(lines));
+      buf.set_string(inner.x, y, &line, Style::default().fg(Theme::TEXT));
+    }
+  }
+
+  fn render_daemon_card(&self, area: Rect, buf: &mut Buffer) {
+    let block = Block::default()
+      .title("DAEMON")
+      .title_style(Style::default().fg(Theme::INFO).bold())
+      .borders(Borders::ALL)
+      .border_style(Style::default().fg(Theme::OVERLAY));
+
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    let mut y = inner.y;
+
+    // Uptime
+    let uptime = format_duration(self.state.daemon_uptime_seconds);
+    buf.set_string(inner.x, y, "Uptime: ", Style::default().fg(Theme::TEXT));
+    buf.set_string(inner.x + 8, y, &uptime, Style::default().fg(Theme::SUCCESS));
+    y += 1;
+
+    // Requests per second
+    if y < inner.y + inner.height {
+      let rps = format!("{:.1}/s", self.state.daemon_requests_per_second);
+      buf.set_string(inner.x, y, "Req/s: ", Style::default().fg(Theme::TEXT));
+      buf.set_string(inner.x + 7, y, &rps, Style::default().fg(Theme::TEXT));
+      y += 1;
+    }
+
+    // Active sessions
+    if y < inner.y + inner.height {
+      let sessions = self.state.daemon_active_sessions;
+      buf.set_string(inner.x, y, "Sessions: ", Style::default().fg(Theme::TEXT));
+      buf.set_string(inner.x + 10, y, sessions.to_string(), Style::default().fg(Theme::TEXT));
+      y += 1;
+    }
+
+    // Memory usage (if available)
+    if let Some(mem_kb) = self.state.daemon_memory_kb
+      && y < inner.y + inner.height
+    {
+      let mem_str = if mem_kb >= 1024 {
+        format!("{:.1} MB", mem_kb as f64 / 1024.0)
+      } else {
+        format!("{} KB", mem_kb)
+      };
+      buf.set_string(inner.x, y, "Memory: ", Style::default().fg(Theme::TEXT));
+      buf.set_string(inner.x + 8, y, &mem_str, Style::default().fg(Theme::TEXT));
+    }
+  }
+
   fn render_activity(&self, area: Rect, buf: &mut Buffer) {
     let block = Block::default()
       .title("RECENT ACTIVITY")
@@ -397,5 +630,18 @@ fn format_number(n: u64) -> String {
     format!("{:.1}K", n as f64 / 1_000.0)
   } else {
     n.to_string()
+  }
+}
+
+fn format_duration(seconds: u64) -> String {
+  let hours = seconds / 3600;
+  let minutes = (seconds % 3600) / 60;
+
+  if hours > 0 {
+    format!("{}h {}m", hours, minutes)
+  } else if minutes > 0 {
+    format!("{}m", minutes)
+  } else {
+    format!("{}s", seconds)
   }
 }

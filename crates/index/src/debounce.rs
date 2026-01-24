@@ -183,7 +183,8 @@ impl DebouncedWatcher {
       } else {
         let debounce = Duration::from_millis(self.config.file_debounce_ms);
         let now = Instant::now();
-        self.pending
+        self
+          .pending
           .values()
           .map(|p| debounce.saturating_sub(now.duration_since(p.last_seen)))
           .min()

@@ -50,9 +50,10 @@ impl ToolHandler {
       scan_config.enabled = enabled;
     }
     if let Some(ref mode_str) = args.startup_scan_mode
-      && let Ok(mode) = mode_str.parse::<ScanMode>() {
-        scan_config.mode = mode;
-      }
+      && let Ok(mode) = mode_str.parse::<ScanMode>()
+    {
+      scan_config.mode = mode;
+    }
     if let Some(blocking) = args.startup_scan_blocking {
       scan_config.blocking = blocking;
     }

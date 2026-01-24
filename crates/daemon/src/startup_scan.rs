@@ -11,13 +11,13 @@
 use crate::projects::{FileChangeContext, process_file_changes_batched};
 use db::ProjectDb;
 use embedding::EmbeddingProvider;
-pub use engram_core::ScanMode;
 use engram_core::Config;
-use index::{Scanner, GITIGNORE_CACHE};
+pub use engram_core::ScanMode;
+use index::{GITIGNORE_CACHE, Scanner};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -106,10 +106,21 @@ pub struct FilesystemFile {
 /// Classification of a file change
 #[derive(Debug, Clone)]
 pub enum FileChange {
-  Deleted { path: String },
-  Added { path: String, hash: String },
-  Modified { path: String, old_hash: String, new_hash: String },
-  Unchanged { path: String },
+  Deleted {
+    path: String,
+  },
+  Added {
+    path: String,
+    hash: String,
+  },
+  Modified {
+    path: String,
+    old_hash: String,
+    new_hash: String,
+  },
+  Unchanged {
+    path: String,
+  },
 }
 
 /// Results from scanning
@@ -480,10 +491,7 @@ impl StartupScanner {
           apply_result.errors.push(format!("Delete error: {}", e));
         } else {
           apply_result.files_deleted += batch.len();
-          self
-            .state
-            .processed_files
-            .fetch_add(batch.len(), Ordering::Relaxed);
+          self.state.processed_files.fetch_add(batch.len(), Ordering::Relaxed);
         }
       }
     }
@@ -563,7 +571,6 @@ const BATCH_SIZE: usize = 100;
 #[cfg(test)]
 mod tests {
   use super::*;
-  
 
   #[test]
   fn test_scan_mode_from_str() {
@@ -772,10 +779,7 @@ mod tests {
       .iter()
       .filter(|c| matches!(c, FileChange::Deleted { .. }))
       .count();
-    let added_count = changes
-      .iter()
-      .filter(|c| matches!(c, FileChange::Added { .. }))
-      .count();
+    let added_count = changes.iter().filter(|c| matches!(c, FileChange::Added { .. })).count();
 
     assert_eq!(deleted_count, 1);
     assert_eq!(added_count, 0); // New files not detected in DeletedOnly mode
@@ -853,10 +857,7 @@ mod tests {
       .iter()
       .filter(|c| matches!(c, FileChange::Deleted { .. }))
       .count();
-    let added_count = changes
-      .iter()
-      .filter(|c| matches!(c, FileChange::Added { .. }))
-      .count();
+    let added_count = changes.iter().filter(|c| matches!(c, FileChange::Added { .. })).count();
     let modified_count = changes
       .iter()
       .filter(|c| matches!(c, FileChange::Modified { .. }))
@@ -938,7 +939,7 @@ mod tests {
     let filesystem = FilesystemFile {
       file_path: "a.rs".to_string(),
       current_hash: "new_hash".to_string(), // Different hash
-      mtime: 2000, // 2000 seconds since epoch (more recent than indexed_at)
+      mtime: 2000,                          // 2000 seconds since epoch (more recent than indexed_at)
       size: 100,
     };
 

@@ -318,7 +318,6 @@ pub struct IndexConfig {
   pub parallel_files: usize,
 
   // ---- Startup Scan Settings ----
-
   /// Enable startup scan when watcher starts (default: true)
   /// The scan reconciles the database with filesystem state to detect
   /// files that were added, modified, or deleted while the watcher was stopped.

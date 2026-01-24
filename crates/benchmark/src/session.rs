@@ -998,7 +998,13 @@ mod tests {
     // Record step with 5 different files - perfect diversity
     session.record_explore_step(
       "query",
-      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "id1".to_string(),
+        "id2".to_string(),
+        "id3".to_string(),
+        "id4".to_string(),
+        "id5".to_string(),
+      ],
       &[
         "src/a.rs".to_string(),
         "src/b.rs".to_string(),
@@ -1011,7 +1017,11 @@ mod tests {
     );
 
     let diversity = session.calculate_step_file_diversity(0, 5);
-    assert!((diversity - 1.0).abs() < f64::EPSILON, "Expected 1.0, got {}", diversity);
+    assert!(
+      (diversity - 1.0).abs() < f64::EPSILON,
+      "Expected 1.0, got {}",
+      diversity
+    );
   }
 
   #[test]
@@ -1021,7 +1031,13 @@ mod tests {
     // Record step with 5 results all from the same file - worst diversity
     session.record_explore_step(
       "query",
-      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "id1".to_string(),
+        "id2".to_string(),
+        "id3".to_string(),
+        "id4".to_string(),
+        "id5".to_string(),
+      ],
       &[
         "src/same.rs".to_string(),
         "src/same.rs".to_string(),
@@ -1034,7 +1050,11 @@ mod tests {
     );
 
     let diversity = session.calculate_step_file_diversity(0, 5);
-    assert!((diversity - 0.2).abs() < f64::EPSILON, "Expected 0.2, got {}", diversity);
+    assert!(
+      (diversity - 0.2).abs() < f64::EPSILON,
+      "Expected 0.2, got {}",
+      diversity
+    );
   }
 
   #[test]
@@ -1044,7 +1064,13 @@ mod tests {
     // Record step with 3 unique files out of 5 results
     session.record_explore_step(
       "query",
-      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "id1".to_string(),
+        "id2".to_string(),
+        "id3".to_string(),
+        "id4".to_string(),
+        "id5".to_string(),
+      ],
       &[
         "src/a.rs".to_string(),
         "src/a.rs".to_string(),
@@ -1057,7 +1083,11 @@ mod tests {
     );
 
     let diversity = session.calculate_step_file_diversity(0, 5);
-    assert!((diversity - 0.6).abs() < f64::EPSILON, "Expected 0.6 (3/5), got {}", diversity);
+    assert!(
+      (diversity - 0.6).abs() < f64::EPSILON,
+      "Expected 0.6 (3/5), got {}",
+      diversity
+    );
   }
 
   #[test]
@@ -1075,7 +1105,11 @@ mod tests {
 
     // Should calculate diversity based on available results (2), not requested (5)
     let diversity = session.calculate_step_file_diversity(0, 5);
-    assert!((diversity - 1.0).abs() < f64::EPSILON, "Expected 1.0 (2 unique / 2 total), got {}", diversity);
+    assert!(
+      (diversity - 1.0).abs() < f64::EPSILON,
+      "Expected 1.0 (2 unique / 2 total), got {}",
+      diversity
+    );
   }
 
   #[test]
@@ -1087,7 +1121,11 @@ mod tests {
 
     // Empty results should return 1.0 (no diversity problem)
     let diversity = session.calculate_step_file_diversity(0, 5);
-    assert!((diversity - 1.0).abs() < f64::EPSILON, "Expected 1.0 for empty results, got {}", diversity);
+    assert!(
+      (diversity - 1.0).abs() < f64::EPSILON,
+      "Expected 1.0 for empty results, got {}",
+      diversity
+    );
   }
 
   #[test]
@@ -1096,7 +1134,11 @@ mod tests {
 
     // Query step that doesn't exist - should return 1.0
     let diversity = session.calculate_step_file_diversity(99, 5);
-    assert!((diversity - 1.0).abs() < f64::EPSILON, "Expected 1.0 for missing step, got {}", diversity);
+    assert!(
+      (diversity - 1.0).abs() < f64::EPSILON,
+      "Expected 1.0 for missing step, got {}",
+      diversity
+    );
   }
 
   #[test]
@@ -1106,7 +1148,13 @@ mod tests {
     // Step 0: Perfect diversity (5 unique)
     session.record_explore_step(
       "query1",
-      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "id1".to_string(),
+        "id2".to_string(),
+        "id3".to_string(),
+        "id4".to_string(),
+        "id5".to_string(),
+      ],
       &[
         "src/a.rs".to_string(),
         "src/b.rs".to_string(),
@@ -1121,7 +1169,13 @@ mod tests {
     // Step 1: Worst diversity (all same)
     session.record_explore_step(
       "query2",
-      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "id1".to_string(),
+        "id2".to_string(),
+        "id3".to_string(),
+        "id4".to_string(),
+        "id5".to_string(),
+      ],
       &[
         "src/same.rs".to_string(),
         "src/same.rs".to_string(),
@@ -1135,7 +1189,11 @@ mod tests {
 
     // Average should be (1.0 + 0.2) / 2 = 0.6
     let avg_diversity = session.calculate_avg_file_diversity();
-    assert!((avg_diversity - 0.6).abs() < f64::EPSILON, "Expected 0.6 average, got {}", avg_diversity);
+    assert!(
+      (avg_diversity - 0.6).abs() < f64::EPSILON,
+      "Expected 0.6 average, got {}",
+      avg_diversity
+    );
   }
 
   #[test]
@@ -1145,7 +1203,13 @@ mod tests {
     // Record step with 3 unique files out of 5
     session.record_explore_step(
       "query",
-      &["id1".to_string(), "id2".to_string(), "id3".to_string(), "id4".to_string(), "id5".to_string()],
+      &[
+        "id1".to_string(),
+        "id2".to_string(),
+        "id3".to_string(),
+        "id4".to_string(),
+        "id5".to_string(),
+      ],
       &[
         "src/a.rs".to_string(),
         "src/a.rs".to_string(),
@@ -1162,6 +1226,10 @@ mod tests {
     let metrics = session.compute_accuracy_metrics(&expected, &criteria);
 
     // Should include file diversity metric
-    assert!((metrics.avg_file_diversity_top5 - 0.6).abs() < f64::EPSILON, "Expected 0.6 in metrics, got {}", metrics.avg_file_diversity_top5);
+    assert!(
+      (metrics.avg_file_diversity_top5 - 0.6).abs() < f64::EPSILON,
+      "Expected 0.6 in metrics, got {}",
+      metrics.avg_file_diversity_top5
+    );
   }
 }

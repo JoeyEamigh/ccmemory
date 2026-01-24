@@ -229,11 +229,7 @@ impl BenchmarkReport {
       avg_context_bloat: results.iter().map(|r| r.accuracy.context_bloat).sum::<f64>() / n,
       avg_dead_end_ratio: results.iter().map(|r| r.accuracy.dead_end_ratio).sum::<f64>() / n,
       avg_time_to_first_relevant_ms,
-      avg_file_diversity_top5: results
-        .iter()
-        .map(|r| r.accuracy.avg_file_diversity_top5)
-        .sum::<f64>()
-        / n,
+      avg_file_diversity_top5: results.iter().map(|r| r.accuracy.avg_file_diversity_top5).sum::<f64>() / n,
       avg_comprehension_score,
       comprehension_scenarios_count: comprehension_scores.len(),
     }
