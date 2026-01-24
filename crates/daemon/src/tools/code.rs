@@ -754,8 +754,86 @@ impl ToolHandler {
             debug!("Gitignore changed, starting fresh index");
             None
           } else if cp.is_complete {
-            debug!("Previous indexing complete, starting fresh");
-            None
+            // Previous indexing complete - do incremental update
+            debug!("Previous indexing complete, checking for changes");
+
+            // Get existing file hashes from database
+            let indexed_hashes = match db.get_indexed_file_hashes().await {
+              Ok(h) => h,
+              Err(e) => {
+                warn!("Failed to get indexed file hashes: {}", e);
+                std::collections::HashMap::new()
+              }
+            };
+
+            // Build set of current file paths for deletion detection
+            let current_files: std::collections::HashSet<_> =
+              scan_result.files.iter().map(|f| f.relative_path.as_str()).collect();
+
+            // Find files that need re-indexing (new or changed)
+            let mut pending = Vec::new();
+            for file in &scan_result.files {
+              match indexed_hashes.get(&file.relative_path) {
+                Some(stored_hash) if stored_hash == &file.checksum => {
+                  // File unchanged, skip
+                }
+                Some(_) => {
+                  // File changed, need to re-index
+                  debug!("File changed: {}", file.relative_path);
+                  pending.push(file.relative_path.clone());
+                }
+                None => {
+                  // New file
+                  debug!("New file: {}", file.relative_path);
+                  pending.push(file.relative_path.clone());
+                }
+              }
+            }
+
+            // Find and delete chunks for files that no longer exist
+            let deleted_files: Vec<&str> = indexed_hashes
+              .keys()
+              .filter(|path| !current_files.contains(path.as_str()))
+              .map(|s| s.as_str())
+              .collect();
+
+            if !deleted_files.is_empty() {
+              debug!("Removing {} deleted files from index", deleted_files.len());
+              if let Err(e) = db.delete_chunks_for_files(&deleted_files).await {
+                warn!("Failed to delete chunks for removed files: {}", e);
+              }
+            }
+
+            if pending.is_empty() {
+              debug!("No changes detected, index is up to date");
+              // Return early - nothing to do
+              return Response::success(
+                request.id,
+                serde_json::json!({
+                  "indexed_files": 0,
+                  "total_chunks": 0,
+                  "skipped_files": scan_result.files.len(),
+                  "deleted_files": deleted_files.len(),
+                  "message": "Index is up to date"
+                }),
+              );
+            }
+
+            debug!("{} files need re-indexing", pending.len());
+
+            // Delete chunks for files that will be re-indexed
+            let pending_refs: Vec<&str> = pending.iter().map(|s| s.as_str()).collect();
+            if let Err(e) = db.delete_chunks_for_files(&pending_refs).await {
+              warn!("Failed to delete chunks for changed files: {}", e);
+            }
+
+            // Create checkpoint with only changed files
+            let mut new_cp = IndexCheckpoint::new(project_id, CheckpointType::Code, pending);
+            new_cp.gitignore_hash = current_gitignore_hash.clone();
+            if let Err(e) = db.save_checkpoint(&new_cp).await {
+              warn!("Failed to save checkpoint: {}", e);
+            }
+            Some(new_cp)
           } else {
             debug!("Resuming from checkpoint: {}% complete", cp.progress_percent());
             Some(cp)
@@ -774,10 +852,10 @@ impl ToolHandler {
     // If force or no checkpoint, clear existing chunks and create new checkpoint
     if force || checkpoint.is_none() {
       if force {
-        for file in &scan_result.files {
-          if let Err(e) = db.delete_chunks_for_file(&file.relative_path).await {
-            warn!("Failed to clear chunks for {}: {}", file.relative_path, e);
-          }
+        // Batch delete all chunks for files being indexed
+        let file_paths: Vec<&str> = scan_result.files.iter().map(|f| f.relative_path.as_str()).collect();
+        if let Err(e) = db.delete_chunks_for_files(&file_paths).await {
+          warn!("Failed to clear chunks: {}", e);
         }
         // Clear any existing checkpoint
         let _ = db.clear_checkpoint(project_id, CheckpointType::Code).await;
@@ -786,7 +864,7 @@ impl ToolHandler {
       // Create new checkpoint with all files
       let pending: Vec<String> = scan_result.files.iter().map(|f| f.relative_path.clone()).collect();
       let mut new_cp = IndexCheckpoint::new(project_id, CheckpointType::Code, pending);
-      new_cp.gitignore_hash = current_gitignore_hash;
+      new_cp.gitignore_hash = current_gitignore_hash.clone();
       if let Err(e) = db.save_checkpoint(&new_cp).await {
         warn!("Failed to save checkpoint: {}", e);
       }
@@ -1015,7 +1093,7 @@ impl ToolHandler {
       return;
     }
 
-    // Checkpoint management (same as non-streaming version)
+    // Checkpoint management with incremental update support
     let mut checkpoint = if resume && !force {
       match db.get_checkpoint(project_id, CheckpointType::Code).await {
         Ok(Some(cp)) => {
@@ -1023,8 +1101,89 @@ impl ToolHandler {
             debug!("Gitignore changed, starting fresh index");
             None
           } else if cp.is_complete {
-            debug!("Previous indexing complete, starting fresh");
-            None
+            // Previous indexing complete - do incremental update
+            debug!("Previous indexing complete, checking for changes");
+
+            // Get existing file hashes from database
+            let indexed_hashes = match db.get_indexed_file_hashes().await {
+              Ok(h) => h,
+              Err(e) => {
+                warn!("Failed to get indexed file hashes: {}", e);
+                std::collections::HashMap::new()
+              }
+            };
+
+            // Build set of current file paths for deletion detection
+            let current_files: std::collections::HashSet<_> =
+              scan_result.files.iter().map(|f| f.relative_path.as_str()).collect();
+
+            // Find files that need re-indexing (new or changed)
+            let mut pending = Vec::new();
+            for file in &scan_result.files {
+              match indexed_hashes.get(&file.relative_path) {
+                Some(stored_hash) if stored_hash == &file.checksum => {
+                  // File unchanged, skip
+                }
+                Some(_) => {
+                  // File changed, need to re-index
+                  debug!("File changed: {}", file.relative_path);
+                  pending.push(file.relative_path.clone());
+                }
+                None => {
+                  // New file
+                  debug!("New file: {}", file.relative_path);
+                  pending.push(file.relative_path.clone());
+                }
+              }
+            }
+
+            // Find and delete chunks for files that no longer exist
+            let deleted_files: Vec<&str> = indexed_hashes
+              .keys()
+              .filter(|path| !current_files.contains(path.as_str()))
+              .map(|s| s.as_str())
+              .collect();
+
+            if !deleted_files.is_empty() {
+              debug!("Removing {} deleted files from index", deleted_files.len());
+              if let Err(e) = db.delete_chunks_for_files(&deleted_files).await {
+                warn!("Failed to delete chunks for removed files: {}", e);
+              }
+            }
+
+            if pending.is_empty() {
+              debug!("No changes detected, index is up to date");
+              // Return early - nothing to do
+              let _ = progress_tx
+                .send(Response::success(
+                  request_id,
+                  serde_json::json!({
+                    "indexed_files": 0,
+                    "total_chunks": 0,
+                    "skipped_files": scan_result.files.len(),
+                    "deleted_files": deleted_files.len(),
+                    "message": "Index is up to date"
+                  }),
+                ))
+                .await;
+              return;
+            }
+
+            debug!("{} files need re-indexing", pending.len());
+
+            // Delete chunks for files that will be re-indexed
+            let pending_refs: Vec<&str> = pending.iter().map(|s| s.as_str()).collect();
+            if let Err(e) = db.delete_chunks_for_files(&pending_refs).await {
+              warn!("Failed to delete chunks for changed files: {}", e);
+            }
+
+            // Create checkpoint with only changed files
+            let mut new_cp = IndexCheckpoint::new(project_id, CheckpointType::Code, pending);
+            new_cp.gitignore_hash = current_gitignore_hash.clone();
+            if let Err(e) = db.save_checkpoint(&new_cp).await {
+              warn!("Failed to save checkpoint: {}", e);
+            }
+            Some(new_cp)
           } else {
             debug!("Resuming from checkpoint: {}% complete", cp.progress_percent());
             Some(cp)
@@ -1043,17 +1202,17 @@ impl ToolHandler {
     // Clear and create checkpoint if needed
     if force || checkpoint.is_none() {
       if force {
-        for file in &scan_result.files {
-          if let Err(e) = db.delete_chunks_for_file(&file.relative_path).await {
-            warn!("Failed to clear chunks for {}: {}", file.relative_path, e);
-          }
+        // Batch delete all chunks for files being indexed
+        let file_paths: Vec<&str> = scan_result.files.iter().map(|f| f.relative_path.as_str()).collect();
+        if let Err(e) = db.delete_chunks_for_files(&file_paths).await {
+          warn!("Failed to clear chunks: {}", e);
         }
         let _ = db.clear_checkpoint(project_id, CheckpointType::Code).await;
       }
 
       let pending: Vec<String> = scan_result.files.iter().map(|f| f.relative_path.clone()).collect();
       let mut new_cp = IndexCheckpoint::new(project_id, CheckpointType::Code, pending);
-      new_cp.gitignore_hash = current_gitignore_hash;
+      new_cp.gitignore_hash = current_gitignore_hash.clone();
       if let Err(e) = db.save_checkpoint(&new_cp).await {
         warn!("Failed to save checkpoint: {}", e);
       }

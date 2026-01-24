@@ -387,6 +387,38 @@ impl ProjectDb {
     self.list_code_chunks(Some(&filter), Some(10)).await
   }
 
+  /// Get a map of file paths to their file hashes for all indexed files
+  ///
+  /// Used for incremental indexing: compare current file hashes against
+  /// stored hashes to determine which files need re-indexing.
+  pub async fn get_indexed_file_hashes(&self) -> Result<std::collections::HashMap<String, String>> {
+    let table = self.code_chunks_table().await?;
+
+    // Query all chunks, but we only need file_path and file_hash
+    let results: Vec<RecordBatch> = table.query().execute().await?.try_collect().await?;
+
+    let mut file_hashes = std::collections::HashMap::new();
+    for batch in results {
+      let file_paths = batch
+        .column_by_name("file_path")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+      let hashes = batch
+        .column_by_name("file_hash")
+        .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+
+      if let (Some(paths), Some(hashes)) = (file_paths, hashes) {
+        for i in 0..batch.num_rows() {
+          let path = paths.value(i).to_string();
+          let hash = hashes.value(i).to_string();
+          // Use first seen hash for each file (all chunks from same file have same hash)
+          file_hashes.entry(path).or_insert(hash);
+        }
+      }
+    }
+
+    Ok(file_hashes)
+  }
+
   /// Get a code chunk by ID or prefix
   ///
   /// First tries exact match, then falls back to prefix matching.
