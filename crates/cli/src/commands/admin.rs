@@ -604,11 +604,14 @@ pub async fn cmd_config_init(preset: &str) -> Result<()> {
     std::fs::create_dir_all(parent)?;
   }
 
-  // Generate and write config
-  let template = Config::generate_template(tool_preset);
+  // Generate and write config (project template excludes daemon-level sections)
+  let template = Config::generate_project_template(tool_preset);
   std::fs::write(&config_path, &template)?;
 
   println!("Created project config: {:?}", config_path);
+  println!();
+  println!("Note: Daemon-level settings (embedding, daemon, hooks) should be");
+  println!("configured in ~/.config/ccengram/config.toml instead.");
   println!();
   println!("Tool preset: {}", preset);
   println!("Edit the file to customize settings.");

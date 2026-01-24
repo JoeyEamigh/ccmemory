@@ -1079,6 +1079,8 @@ pub(crate) async fn process_file_changes_batched(
   };
 
   // Phase 3: Finalize all files in parallel (insert with embeddings)
+  // No semaphore needed here - finalize is mostly in-memory vector assembly
+  // and DB writes (which are internally serialized by LanceDB anyway)
   let embeddings = Arc::new(embeddings);
   let mut finalize_tasks = Vec::with_capacity(prepared_files.len());
 
@@ -1088,31 +1090,23 @@ pub(crate) async fn process_file_changes_batched(
     let project_id_clone = project_id.clone();
     let cache_clone = Arc::clone(&content_cache);
     let embeddings_clone = Arc::clone(&embeddings);
-    let sem_clone = Arc::clone(&semaphore);
 
     finalize_tasks.push(async move {
-      let _permit = sem_clone.acquire().await.ok()?;
-      Some(
-        finalize_file_change(
-          prepared,
-          db_clone,
-          root_clone,
-          project_id_clone,
-          cache_clone,
-          &embeddings_clone,
-          file_idx,
-          dim,
-        )
-        .await,
+      finalize_file_change(
+        prepared,
+        db_clone,
+        root_clone,
+        project_id_clone,
+        cache_clone,
+        &embeddings_clone,
+        file_idx,
+        dim,
       )
+      .await
     });
   }
 
-  let results: Vec<(bool, bool)> = futures::future::join_all(finalize_tasks)
-    .await
-    .into_iter()
-    .flatten()
-    .collect();
+  let results: Vec<(bool, bool)> = futures::future::join_all(finalize_tasks).await;
 
   // Count indexed files
   let mut code_count = 0;

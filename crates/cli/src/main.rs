@@ -304,6 +304,12 @@ enum Commands {
     /// Run in background (enables auto-shutdown, used by auto-start)
     #[arg(long, conflicts_with = "foreground")]
     background: bool,
+    /// Embedding provider override (ollama or openrouter)
+    #[arg(long, hide = true)]
+    embedding_provider: Option<String>,
+    /// OpenRouter API key override
+    #[arg(long, hide = true)]
+    openrouter_api_key: Option<String>,
   },
   /// MCP server (for Claude Code integration)
   Mcp,
@@ -528,7 +534,12 @@ async fn main() -> Result<()> {
   };
 
   match cli.command {
-    Commands::Daemon { foreground, background } => cmd_daemon(foreground, background).await,
+    Commands::Daemon {
+      foreground,
+      background,
+      embedding_provider,
+      openrouter_api_key,
+    } => cmd_daemon(foreground, background, embedding_provider, openrouter_api_key).await,
     Commands::Mcp => cmd_mcp().await,
     Commands::Hook { name } => cmd_hook(&name).await,
 

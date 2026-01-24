@@ -75,7 +75,7 @@ enum Commands {
   },
 
   /// Download repositories
-  Index {
+  Download {
     /// Repositories to download (comma-separated: zed,vscode or 'all')
     #[arg(short, long, default_value = "all")]
     repos: String,
@@ -89,8 +89,8 @@ enum Commands {
     cache_dir: Option<PathBuf>,
   },
 
-  /// Index repositories via daemon (with streaming progress)
-  IndexCode {
+  /// Index repositories (code and docs) via daemon
+  Index {
     /// Repositories to index (comma-separated: zed,vscode or 'all')
     #[arg(short, long, default_value = "all")]
     repos: String,
@@ -102,6 +102,15 @@ enum Commands {
     /// Cache directory for repositories
     #[arg(long)]
     cache_dir: Option<PathBuf>,
+
+    /// Embedding provider to use (ollama or openrouter)
+    #[arg(long, default_value = "ollama")]
+    embedding_provider: String,
+
+    /// OpenRouter API key (required if --embedding-provider=openrouter)
+    /// Falls back to OPENROUTER_API_KEY environment variable if not provided
+    #[arg(long)]
+    openrouter_api_key: Option<String>,
   },
 
   /// List available scenarios
@@ -181,16 +190,18 @@ async fn main() -> Result<()> {
       threshold,
       output,
     } => compare_results(baseline, current, threshold, output),
+    Commands::Download {
+      repos,
+      force,
+      cache_dir,
+    } => download_repos(repos, force, cache_dir).await,
     Commands::Index {
       repos,
       force,
       cache_dir,
-    } => index_repos(repos, force, cache_dir).await,
-    Commands::IndexCode {
-      repos,
-      force,
-      cache_dir,
-    } => index_code_streaming(repos, force, cache_dir).await,
+      embedding_provider,
+      openrouter_api_key,
+    } => index_repos_streaming(repos, force, cache_dir, embedding_provider, openrouter_api_key).await,
     Commands::List {
       scenarios_dir,
       detailed,
@@ -263,7 +274,7 @@ async fn run_benchmarks(
       Ok(path) => path,
       Err(e) => {
         anyhow::bail!(
-          "Repository {} not available. Run:\n  cargo run -p benchmark -- index --repos {}\nError: {}",
+          "Repository {} not available. Run:\n  cargo run -p benchmark -- download --repos {}\nError: {}",
           repo,
           repo,
           e
@@ -274,7 +285,7 @@ async fn run_benchmarks(
     // Check if repo is indexed (quick stats check)
     if let Err(e) = check_repo_indexed(&socket_path, &repo_path).await {
       anyhow::bail!(
-        "Repository {} not indexed. Run:\n  cargo run -p benchmark -- index-code --repos {}\nError: {}",
+        "Repository {} not indexed. Run:\n  cargo run -p benchmark -- index --repos {}\nError: {}",
         repo,
         repo,
         e
@@ -415,10 +426,67 @@ async fn check_repo_indexed(socket_path: &str, repo_path: &std::path::Path) -> R
   Ok(())
 }
 
-/// Index repositories with streaming progress display.
-async fn index_code_streaming(repos: String, force: bool, cache_dir: Option<PathBuf>) -> Result<()> {
-  use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+/// Start the daemon with a specific embedding provider.
+async fn start_daemon_with_provider(provider: &str, api_key: Option<&str>) -> Result<()> {
+  use std::process::Stdio;
+  use tokio::process::Command;
+
+  let mut cmd = Command::new("ccengram");
+  cmd.arg("daemon");
+  cmd.arg("--background");
+  cmd.arg("--embedding-provider");
+  cmd.arg(provider);
+
+  if let Some(key) = api_key {
+    cmd.arg("--openrouter-api-key");
+    cmd.arg(key);
+  } else if provider == "openrouter" {
+    // Try to get from env
+    if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
+      cmd.arg("--openrouter-api-key");
+      cmd.arg(key);
+    }
+  }
+
+  cmd.stdin(Stdio::null());
+  cmd.stdout(Stdio::null());
+  cmd.stderr(Stdio::null());
+
+  let child = cmd.spawn()?;
+
+  // Detach the child process
+  drop(child);
+
+  Ok(())
+}
+
+/// Index repositories (code and docs) with streaming progress display.
+async fn index_repos_streaming(
+  repos: String,
+  force: bool,
+  cache_dir: Option<PathBuf>,
+  embedding_provider: String,
+  openrouter_api_key: Option<String>,
+) -> Result<()> {
   use tokio::net::UnixStream;
+
+  // Validate embedding provider settings
+  let provider = embedding_provider.to_lowercase();
+  match provider.as_str() {
+    "openrouter" => {
+      let has_key = openrouter_api_key.is_some() || std::env::var("OPENROUTER_API_KEY").is_ok();
+      if !has_key {
+        anyhow::bail!("OpenRouter API key required. Provide --openrouter-api-key or set OPENROUTER_API_KEY");
+      }
+      info!("Using OpenRouter embedding provider");
+    }
+    "ollama" => {
+      info!("Using Ollama embedding provider");
+    }
+    other => {
+      anyhow::bail!("Unknown embedding provider: {}. Use 'ollama' or 'openrouter'", other);
+    }
+  }
 
   let targets: Vec<TargetRepo> = if repos == "all" {
     TargetRepo::all().to_vec()
@@ -435,13 +503,21 @@ async fn index_code_streaming(repos: String, force: bool, cache_dir: Option<Path
 
   let socket_path = ScenarioRunner::default_socket_path();
 
-  // Check daemon is running
-  {
+  // Check if daemon is running, start it if not
+  if UnixStream::connect(&socket_path).await.is_err() {
+    info!("Daemon not running, starting with {} provider...", provider);
+    start_daemon_with_provider(&provider, openrouter_api_key.as_deref()).await?;
+
+    // Wait for daemon to be ready
+    for _ in 0..30 {
+      tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+      if UnixStream::connect(&socket_path).await.is_ok() {
+        break;
+      }
+    }
+
     if UnixStream::connect(&socket_path).await.is_err() {
-      anyhow::bail!(
-        "CCEngram daemon is not running. Start it with: ccengram daemon\nSocket: {}",
-        socket_path
-      );
+      anyhow::bail!("Failed to start daemon");
     }
   }
 
@@ -451,104 +527,164 @@ async fn index_code_streaming(repos: String, force: bool, cache_dir: Option<Path
       Ok(path) => path,
       Err(e) => {
         warn!("Repository {} not downloaded: {}", repo, e);
-        info!("Run: cargo run -p benchmark -- index --repos {}", repo);
+        info!("Run: cargo run -p benchmark -- download --repos {}", repo);
         continue;
       }
     };
 
-    info!("Indexing {} at {}", repo, repo_path.display());
+    let repo_config = RepoRegistry::get(repo);
 
-    // Connect to daemon
-    let mut stream = UnixStream::connect(&socket_path).await?;
+    // Index code
+    info!("Indexing code for {} at {}", repo, repo_path.display());
+    index_code_for_repo(&socket_path, &repo_path, force).await?;
 
-    // Send streaming index request
-    use ipc::{CodeIndexParams, CodeIndexResult, Method, Request, Response};
-
-    let request: Request<CodeIndexParams> = Request {
-      id: Some(1),
-      method: Method::CodeIndex,
-      params: CodeIndexParams {
-        cwd: Some(repo_path.to_string_lossy().to_string()),
-        force,
-        stream: true,
-      },
-    };
-
-    let request_str = serde_json::to_string(&request)?;
-    stream.write_all(request_str.as_bytes()).await?;
-    stream.write_all(b"\n").await?;
-    stream.flush().await?;
-
-    // Read streaming responses
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-
-    // Progress bar
-    let pb = ProgressBar::new(100);
-    pb.set_style(
-      ProgressStyle::default_bar()
-        .template("{spinner:.green} {msg:40} [{bar:30.cyan/blue}] {pos}%")
-        .unwrap()
-        .progress_chars("█▓░"),
-    );
-
-    loop {
-      line.clear();
-      match reader.read_line(&mut line).await {
-        Ok(0) => break, // EOF
-        Ok(_) => {
-          // For streaming, we parse as generic Response since we get both progress and final result
-          let response: Response<CodeIndexResult> = match serde_json::from_str(line.trim()) {
-            Ok(r) => r,
-            Err(_) => continue,
-          };
-
-          // Check for progress update
-          if let Some(progress) = &response.progress {
-            let phase = progress.phase.as_str();
-            let message = progress.message.as_deref().unwrap_or("");
-
-            match phase {
-              "scanning" => {
-                let scanned = progress.processed_files.unwrap_or(0) as u64;
-                pb.set_message(format!("Scanning: {} files", scanned));
-                pb.set_position(0);
-              }
-              "indexing" => {
-                let processed = progress.processed_files.unwrap_or(0) as u64;
-                let total = progress.total_files.unwrap_or(1) as u64;
-                let percent = if total > 0 { (processed * 100) / total } else { 0 };
-                pb.set_position(percent);
-                pb.set_message(message.to_string());
-              }
-              "complete" => {
-                pb.set_position(100);
-                pb.finish_with_message(message.to_string());
-              }
-              _ => {}
-            }
-          }
-
-          // Check for final result
-          if let Some(result) = &response.result {
-            let files = result.files_processed;
-            let chunks = result.chunks_created;
-            println!("  Indexed {} files, {} chunks", files, chunks);
-            break;
-          }
-
-          // Check for error
-          if let Some(error) = &response.error {
-            pb.finish_with_message("Error");
-            anyhow::bail!("Index error: {}", error.message);
-          }
-        }
-        Err(e) => {
-          pb.finish_with_message("Error");
-          anyhow::bail!("Read error: {}", e);
-        }
+    // Index docs if docs_dir is configured
+    if let Some(ref docs_dir) = repo_config.docs_dir {
+      let docs_path = repo_path.join(docs_dir);
+      if docs_path.exists() {
+        info!("Indexing docs for {} at {}", repo, docs_path.display());
+        index_docs_for_repo(&socket_path, &repo_path, &docs_path).await?;
+      } else {
+        info!("No docs directory found at {}", docs_path.display());
       }
     }
+  }
+
+  Ok(())
+}
+
+/// Index code for a single repository with streaming progress.
+async fn index_code_for_repo(socket_path: &str, repo_path: &std::path::Path, force: bool) -> Result<()> {
+  use ipc::{CodeIndexParams, CodeIndexResult, Method, Request, Response};
+  use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+  use tokio::net::UnixStream;
+
+  let mut stream = UnixStream::connect(socket_path).await?;
+
+  let request: Request<CodeIndexParams> = Request {
+    id: Some(1),
+    method: Method::CodeIndex,
+    params: CodeIndexParams {
+      cwd: Some(repo_path.to_string_lossy().to_string()),
+      force,
+      stream: true,
+    },
+  };
+
+  let request_str = serde_json::to_string(&request)?;
+  stream.write_all(request_str.as_bytes()).await?;
+  stream.write_all(b"\n").await?;
+  stream.flush().await?;
+
+  let mut reader = BufReader::new(stream);
+  let mut line = String::new();
+
+  let pb = ProgressBar::new(100);
+  pb.set_style(
+    ProgressStyle::default_bar()
+      .template("{spinner:.green} {msg:40} [{bar:30.cyan/blue}] {pos}%")
+      .unwrap()
+      .progress_chars("█▓░"),
+  );
+
+  loop {
+    line.clear();
+    match reader.read_line(&mut line).await {
+      Ok(0) => break,
+      Ok(_) => {
+        let response: Response<CodeIndexResult> = match serde_json::from_str(line.trim()) {
+          Ok(r) => r,
+          Err(_) => continue,
+        };
+
+        if let Some(progress) = &response.progress {
+          let phase = progress.phase.as_str();
+          let message = progress.message.as_deref().unwrap_or("");
+
+          match phase {
+            "scanning" => {
+              let scanned = progress.processed_files.unwrap_or(0) as u64;
+              pb.set_message(format!("Scanning: {} files", scanned));
+              pb.set_position(0);
+            }
+            "indexing" => {
+              let processed = progress.processed_files.unwrap_or(0) as u64;
+              let total = progress.total_files.unwrap_or(1) as u64;
+              let percent = if total > 0 { (processed * 100) / total } else { 0 };
+              pb.set_position(percent);
+              pb.set_message(message.to_string());
+            }
+            "complete" => {
+              pb.set_position(100);
+              pb.finish_with_message(message.to_string());
+            }
+            _ => {}
+          }
+        }
+
+        if let Some(result) = &response.result {
+          let files = result.files_processed;
+          let chunks = result.chunks_created;
+          println!("  Code: {} files, {} chunks", files, chunks);
+          break;
+        }
+
+        if let Some(error) = &response.error {
+          pb.finish_with_message("Error");
+          anyhow::bail!("Code index error: {}", error.message);
+        }
+      }
+      Err(e) => {
+        pb.finish_with_message("Error");
+        anyhow::bail!("Read error: {}", e);
+      }
+    }
+  }
+
+  Ok(())
+}
+
+/// Index docs for a single repository.
+async fn index_docs_for_repo(
+  socket_path: &str,
+  repo_path: &std::path::Path,
+  docs_path: &std::path::Path,
+) -> Result<()> {
+  use ipc::{DocsIngestParams, DocsIngestResult, Method, Request, Response};
+  use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+  use tokio::net::UnixStream;
+
+  let mut stream = UnixStream::connect(socket_path).await?;
+
+  let request: Request<DocsIngestParams> = Request {
+    id: Some(1),
+    method: Method::DocsIngest,
+    params: DocsIngestParams {
+      cwd: Some(repo_path.to_string_lossy().to_string()),
+      directory: Some(docs_path.to_string_lossy().to_string()),
+    },
+  };
+
+  let request_str = serde_json::to_string(&request)?;
+  stream.write_all(request_str.as_bytes()).await?;
+  stream.write_all(b"\n").await?;
+  stream.flush().await?;
+
+  let mut reader = BufReader::new(stream);
+  let mut line = String::new();
+  reader.read_line(&mut line).await?;
+
+  let response: Response<DocsIngestResult> = serde_json::from_str(line.trim())?;
+
+  if let Some(error) = &response.error {
+    anyhow::bail!("Docs index error: {}", error.message);
+  }
+
+  if let Some(result) = &response.result {
+    println!(
+      "  Docs: {} files, {} chunks",
+      result.files_processed, result.chunks_created
+    );
   }
 
   Ok(())
@@ -580,7 +716,7 @@ fn compare_results(baseline: PathBuf, current: PathBuf, threshold: f64, output: 
   Ok(())
 }
 
-async fn index_repos(repos: String, force: bool, cache_dir: Option<PathBuf>) -> Result<()> {
+async fn download_repos(repos: String, force: bool, cache_dir: Option<PathBuf>) -> Result<()> {
   let cache_dir = cache_dir.unwrap_or_else(default_cache_dir);
   let cache = RepoCache::new(cache_dir.clone());
 
@@ -599,7 +735,7 @@ async fn index_repos(repos: String, force: bool, cache_dir: Option<PathBuf>) -> 
 
   for repo in targets {
     let config = RepoRegistry::get(repo);
-    info!("Preparing {} ({})", repo, config.release_tag);
+    info!("Downloading {} ({})", repo, config.release_tag);
 
     if force {
       info!("Removing existing cache for {}", repo);
@@ -608,10 +744,10 @@ async fn index_repos(repos: String, force: bool, cache_dir: Option<PathBuf>) -> 
 
     match prepare_repo(repo, Some(cache_dir.clone())).await {
       Ok(path) => {
-        info!("Repository ready at: {}", path.display());
+        info!("Repository downloaded to: {}", path.display());
       }
       Err(e) => {
-        warn!("Failed to prepare {}: {}", repo, e);
+        warn!("Failed to download {}: {}", repo, e);
       }
     }
   }

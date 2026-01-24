@@ -23,10 +23,10 @@ ccengram daemon &
 cargo build -p benchmark
 
 # 3. Download test repositories
-cargo run -p benchmark -- index --repos zed
+cargo run -p benchmark -- download --repos zed
 
-# 4. Index the repositories (with progress)
-cargo run -p benchmark -- index-code --repos zed
+# 4. Index the repositories (code and docs, with progress)
+cargo run -p benchmark -- index --repos zed
 
 # 5. Run benchmarks
 cargo run -p benchmark -- run --scenarios "zed*" --output ./results
@@ -36,9 +36,28 @@ cargo run -p benchmark -- compare baseline.json current.json --threshold 10
 ```
 
 The flow is: **download → index → run**. Each step is explicit:
-- `index` downloads repos to cache
-- `index-code` indexes via daemon (with streaming progress)
+- `download` downloads repos to cache
+- `index` indexes code and docs via daemon (with streaming progress)
 - `run` checks repos are indexed, then executes scenarios
+
+### Using OpenRouter for Embeddings
+
+To use OpenRouter instead of Ollama for embeddings:
+
+```bash
+# 1. Set API key and start daemon
+export OPENROUTER_API_KEY="sk-or-..."
+ccengram daemon &
+
+# 2. Download and index with OpenRouter
+cargo run -p benchmark -- download --repos zed
+cargo run -p benchmark -- index --repos zed --embedding-provider openrouter
+
+# Or provide the key directly
+cargo run -p benchmark -- index --repos zed \
+  --embedding-provider openrouter \
+  --openrouter-api-key "sk-or-..."
+```
 
 ## How Benchmarks Work
 
@@ -101,10 +120,10 @@ Options:
   -t, --threshold <PCT>  Regression threshold [default: 10]
 ```
 
-### `index` - Download Repositories
+### `download` - Download Repositories
 
 ```bash
-cargo run -p benchmark -- index [OPTIONS]
+cargo run -p benchmark -- download [OPTIONS]
 
 Options:
   -r, --repos <LIST>   Repositories: zed, vscode, or 'all' [default: all]
@@ -113,17 +132,19 @@ Options:
 
 Downloads repository tarballs from GitHub to `~/.cache/ccengram-bench/repos/`.
 
-### `index-code` - Index Repositories
+### `index` - Index Repositories
 
 ```bash
-cargo run -p benchmark -- index-code [OPTIONS]
+cargo run -p benchmark -- index [OPTIONS]
 
 Options:
-  -r, --repos <LIST>   Repositories: zed, vscode, or 'all' [default: all]
-      --force          Force re-index even if already indexed
+  -r, --repos <LIST>           Repositories: zed, vscode, or 'all' [default: all]
+      --force                  Force re-index even if already indexed
+      --embedding-provider     Embedding provider: ollama or openrouter [default: ollama]
+      --openrouter-api-key     OpenRouter API key (or set OPENROUTER_API_KEY env var)
 ```
 
-Indexes repositories via the daemon with streaming progress display. Creates CCEngram databases at `~/.local/share/ccengram/projects/`.
+Indexes code and docs via the daemon with streaming progress display. Creates CCEngram databases at `~/.local/share/ccengram/projects/`.
 
 ### `index-perf` - Indexing Performance
 

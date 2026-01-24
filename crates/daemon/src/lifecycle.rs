@@ -5,7 +5,7 @@ use crate::scheduler::{SchedulerConfig, spawn_scheduler_with_config};
 use crate::server::{Server, ShutdownHandle};
 use crate::session_tracker::SessionTracker;
 use crate::shutdown_watcher::ShutdownWatcher;
-use embedding::{EmbeddingProvider, OllamaProvider, OpenRouterProvider};
+use embedding::{EmbeddingProvider, OllamaProvider, OpenRouterProvider, ResilientProvider, RetryConfig};
 use engram_core::{Config, ConfigEmbeddingProvider, EmbeddingConfig, HooksConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -117,8 +117,18 @@ fn create_embedding_provider(config: &EmbeddingConfig) -> Arc<dyn EmbeddingProvi
 
         Arc::new(provider)
       } else {
-        let provider = OpenRouterProvider::new(api_key).with_model(&config.model, config.dimensions);
-        Arc::new(provider)
+        // Build OpenRouter provider with optional batch size limit
+        // Rate limiting is handled internally by OpenRouterProvider (70 req/10s)
+        let mut provider = OpenRouterProvider::new(api_key).with_model(&config.model, config.dimensions);
+
+        if let Some(max_batch_size) = config.max_batch_size {
+          provider = provider.with_max_batch_size(max_batch_size);
+        }
+
+        // Wrap with resilient retry logic (handles 429s, timeouts, etc.)
+        let resilient = ResilientProvider::with_config(provider, RetryConfig::for_cloud());
+
+        Arc::new(resilient)
       }
     }
   }

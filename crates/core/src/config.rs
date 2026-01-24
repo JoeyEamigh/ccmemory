@@ -164,7 +164,7 @@ impl Default for EmbeddingConfig {
       ollama_url: "http://localhost:11434".to_string(),
       openrouter_api_key: None,
       context_length: 32768,
-      max_batch_size: None, // Auto-calculated
+      max_batch_size: None, // Auto-calculated from context_length
     }
   }
 }
@@ -664,7 +664,185 @@ impl Config {
     self.embedding.dimensions != stored_dimensions
   }
 
-  /// Generate a default config file as a string
+  /// Generate a project-level config file (excludes daemon-only sections)
+  ///
+  /// Project configs should NOT include `[embedding]`, `[daemon]`, or `[hooks]`
+  /// because these are only read at daemon startup and shared across all projects.
+  pub fn generate_project_template(preset: ToolPreset) -> String {
+    let preset_name = match preset {
+      ToolPreset::Minimal => "minimal",
+      ToolPreset::Standard => "standard",
+      ToolPreset::Full => "full",
+    };
+
+    format!(
+      r#"# CCEngram Project Configuration
+# Place in .claude/ccengram.toml
+#
+# NOTE: This is a project-level config. The following sections are daemon-level
+# and should be configured in ~/.config/ccengram/config.toml instead:
+#   [embedding] - Embedding provider (shared across all projects)
+#   [daemon]    - Daemon lifecycle settings
+#   [hooks]     - Hook behavior settings
+
+# ============================================================================
+# Tool Filtering
+# ============================================================================
+
+[tools]
+# Preset: minimal, standard, or full
+#   minimal  = explore, context (2 tools - recommended for exploration)
+#   standard = explore, context, memory management, code maintenance, diagnostics (11 tools)
+#   full     = all {tool_count} tools including legacy search tools
+preset = "{preset_name}"
+
+# Override preset with explicit tool list (uncomment to use):
+# enabled = [
+#     "memory_search",
+#     "memory_add",
+#     "code_search",
+# ]
+
+# Disable specific tools (applied after preset/enabled):
+# disabled = ["memory_delete", "memory_supersede"]
+
+# ============================================================================
+# Decay & Memory Lifecycle
+# ============================================================================
+
+[decay]
+# How often to run decay (hours)
+decay_interval_hours = 60
+
+# Minimum salience before archival consideration
+min_salience = 0.05
+
+# Threshold below which memories are archived
+archive_threshold = 0.1
+
+# Days without access before forced consideration
+max_idle_days = 90
+
+# Session cleanup interval (hours)
+session_cleanup_hours = 6
+
+# ============================================================================
+# Search Defaults
+# ============================================================================
+
+[search]
+# Default number of results
+default_limit = 10
+
+# Include superseded memories by default
+include_superseded = false
+
+# Ranking weights (should sum to 1.0)
+semantic_weight = 0.5
+salience_weight = 0.3
+recency_weight = 0.2
+
+# ---- Explore tool settings ----
+
+# How many top results include full context (callers, callees, memories)
+# Higher = fewer tool calls needed, but larger responses
+explore_expand_top = 3
+
+# Max results per scope in explore
+explore_limit = 10
+
+# Items per section in context (callers, callees, siblings, memories)
+context_depth = 5
+
+# Max IDs in a single batch context call
+context_max_batch = 5
+
+# Max suggestions to generate from explore results
+explore_max_suggestions = 5
+
+# ============================================================================
+# Code Indexing
+# ============================================================================
+
+[index]
+# Checkpoint save interval (seconds)
+checkpoint_interval_secs = 30
+
+# File watcher debounce (milliseconds)
+watcher_debounce_ms = 1000
+
+# Maximum file size to index (bytes)
+max_file_size = 1048576  # 1MB
+
+# Maximum chunk size (characters)
+max_chunk_chars = 2000
+
+# Number of files to process in parallel (default: 4)
+# Higher values use more memory but may be faster on SSDs
+# Reduce if experiencing memory pressure
+parallel_files = 4
+
+# ---- Startup Scan Settings ----
+
+# Enable startup scan when watcher starts (default: true)
+# Reconciles database with filesystem state to detect files added/modified/deleted
+# while the watcher was stopped. Only runs if project was previously indexed.
+startup_scan = true
+
+# Startup scan mode (default: full)
+#   deleted_only   = Only detect and remove deleted files (fastest)
+#   deleted_and_new = Detect deleted and new files
+#   full           = Full reconciliation including modified file detection
+startup_scan_mode = "full"
+
+# Block watcher startup until scan completes (default: false)
+# When false, watcher starts immediately and scan runs in background.
+# When true, watcher waits for scan to complete before processing events.
+# Note: Searches will block until scan completes regardless of this setting.
+startup_scan_blocking = false
+
+# Timeout for startup scan in seconds (default: 300)
+# Set to 0 for no timeout.
+startup_scan_timeout_secs = 300
+
+# ============================================================================
+# Document Indexing
+# ============================================================================
+
+[docs]
+# Directory to watch for documents (relative to project root)
+# When set, file watcher will auto-index files in this directory
+# directory = "docs"
+
+# File extensions to treat as documents
+extensions = ["md", "txt", "rst", "adoc", "org"]
+
+# Maximum document file size (bytes)
+max_file_size = 5242880  # 5MB
+
+# ============================================================================
+# Workspace Aliasing
+# ============================================================================
+
+[workspace]
+# Alias this project to share memory with another project.
+# Useful for multiple clones of the same repo or custom workspace groupings.
+# Git worktrees are automatically detected and don't need this setting.
+# alias = "/home/user/main-repo"
+
+# Disable automatic worktree detection (default: false)
+# Set to true to treat git worktrees as separate projects.
+# disable_worktree_detection = false
+"#,
+      tool_count = ALL_TOOLS.len(),
+      preset_name = preset_name
+    )
+  }
+
+  /// Generate a full user-level config file (includes all sections)
+  ///
+  /// User configs include daemon-level sections like `[embedding]`, `[daemon]`,
+  /// and `[hooks]` which are only read at daemon startup.
   pub fn generate_template(preset: ToolPreset) -> String {
     let preset_name = match preset {
       ToolPreset::Minimal => "minimal",
@@ -673,8 +851,11 @@ impl Config {
     };
 
     format!(
-      r#"# CCEngram Configuration
-# Place in .claude/ccengram.toml (project) or ~/.config/ccengram/config.toml (user)
+      r#"# CCEngram User Configuration
+# Place in ~/.config/ccengram/config.toml
+#
+# This file includes all settings. For project-specific overrides,
+# create .claude/ccengram.toml with only the project-level sections.
 
 # ============================================================================
 # Tool Filtering
@@ -1058,10 +1239,30 @@ dimensions = 4096
   fn test_generate_template() {
     let template = Config::generate_template(ToolPreset::Standard);
     assert!(template.contains("preset = \"standard\""));
+    // User template includes all sections
     assert!(template.contains("[embedding]"));
+    assert!(template.contains("[daemon]"));
+    assert!(template.contains("[hooks]"));
     assert!(template.contains("[decay]"));
     assert!(template.contains("[search]"));
     assert!(template.contains("[index]"));
+  }
+
+  #[test]
+  fn test_generate_project_template() {
+    let template = Config::generate_project_template(ToolPreset::Minimal);
+    assert!(template.contains("preset = \"minimal\""));
+    // Project template includes project-level sections
+    assert!(template.contains("[tools]"));
+    assert!(template.contains("[decay]"));
+    assert!(template.contains("[search]"));
+    assert!(template.contains("[index]"));
+    assert!(template.contains("[docs]"));
+    assert!(template.contains("[workspace]"));
+    // Project template excludes daemon-level sections
+    assert!(!template.contains("\n[embedding]"));
+    assert!(!template.contains("\n[daemon]"));
+    assert!(!template.contains("\n[hooks]"));
   }
 
   #[test]

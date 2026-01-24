@@ -10,6 +10,9 @@ const DEFAULT_CONTEXT_LENGTH: usize = 32768;
 const DEFAULT_MAX_BATCH_SIZE: usize = 64;
 /// Average tokens per chunk estimate (used for batch size calculation)
 const AVG_CHUNK_TOKENS: usize = 512;
+/// Default maximum concurrent sub-batch requests for Ollama.
+/// Limited to avoid overwhelming local GPU memory/compute.
+const DEFAULT_MAX_CONCURRENT: usize = 4;
 
 /// Calculate max batch size based on context length
 /// Formula: clamp(context_length / avg_chunk_tokens, 1, 64)
@@ -197,9 +200,8 @@ impl OllamaProvider {
       self.max_batch_size
     );
 
-    // Limit concurrent requests to avoid overwhelming the server
-    // Using 4 concurrent requests as a reasonable default
-    let semaphore = Arc::new(Semaphore::new(4));
+    // Limit concurrent requests to avoid overwhelming local GPU
+    let semaphore = Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT));
 
     // Create indexed sub-batch tasks
     let futures: Vec<_> = texts
@@ -303,7 +305,7 @@ impl OllamaProvider {
 
     debug!("Using parallel fallback for {} texts", texts.len());
 
-    let semaphore = Arc::new(Semaphore::new(4)); // Max 4 concurrent requests
+    let semaphore = Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT));
 
     let futures: Vec<_> = texts
       .iter()
