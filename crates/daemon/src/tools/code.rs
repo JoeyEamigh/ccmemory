@@ -823,30 +823,31 @@ impl ToolHandler {
 
       // Chunk the file
       let chunks: Vec<_> = chunker.chunk(&content, relative_path, file.language, &file.checksum);
+      let chunk_count = chunks.len();
 
       // Generate embeddings in batch for better performance
       let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
       let embeddings = self.get_embeddings_batch(&texts).await;
 
-      // Store chunks with their embeddings
-      let mut file_success = true;
-      for (chunk, embedding) in chunks.into_iter().zip(embeddings.into_iter()) {
-        let vector = embedding.unwrap_or_else(|| vec![0.0f32; db.vector_dim]);
+      // Prepare batch data for insert
+      let chunks_with_vectors: Vec<_> = chunks
+        .into_iter()
+        .zip(embeddings.into_iter())
+        .map(|(chunk, embedding)| {
+          let vector = embedding.unwrap_or_else(|| vec![0.0f32; db.vector_dim]);
+          (chunk, vector)
+        })
+        .collect();
 
-        if let Err(e) = db.add_code_chunk(&chunk, Some(&vector)).await {
-          warn!("Failed to store chunk for {}: {}", relative_path, e);
-          file_success = false;
-          break;
-        }
-        total_chunks += 1;
-      }
-
-      if file_success {
-        checkpoint.mark_processed(relative_path);
-        indexed_files += 1;
-      } else {
+      // Batch insert all chunks for this file
+      if let Err(e) = db.add_code_chunks(&chunks_with_vectors).await {
+        warn!("Failed to batch insert chunks for {}: {}", relative_path, e);
         checkpoint.mark_error(relative_path);
         failed_files.push(relative_path.clone());
+      } else {
+        total_chunks += chunk_count;
+        checkpoint.mark_processed(relative_path);
+        indexed_files += 1;
       }
 
       save_counter += 1;
@@ -869,6 +870,12 @@ impl ToolHandler {
     // Clear checkpoint on successful completion
     if failed_files.is_empty() {
       let _ = db.clear_checkpoint(project_id, CheckpointType::Code).await;
+    }
+
+    // Create vector indexes for efficient search on large datasets
+    // This is a no-op if indexes already exist or dataset is too small (<256 vectors)
+    if let Err(e) = db.create_vector_indexes().await {
+      warn!("Failed to create vector indexes: {}", e);
     }
 
     // Calculate performance metrics
@@ -953,7 +960,7 @@ impl ToolHandler {
 
   /// Import a single code chunk (used during index import)
   pub async fn code_import_chunk(&self, request: Request) -> Response {
-    use engram_core::{ChunkType, CodeChunk, Language};
+    use engram_core::{ChunkType, CodeChunk, Language, compute_content_hash};
 
     #[derive(Deserialize)]
     struct ChunkData {
@@ -1003,6 +1010,7 @@ impl ToolHandler {
       _ => ChunkType::Block,
     };
 
+    let content_hash = compute_content_hash(&args.chunk.content);
     let chunk = CodeChunk {
       id: uuid::Uuid::now_v7(),
       file_path: args.chunk.file_path,
@@ -1027,6 +1035,7 @@ impl ToolHandler {
       docstring: None,
       parent_definition: None,
       embedding_text: None,
+      content_hash: Some(content_hash),
     };
 
     // Generate embedding
@@ -1978,6 +1987,7 @@ mod tests {
       docstring: None,
       parent_definition: None,
       embedding_text: None,
+      content_hash: None,
     }
   }
 

@@ -16,20 +16,21 @@ use tracing::debug;
 /// Configuration for debounced watcher
 #[derive(Debug, Clone)]
 pub struct DebounceConfig {
-  /// Debounce delay for file changes (default 500ms)
+  /// Debounce delay for file changes (default 1000ms)
   pub file_debounce_ms: u64,
   /// Debounce delay for gitignore changes (default 1000ms)
   pub gitignore_debounce_ms: u64,
-  /// Maximum events to collect before forcing a flush
-  pub max_pending_events: usize,
+  /// Maximum age of oldest pending event before forcing flush (default 5000ms)
+  /// This ensures events don't queue forever while allowing debouncing during bursts
+  pub max_pending_age_ms: u64,
 }
 
 impl Default for DebounceConfig {
   fn default() -> Self {
     Self {
-      file_debounce_ms: 500,
+      file_debounce_ms: 1000,
       gitignore_debounce_ms: 1000,
-      max_pending_events: 100,
+      max_pending_age_ms: 5000,
     }
   }
 }
@@ -188,9 +189,20 @@ impl DebouncedWatcher {
     self.pending.len()
   }
 
-  /// Check if we should force a flush due to too many pending events
+  /// Check if we should force a flush due to oldest event exceeding max age
+  /// This ensures events don't queue forever while allowing debouncing during bursts
   pub fn should_force_flush(&self) -> bool {
-    self.pending.len() >= self.config.max_pending_events
+    if self.pending.is_empty() {
+      return false;
+    }
+    let max_age = Duration::from_millis(self.config.max_pending_age_ms);
+    self
+      .pending
+      .values()
+      .map(|p| p.last_seen.elapsed())
+      .max()
+      .map(|oldest| oldest >= max_age)
+      .unwrap_or(false)
   }
 
   fn handle_change(&mut self, change: FileChange) {
@@ -290,9 +302,9 @@ mod tests {
   #[test]
   fn test_debounce_config_defaults() {
     let config = DebounceConfig::default();
-    assert_eq!(config.file_debounce_ms, 500);
+    assert_eq!(config.file_debounce_ms, 1000);
     assert_eq!(config.gitignore_debounce_ms, 1000);
-    assert_eq!(config.max_pending_events, 100);
+    assert_eq!(config.max_pending_age_ms, 5000);
   }
 
   #[test]
@@ -380,20 +392,24 @@ mod tests {
     let mut watcher = DebouncedWatcher::new(
       dir.path(),
       DebounceConfig {
-        max_pending_events: 5,
+        max_pending_age_ms: 50, // Very short for testing
         ..Default::default()
       },
     )
     .unwrap();
 
-    // Add events directly
-    for i in 0..5 {
-      watcher.pending.insert(
-        PathBuf::from(format!("/test/{}.rs", i)),
-        PendingChange::new(ChangeKind::Modified),
-      );
-    }
+    // Add an event
+    watcher
+      .pending
+      .insert(PathBuf::from("/test/old.rs"), PendingChange::new(ChangeKind::Modified));
 
+    // Should not flush immediately
+    assert!(!watcher.should_force_flush());
+
+    // Wait for max age to pass
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Now should force flush due to age
     assert!(watcher.should_force_flush());
   }
 

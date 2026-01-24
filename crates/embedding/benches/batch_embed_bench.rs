@@ -137,13 +137,7 @@ fn bench_single_embed_latency(c: &mut Criterion) {
   let short_content = "fn foo() {}";
   let medium_content = generate_code_chunks(1).pop().unwrap();
   let long_content = (0..10)
-    .map(|i| {
-      format!(
-        "pub fn function_{}(x: i32) -> i32 {{ x * {} }}\n",
-        i,
-        i + 1
-      )
-    })
+    .map(|i| format!("pub fn function_{}(x: i32) -> i32 {{ x * {} }}\n", i, i + 1))
     .collect::<String>();
 
   group.bench_function("short", |b| {
@@ -161,5 +155,10 @@ fn bench_single_embed_latency(c: &mut Criterion) {
   group.finish();
 }
 
-criterion_group!(benches, bench_sequential_vs_batch, bench_batch_sizes, bench_single_embed_latency);
+criterion_group!(
+  benches,
+  bench_sequential_vs_batch,
+  bench_batch_sizes,
+  bench_single_embed_latency
+);
 criterion_main!(benches);

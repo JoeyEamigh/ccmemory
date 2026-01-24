@@ -7,7 +7,7 @@ pub mod memory;
 pub mod project;
 pub mod validation;
 
-pub use code::{CHARS_PER_TOKEN, ChunkType, CodeChunk, Language};
+pub use code::{CHARS_PER_TOKEN, ChunkType, CodeChunk, Language, compute_content_hash};
 pub use config::{
   ALL_TOOLS, Config, DecayConfig as ConfigDecay, DocsConfig, EmbeddingConfig,
   EmbeddingProvider as ConfigEmbeddingProvider, HooksConfig, INTERNAL_TOOLS, IndexConfig, PRESET_MINIMAL,

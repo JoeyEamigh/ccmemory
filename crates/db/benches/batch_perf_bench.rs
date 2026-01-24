@@ -52,6 +52,7 @@ pub fn function_{}(arg: i32) -> Result<i32, Error> {{
     docstring: Some(format!("Function {} documentation", idx)),
     parent_definition: None,
     embedding_text: None,
+    content_hash: None,
   }
 }
 
@@ -71,8 +72,9 @@ fn bench_single_vs_batch(c: &mut Criterion) {
     group.throughput(Throughput::Elements(*count as u64));
 
     // Prepare chunks and vectors
-    let chunks_and_vectors: Vec<(CodeChunk, Vec<f32>)> =
-      (0..*count).map(|i| (create_test_chunk(i), create_test_vector(i))).collect();
+    let chunks_and_vectors: Vec<(CodeChunk, Vec<f32>)> = (0..*count)
+      .map(|i| (create_test_chunk(i), create_test_vector(i)))
+      .collect();
 
     // Benchmark: Single inserts (current watcher behavior)
     group.bench_with_input(BenchmarkId::new("single_inserts", count), count, |b, &count| {
@@ -93,19 +95,23 @@ fn bench_single_vs_batch(c: &mut Criterion) {
     });
 
     // Benchmark: Batch insert (target behavior)
-    group.bench_with_input(BenchmarkId::new("batch_insert", count), &chunks_and_vectors, |b, chunks| {
-      b.iter(|| {
-        rt.block_on(async {
-          let temp_dir = TempDir::new().unwrap();
-          let project_id = ProjectId::from_path(Path::new("/bench"));
-          let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
-            .await
-            .unwrap();
+    group.bench_with_input(
+      BenchmarkId::new("batch_insert", count),
+      &chunks_and_vectors,
+      |b, chunks| {
+        b.iter(|| {
+          rt.block_on(async {
+            let temp_dir = TempDir::new().unwrap();
+            let project_id = ProjectId::from_path(Path::new("/bench"));
+            let db = ProjectDb::open_at_path(project_id, temp_dir.path().join("test.lancedb"), 4096)
+              .await
+              .unwrap();
 
-          db.add_code_chunks(black_box(chunks)).await.unwrap();
+            db.add_code_chunks(black_box(chunks)).await.unwrap();
+          });
         });
-      });
-    });
+      },
+    );
   }
 
   group.finish();
@@ -122,8 +128,9 @@ fn bench_batch_scaling(c: &mut Criterion) {
   for count in [50, 100, 250, 500, 1000].iter() {
     group.throughput(Throughput::Elements(*count as u64));
 
-    let chunks_and_vectors: Vec<(CodeChunk, Vec<f32>)> =
-      (0..*count).map(|i| (create_test_chunk(i), create_test_vector(i))).collect();
+    let chunks_and_vectors: Vec<(CodeChunk, Vec<f32>)> = (0..*count)
+      .map(|i| (create_test_chunk(i), create_test_vector(i)))
+      .collect();
 
     group.bench_with_input(BenchmarkId::from_parameter(count), &chunks_and_vectors, |b, chunks| {
       b.iter(|| {
@@ -250,8 +257,9 @@ fn bench_search_after_batch(c: &mut Criterion) {
         .await
         .unwrap();
 
-      let chunks: Vec<(CodeChunk, Vec<f32>)> =
-        (0..*db_size).map(|i| (create_test_chunk(i), create_test_vector(i))).collect();
+      let chunks: Vec<(CodeChunk, Vec<f32>)> = (0..*db_size)
+        .map(|i| (create_test_chunk(i), create_test_vector(i)))
+        .collect();
 
       db.add_code_chunks(&chunks).await.unwrap();
       (db, temp_dir)

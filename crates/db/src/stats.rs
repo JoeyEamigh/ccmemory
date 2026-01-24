@@ -314,6 +314,7 @@ mod tests {
         docstring: None,
         parent_definition: None,
         embedding_text: None,
+        content_hash: None,
       };
       db.add_code_chunk(&chunk, None).await.unwrap();
     }

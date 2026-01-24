@@ -76,6 +76,26 @@ impl ProjectDb {
     Ok(())
   }
 
+  /// Delete all chunks for multiple files in a single operation
+  /// Much more efficient than calling delete_chunks_for_file in a loop
+  pub async fn delete_chunks_for_files(&self, file_paths: &[&str]) -> Result<()> {
+    if file_paths.is_empty() {
+      return Ok(());
+    }
+
+    let table = self.code_chunks_table().await?;
+
+    // Build IN clause: file_path IN ('path1', 'path2', ...)
+    let paths_list = file_paths
+      .iter()
+      .map(|p| format!("'{}'", p.replace('\'', "''"))) // Escape single quotes
+      .collect::<Vec<_>>()
+      .join(", ");
+
+    table.delete(&format!("file_path IN ({})", paths_list)).await?;
+    Ok(())
+  }
+
   /// Delete a code chunk by ID
   pub async fn delete_code_chunk(&self, id: &Uuid) -> Result<()> {
     let table = self.code_chunks_table().await?;
@@ -169,6 +189,36 @@ impl ProjectDb {
       .await
   }
 
+  /// Get chunks with their embeddings for a file
+  ///
+  /// Used for differential re-indexing: when a file changes, we can reuse
+  /// embeddings for chunks whose content hasn't changed.
+  pub async fn get_chunks_with_embeddings_for_file(
+    &self,
+    file_path: &str,
+  ) -> Result<Vec<(CodeChunk, Option<Vec<f32>>)>> {
+    let table = self.code_chunks_table().await?;
+
+    let results: Vec<RecordBatch> = table
+      .query()
+      .only_if(format!("file_path = '{}'", file_path))
+      .execute()
+      .await?
+      .try_collect()
+      .await?;
+
+    let mut chunks_with_embeddings = Vec::new();
+    for batch in results {
+      for i in 0..batch.num_rows() {
+        let chunk = batch_to_code_chunk(&batch, i)?;
+        let embedding = extract_vector_from_batch(&batch, i, self.vector_dim);
+        chunks_with_embeddings.push((chunk, embedding));
+      }
+    }
+
+    Ok(chunks_with_embeddings)
+  }
+
   /// Find code chunks by ID prefix
   ///
   /// Searches for code chunks whose ID starts with the given prefix.
@@ -237,6 +287,7 @@ fn code_chunk_to_batch(chunk: &CodeChunk, vector: Option<&[f32]>, vector_dim: us
   let docstring = StringArray::from(vec![chunk.docstring.clone()]);
   let parent_definition = StringArray::from(vec![chunk.parent_definition.clone()]);
   let embedding_text = StringArray::from(vec![chunk.embedding_text.clone()]);
+  let content_hash = StringArray::from(vec![chunk.content_hash.clone()]);
 
   // Handle vector - pad or truncate to match expected dimensions
   let vector_arr = if let Some(v) = vector {
@@ -280,11 +331,29 @@ fn code_chunk_to_batch(chunk: &CodeChunk, vector: Option<&[f32]>, vector_dim: us
       Arc::new(docstring),
       Arc::new(parent_definition),
       Arc::new(embedding_text),
+      Arc::new(content_hash),
       Arc::new(vector_list),
     ],
   )?;
 
   Ok(batch)
+}
+
+/// Extract vector embedding from a RecordBatch row
+fn extract_vector_from_batch(batch: &RecordBatch, row: usize, vector_dim: usize) -> Option<Vec<f32>> {
+  batch
+    .column_by_name("vector")
+    .and_then(|col| col.as_any().downcast_ref::<FixedSizeListArray>())
+    .and_then(|arr| {
+      if arr.is_null(row) {
+        return None;
+      }
+      let values = arr.value(row);
+      let float_arr = values.as_any().downcast_ref::<Float32Array>()?;
+      let vec: Vec<f32> = (0..vector_dim).map(|i| float_arr.value(i)).collect();
+      // Check if it's a null/zero vector
+      if vec.iter().all(|&v| v == 0.0) { None } else { Some(vec) }
+    })
 }
 
 /// Convert a RecordBatch row to a CodeChunk
@@ -380,6 +449,7 @@ fn batch_to_code_chunk(batch: &RecordBatch, row: usize) -> Result<CodeChunk> {
   let docstring = get_string_opt("docstring").filter(|s| !s.is_empty());
   let parent_definition = get_string_opt("parent_definition").filter(|s| !s.is_empty());
   let embedding_text = get_string_opt("embedding_text").filter(|s| !s.is_empty());
+  let content_hash = get_string_opt("content_hash").filter(|s| !s.is_empty());
 
   Ok(CodeChunk {
     id: Uuid::parse_str(&id_str).map_err(|_| DbError::NotFound("invalid id".into()))?,
@@ -402,6 +472,7 @@ fn batch_to_code_chunk(batch: &RecordBatch, row: usize) -> Result<CodeChunk> {
     docstring,
     parent_definition,
     embedding_text,
+    content_hash,
   })
 }
 
@@ -444,6 +515,7 @@ mod tests {
       docstring: None,
       parent_definition: None,
       embedding_text: None,
+      content_hash: None,
     }
   }
 
@@ -497,5 +569,40 @@ mod tests {
     let chunks = db.list_code_chunks(None, None).await.unwrap();
     assert_eq!(chunks.len(), 1);
     assert_eq!(chunks[0].file_path, "/test/other.rs");
+  }
+
+  #[tokio::test]
+  async fn test_delete_chunks_for_files_batch() {
+    let (_temp, db) = create_test_db().await;
+
+    let mut c1 = create_test_chunk();
+    c1.file_path = "/test/a.rs".to_string();
+    let mut c2 = create_test_chunk();
+    c2.file_path = "/test/b.rs".to_string();
+    let mut c3 = create_test_chunk();
+    c3.file_path = "/test/c.rs".to_string();
+    let mut c4 = create_test_chunk();
+    c4.file_path = "/test/keep.rs".to_string();
+
+    db.add_code_chunk(&c1, None).await.unwrap();
+    db.add_code_chunk(&c2, None).await.unwrap();
+    db.add_code_chunk(&c3, None).await.unwrap();
+    db.add_code_chunk(&c4, None).await.unwrap();
+
+    // Delete multiple files in one operation
+    db.delete_chunks_for_files(&["/test/a.rs", "/test/b.rs", "/test/c.rs"])
+      .await
+      .unwrap();
+
+    let chunks = db.list_code_chunks(None, None).await.unwrap();
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].file_path, "/test/keep.rs");
+  }
+
+  #[tokio::test]
+  async fn test_delete_chunks_for_files_empty() {
+    let (_temp, db) = create_test_db().await;
+    // Should not error on empty input
+    db.delete_chunks_for_files(&[]).await.unwrap();
   }
 }

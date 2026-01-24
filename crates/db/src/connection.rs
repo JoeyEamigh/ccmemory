@@ -1,8 +1,10 @@
 use engram_core::ProjectId;
+use lancedb::index::Index;
+use lancedb::table::OptimizeAction;
 use lancedb::{Connection, connect};
 use std::path::PathBuf;
 use thiserror::Error;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::schema::{
   DEFAULT_VECTOR_DIM, code_chunks_schema, document_metadata_schema, documents_schema, entities_schema, events_schema,
@@ -255,6 +257,65 @@ impl ProjectDb {
   /// Get the extraction_segments table
   pub async fn extraction_segments_table(&self) -> Result<lancedb::Table> {
     Ok(self.connection.open_table("extraction_segments").execute().await?)
+  }
+
+  /// Create vector indexes on tables that support vector search
+  ///
+  /// This should be called after initial indexing completes to enable
+  /// efficient vector search. Without indexes, LanceDB does brute-force O(n) scans.
+  ///
+  /// Uses IVF_PQ index which is optimal for large datasets (10K+ vectors).
+  /// For smaller datasets, the overhead of index creation may not be worth it.
+  pub async fn create_vector_indexes(&self) -> Result<()> {
+    self.create_vector_index_on_table("code_chunks").await?;
+    self.create_vector_index_on_table("memories").await?;
+    self.create_vector_index_on_table("documents").await?;
+    Ok(())
+  }
+
+  /// Create a vector index on a single table
+  async fn create_vector_index_on_table(&self, table_name: &str) -> Result<()> {
+    let table = self.connection.open_table(table_name).execute().await?;
+
+    // Check if we have enough rows to benefit from an index
+    // IVF_PQ needs at least 256 vectors for meaningful partitions
+    let row_count = table.count_rows(None).await?;
+    if row_count < 256 {
+      debug!(
+        "Skipping index creation for {} - only {} rows (need 256+)",
+        table_name, row_count
+      );
+      return Ok(());
+    }
+
+    info!("Creating vector index on {} ({} rows)", table_name, row_count);
+
+    // Use Auto index which selects IVF_PQ for vector columns
+    match table.create_index(&["vector"], Index::Auto).execute().await {
+      Ok(_) => {
+        info!("Vector index created on {}", table_name);
+        Ok(())
+      }
+      Err(e) => {
+        // Index may already exist or column may not support indexing
+        warn!("Could not create index on {}: {}", table_name, e);
+        Ok(()) // Don't fail the whole operation
+      }
+    }
+  }
+
+  /// Optimize indexes by incorporating new unindexed data
+  ///
+  /// Call this periodically after adding significant amounts of data
+  /// to ensure the index includes recent additions.
+  pub async fn optimize_indexes(&self) -> Result<()> {
+    for table_name in ["code_chunks", "memories", "documents"] {
+      let table = self.connection.open_table(table_name).execute().await?;
+      if let Err(e) = table.optimize(OptimizeAction::All).await {
+        warn!("Could not optimize {}: {}", table_name, e);
+      }
+    }
+    Ok(())
   }
 }
 

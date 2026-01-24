@@ -1,5 +1,5 @@
 use chrono::Utc;
-use engram_core::{CHARS_PER_TOKEN, ChunkType, CodeChunk, Language};
+use engram_core::{CHARS_PER_TOKEN, ChunkType, CodeChunk, Language, compute_content_hash};
 use parser::{Definition, DefinitionKind, TreeSitterParser};
 use uuid::Uuid;
 
@@ -55,6 +55,9 @@ impl Chunker {
   /// Uses tree-sitter to extract definitions and create one chunk per definition.
   /// Falls back to line-based chunking for unsupported languages or when AST chunking is disabled.
   pub fn chunk(&mut self, source: &str, file_path: &str, language: Language, file_hash: &str) -> Vec<CodeChunk> {
+    // Clear tree cache when starting a new file (memory efficiency)
+    self.ts_parser.clear_cache();
+
     let lines: Vec<&str> = source.lines().collect();
     let total_lines = lines.len();
 
@@ -80,13 +83,14 @@ impl Chunker {
     language: Language,
     file_hash: &str,
   ) -> Vec<CodeChunk> {
-    let definitions = self.ts_parser.extract_definitions(source, language);
+    // Parse and cache the file once for all subsequent queries
+    let definitions = self.ts_parser.extract_definitions_cached(source, language);
 
     if definitions.is_empty() {
       return Vec::new();
     }
 
-    // Extract file-level imports (for context)
+    // Extract file-level imports using the cached tree
     let file_imports = self.ts_parser.extract_imports(source, language);
 
     // Sort definitions by start line
@@ -144,7 +148,7 @@ impl Chunker {
           continue;
         }
 
-        let chunk = self.create_region_chunk(&region_content, start, end, file_path, language, file_hash);
+        let chunk = self.create_region_chunk(source, &region_content, start, end, file_path, language, file_hash);
         chunks.push(chunk);
       }
     }
@@ -160,7 +164,7 @@ impl Chunker {
   fn create_definition_chunk(
     &mut self,
     def: &Definition,
-    _source: &str,
+    source: &str,
     lines: &[&str],
     file_path: &str,
     language: Language,
@@ -183,9 +187,11 @@ impl Chunker {
     // Extract visibility
     let visibility = self.extract_visibility(&signature, language);
 
-    // Extract imports and calls for this chunk
-    let chunk_imports = self.ts_parser.extract_imports(&content, language);
-    let calls = self.ts_parser.extract_calls(&content, language);
+    // Extract imports and calls for this chunk using cached tree (no re-parsing)
+    let (chunk_imports, calls) =
+      self
+        .ts_parser
+        .extract_imports_and_calls_in_range(source, language, (actual_start + 1) as u32, def.end_line);
 
     // Combine chunk-level imports with file-level imports for relationship tracking
     // This ensures that functions can be linked via the imports used in their file
@@ -221,6 +227,8 @@ impl Chunker {
 
     let tokens_estimate = (content.len() / CHARS_PER_TOKEN) as u32;
 
+    let content_hash = compute_content_hash(&content);
+
     CodeChunk {
       id: Uuid::now_v7(),
       file_path: file_path.to_string(),
@@ -242,12 +250,15 @@ impl Chunker {
       docstring,
       parent_definition: None, // TODO: detect nested definitions
       embedding_text: Some(embedding_text),
+      content_hash: Some(content_hash),
     }
   }
 
+  #[allow(clippy::too_many_arguments)]
   /// Create a chunk from a non-definition region (imports, constants, etc.)
   fn create_region_chunk(
     &mut self,
+    source: &str,
     content: &str,
     start_line: u32,
     end_line: u32,
@@ -256,10 +267,13 @@ impl Chunker {
     file_hash: &str,
   ) -> CodeChunk {
     let chunk_type = self.determine_chunk_type(content, language);
-    let imports = self.ts_parser.extract_imports(content, language);
-    let calls = self.ts_parser.extract_calls(content, language);
+    // Use cached tree with line range for efficiency
+    let (imports, calls) = self
+      .ts_parser
+      .extract_imports_and_calls_in_range(source, language, start_line, end_line);
     let symbols = self.extract_symbols(content, language);
     let tokens_estimate = (content.len() / CHARS_PER_TOKEN) as u32;
+    let content_hash = compute_content_hash(content);
 
     CodeChunk {
       id: Uuid::now_v7(),
@@ -282,6 +296,7 @@ impl Chunker {
       docstring: None,
       parent_definition: None,
       embedding_text: None,
+      content_hash: Some(content_hash),
     }
   }
 
@@ -564,9 +579,9 @@ impl Chunker {
     // Small files: single chunk
     if total_lines <= self.config.max_lines {
       let chunk_type = self.determine_chunk_type(source, language);
-      let imports = self.ts_parser.extract_imports(source, language);
-      let calls = self.ts_parser.extract_calls(source, language);
+      let (imports, calls) = self.ts_parser.extract_imports_and_calls(source, language);
       let symbols = self.extract_symbols(source, language);
+      let content_hash = compute_content_hash(source);
 
       return vec![CodeChunk {
         id: Uuid::now_v7(),
@@ -589,6 +604,7 @@ impl Chunker {
         docstring: None,
         parent_definition: None,
         embedding_text: None,
+        content_hash: Some(content_hash),
       }];
     }
 
@@ -605,8 +621,8 @@ impl Chunker {
         let content = lines[current_start..boundary].join("\n");
         let chunk_type = self.determine_chunk_type(&content, language);
         let tokens_estimate = (content.len() / CHARS_PER_TOKEN) as u32;
-        let imports = self.ts_parser.extract_imports(&content, language);
-        let calls = self.ts_parser.extract_calls(&content, language);
+        let (imports, calls) = self.ts_parser.extract_imports_and_calls(&content, language);
+        let content_hash = compute_content_hash(&content);
 
         chunks.push(CodeChunk {
           id: Uuid::now_v7(),
@@ -629,6 +645,7 @@ impl Chunker {
           docstring: None,
           parent_definition: None,
           embedding_text: None,
+          content_hash: Some(content_hash),
         });
 
         current_start = boundary;
@@ -640,8 +657,8 @@ impl Chunker {
       let content = lines[current_start..].join("\n");
       let chunk_type = self.determine_chunk_type(&content, language);
       let tokens_estimate = (content.len() / CHARS_PER_TOKEN) as u32;
-      let imports = self.ts_parser.extract_imports(&content, language);
-      let calls = self.ts_parser.extract_calls(&content, language);
+      let (imports, calls) = self.ts_parser.extract_imports_and_calls(&content, language);
+      let content_hash = compute_content_hash(&content);
 
       chunks.push(CodeChunk {
         id: Uuid::now_v7(),
@@ -664,6 +681,7 @@ impl Chunker {
         docstring: None,
         parent_definition: None,
         embedding_text: None,
+        content_hash: Some(content_hash),
       });
     }
 
@@ -915,8 +933,8 @@ impl Chunker {
       let content = lines[start..end].join("\n");
       let chunk_type = self.determine_chunk_type(&content, language);
       let tokens_estimate = (content.len() / CHARS_PER_TOKEN) as u32;
-      let imports = self.ts_parser.extract_imports(&content, language);
-      let calls = self.ts_parser.extract_calls(&content, language);
+      let (imports, calls) = self.ts_parser.extract_imports_and_calls(&content, language);
+      let content_hash = compute_content_hash(&content);
 
       chunks.push(CodeChunk {
         id: Uuid::now_v7(),
@@ -939,6 +957,7 @@ impl Chunker {
         docstring: None,
         parent_definition: None,
         embedding_text: None,
+        content_hash: Some(content_hash),
       });
     }
 

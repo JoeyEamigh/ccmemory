@@ -493,9 +493,7 @@ mod tests {
 
   #[test]
   fn test_explicit_max_batch_size() {
-    let provider = OllamaProvider::new()
-      .with_context_length(32768)
-      .with_max_batch_size(10); // Override auto-calculation
+    let provider = OllamaProvider::new().with_context_length(32768).with_max_batch_size(10); // Override auto-calculation
     assert_eq!(provider.max_batch_size(), 10);
   }
 
@@ -557,16 +555,18 @@ mod tests {
     }
 
     // 7 texts should be split into 3 sub-batches (3 + 3 + 1)
-    let texts: Vec<&str> = (0..7).map(|i| match i {
-      0 => "Text zero",
-      1 => "Text one",
-      2 => "Text two",
-      3 => "Text three",
-      4 => "Text four",
-      5 => "Text five",
-      6 => "Text six",
-      _ => unreachable!(),
-    }).collect();
+    let texts: Vec<&str> = (0..7)
+      .map(|i| match i {
+        0 => "Text zero",
+        1 => "Text one",
+        2 => "Text two",
+        3 => "Text three",
+        4 => "Text four",
+        5 => "Text five",
+        6 => "Text six",
+        _ => unreachable!(),
+      })
+      .collect();
 
     let embeddings = provider.embed_batch(&texts).await.unwrap();
     assert_eq!(embeddings.len(), 7);

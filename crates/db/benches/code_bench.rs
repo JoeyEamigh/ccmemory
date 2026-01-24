@@ -68,6 +68,7 @@ export function function_{}(arg: number): number {{
     docstring: None,
     parent_definition: None,
     embedding_text: None,
+    content_hash: None,
   }
 }
 

@@ -85,23 +85,26 @@ impl ToolHandler {
 
     // Check for context length mismatch (P0-D)
     let mut context_length_warning: Option<String> = None;
-    if ollama_status.available && ollama_status.configured_model_available
-      && let Some(ref config) = self.embedding_config {
-        // Query model's actual context length
-        let model_provider = OllamaProvider::new()
-          .with_url(&config.ollama_url)
-          .with_model(&config.model, config.dimensions);
-        if let Some(actual_context_length) = model_provider.get_model_context_length().await
-          && config.context_length > actual_context_length {
-            let msg = format!(
-              "Configured context_length ({}) exceeds model's actual context length ({}). \
+    if ollama_status.available
+      && ollama_status.configured_model_available
+      && let Some(ref config) = self.embedding_config
+    {
+      // Query model's actual context length
+      let model_provider = OllamaProvider::new()
+        .with_url(&config.ollama_url)
+        .with_model(&config.model, config.dimensions);
+      if let Some(actual_context_length) = model_provider.get_model_context_length().await
+        && config.context_length > actual_context_length
+      {
+        let msg = format!(
+          "Configured context_length ({}) exceeds model's actual context length ({}). \
                Batch embedding may fail or produce errors. Consider reducing context_length in config.",
-              config.context_length, actual_context_length
-            );
-            warn!("{}", msg);
-            context_length_warning = Some(msg);
-          }
+          config.context_length, actual_context_length
+        );
+        warn!("{}", msg);
+        context_length_warning = Some(msg);
       }
+    }
 
     // Check embedding provider (use what we have configured)
     let embedding_status = match &self.embedding {

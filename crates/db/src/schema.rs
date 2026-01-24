@@ -69,6 +69,7 @@ pub fn code_chunks_schema(vector_dim: usize) -> Arc<Schema> {
     Field::new("docstring", DataType::Utf8, true),       // Documentation comments
     Field::new("parent_definition", DataType::Utf8, true), // Parent for nested items
     Field::new("embedding_text", DataType::Utf8, true),  // Enriched text for embedding
+    Field::new("content_hash", DataType::Utf8, true),    // Hash for detecting unchanged chunks
     Field::new(
       "vector",
       DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), vector_dim as i32),

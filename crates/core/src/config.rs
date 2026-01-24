@@ -65,10 +65,7 @@ pub const INTERNAL_TOOLS: &[&str] = &["hook", "ping", "status"];
 
 /// Minimal preset: streamlined exploration tools (2 tools)
 /// This is the recommended preset for most users.
-pub const PRESET_MINIMAL: &[&str] = &[
-  "explore",
-  "context",
-];
+pub const PRESET_MINIMAL: &[&str] = &["explore", "context"];
 
 /// Standard preset: exploration + management + diagnostics (11 tools)
 pub const PRESET_STANDARD: &[&str] = &[
@@ -236,7 +233,6 @@ pub struct SearchConfig {
   pub recency_weight: f64,
 
   // ---- Explore tool settings ----
-
   /// Default expand_top for explore tool - how many top results include full context (default: 3)
   pub explore_expand_top: usize,
 
@@ -281,7 +277,7 @@ pub struct IndexConfig {
   /// Checkpoint save interval in seconds (default: 30)
   pub checkpoint_interval_secs: u64,
 
-  /// File watcher debounce in milliseconds (default: 500)
+  /// File watcher debounce in milliseconds (default: 1000)
   pub watcher_debounce_ms: u64,
 
   /// Maximum file size to index in bytes (default: 1MB)
@@ -300,7 +296,7 @@ impl Default for IndexConfig {
   fn default() -> Self {
     Self {
       checkpoint_interval_secs: 30,
-      watcher_debounce_ms: 500,
+      watcher_debounce_ms: 1000,
       max_file_size: 1024 * 1024, // 1MB
       max_chunk_chars: 2000,
       parallel_files: 4,
@@ -749,7 +745,7 @@ explore_max_suggestions = 5
 checkpoint_interval_secs = 30
 
 # File watcher debounce (milliseconds)
-watcher_debounce_ms = 500
+watcher_debounce_ms = 1000
 
 # Maximum file size to index (bytes)
 max_file_size = 1048576  # 1MB

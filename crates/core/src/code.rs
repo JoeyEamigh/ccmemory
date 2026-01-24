@@ -1,9 +1,22 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 /// Characters per token estimate (for LLM token counting)
 pub const CHARS_PER_TOKEN: usize = 4;
+
+/// Compute a content hash for differential re-indexing
+///
+/// Uses SHA-256 truncated to 16 hex chars for compact storage
+/// while still having negligible collision probability.
+pub fn compute_content_hash(content: &str) -> String {
+  let mut hasher = Sha256::new();
+  hasher.update(content.as_bytes());
+  let result = hasher.finalize();
+  // Take first 8 bytes (16 hex chars) for compact storage
+  format!("{:016x}", u64::from_be_bytes(result[0..8].try_into().unwrap()))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeChunk {
@@ -62,6 +75,11 @@ pub struct CodeChunk {
   /// Contains structured metadata + code for better semantic search
   #[serde(default)]
   pub embedding_text: Option<String>,
+
+  /// Hash of the content for detecting unchanged chunks during re-indexing
+  /// Used to skip re-embedding when only file position changes
+  #[serde(default)]
+  pub content_hash: Option<String>,
 }
 
 impl CodeChunk {

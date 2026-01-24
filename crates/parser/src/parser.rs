@@ -1,7 +1,7 @@
 //! TreeSitterParser implementation
 
 use std::collections::{HashMap, HashSet};
-use tree_sitter::{Language as TsLanguage, Parser, Query, QueryCursor, StreamingIterator};
+use tree_sitter::{Language as TsLanguage, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::queries;
 use engram_core::Language;
@@ -11,6 +11,12 @@ pub struct LanguageQueries {
   pub imports: Option<Query>,
   pub calls: Option<Query>,
   pub definitions: Option<Query>,
+}
+
+/// Cached parse tree for a file
+struct CachedTree {
+  content_hash: u64,
+  tree: Tree,
 }
 
 /// A definition extracted from code
@@ -40,9 +46,13 @@ pub enum DefinitionKind {
 /// Tree-sitter based code parser
 ///
 /// Lazily loads parsers and queries for each language as needed.
+/// Supports caching parsed trees to avoid redundant parsing when
+/// processing multiple chunks from the same file.
 pub struct TreeSitterParser {
   parsers: HashMap<Language, Parser>,
   queries: HashMap<Language, LanguageQueries>,
+  /// Cached trees per language (for single-file-at-a-time processing)
+  tree_cache: HashMap<Language, CachedTree>,
 }
 
 impl TreeSitterParser {
@@ -51,7 +61,231 @@ impl TreeSitterParser {
     Self {
       parsers: HashMap::new(),
       queries: HashMap::new(),
+      tree_cache: HashMap::new(),
     }
+  }
+
+  /// Simple hash for content (for cache invalidation)
+  fn hash_content(content: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
+  }
+
+  /// Parse and cache a file's tree for subsequent queries.
+  /// Returns true if parsing was successful.
+  pub fn parse_file(&mut self, content: &str, lang: Language) -> bool {
+    self.ensure_loaded(lang);
+
+    let content_hash = Self::hash_content(content);
+
+    // Check if we already have this exact content cached
+    if let Some(cached) = self.tree_cache.get(&lang)
+      && cached.content_hash == content_hash
+    {
+      return true;
+    }
+
+    let Some(parser) = self.parsers.get_mut(&lang) else {
+      return false;
+    };
+
+    if let Some(tree) = parser.parse(content, None) {
+      self.tree_cache.insert(lang, CachedTree { content_hash, tree });
+      true
+    } else {
+      false
+    }
+  }
+
+  /// Extract definitions using cached tree (parses if needed).
+  /// More efficient when processing multiple operations on the same file.
+  pub fn extract_definitions_cached(&mut self, content: &str, lang: Language) -> Vec<Definition> {
+    if !self.parse_file(content, lang) {
+      return Vec::new();
+    }
+
+    let Some(cached) = self.tree_cache.get(&lang) else {
+      return Vec::new();
+    };
+
+    let Some(queries) = self.queries.get(&lang) else {
+      return Vec::new();
+    };
+
+    let Some(query) = &queries.definitions else {
+      return Vec::new();
+    };
+
+    let mut cursor = QueryCursor::new();
+    let mut definitions = Vec::new();
+
+    let mut matches = cursor.matches(query, cached.tree.root_node(), content.as_bytes());
+
+    while let Some(match_) = matches.next() {
+      let mut name: Option<String> = None;
+      let mut start_line: Option<u32> = None;
+      let mut end_line: Option<u32> = None;
+      let mut kind = DefinitionKind::Function;
+
+      for cap in match_.captures {
+        let cap_name = &query.capture_names()[cap.index as usize];
+        let node = cap.node;
+
+        match *cap_name {
+          "name" => {
+            if let Ok(text) = node.utf8_text(content.as_bytes()) {
+              name = Some(text.to_string());
+            }
+          }
+          "definition.function" | "function" => {
+            kind = DefinitionKind::Function;
+            start_line = Some(node.start_position().row as u32 + 1);
+            end_line = Some(node.end_position().row as u32 + 1);
+          }
+          "definition.method" | "method" => {
+            kind = DefinitionKind::Method;
+            start_line = Some(node.start_position().row as u32 + 1);
+            end_line = Some(node.end_position().row as u32 + 1);
+          }
+          "definition.class" | "class" => {
+            kind = DefinitionKind::Class;
+            start_line = Some(node.start_position().row as u32 + 1);
+            end_line = Some(node.end_position().row as u32 + 1);
+          }
+          "definition.struct" | "struct" => {
+            kind = DefinitionKind::Struct;
+            start_line = Some(node.start_position().row as u32 + 1);
+            end_line = Some(node.end_position().row as u32 + 1);
+          }
+          "definition.interface" | "interface" => {
+            kind = DefinitionKind::Interface;
+            start_line = Some(node.start_position().row as u32 + 1);
+            end_line = Some(node.end_position().row as u32 + 1);
+          }
+          "definition.trait" | "trait" => {
+            kind = DefinitionKind::Trait;
+            start_line = Some(node.start_position().row as u32 + 1);
+            end_line = Some(node.end_position().row as u32 + 1);
+          }
+          "definition.enum" | "enum" => {
+            kind = DefinitionKind::Enum;
+            start_line = Some(node.start_position().row as u32 + 1);
+            end_line = Some(node.end_position().row as u32 + 1);
+          }
+          "definition.module" | "module" => {
+            kind = DefinitionKind::Module;
+            start_line = Some(node.start_position().row as u32 + 1);
+            end_line = Some(node.end_position().row as u32 + 1);
+          }
+          "definition.const" | "const" => {
+            kind = DefinitionKind::Const;
+            start_line = Some(node.start_position().row as u32 + 1);
+            end_line = Some(node.end_position().row as u32 + 1);
+          }
+          "definition.type" | "type" => {
+            kind = DefinitionKind::Type;
+            start_line = Some(node.start_position().row as u32 + 1);
+            end_line = Some(node.end_position().row as u32 + 1);
+          }
+          _ => {}
+        }
+      }
+
+      if let (Some(n), Some(sl), Some(el)) = (name, start_line, end_line) {
+        definitions.push(Definition {
+          name: n,
+          kind,
+          start_line: sl,
+          end_line: el,
+        });
+      }
+    }
+
+    definitions
+  }
+
+  /// Extract imports and calls from a specific line range using cached tree.
+  /// This is efficient for extracting from multiple chunks of the same file.
+  pub fn extract_imports_and_calls_in_range(
+    &mut self,
+    content: &str,
+    lang: Language,
+    start_line: u32,
+    end_line: u32,
+  ) -> (Vec<String>, Vec<String>) {
+    if !self.parse_file(content, lang) {
+      return (Vec::new(), Vec::new());
+    }
+
+    let Some(cached) = self.tree_cache.get(&lang) else {
+      return (Vec::new(), Vec::new());
+    };
+
+    let Some(queries) = self.queries.get(&lang) else {
+      return (Vec::new(), Vec::new());
+    };
+
+    let mut imports = Vec::new();
+    let mut calls = Vec::new();
+
+    // Helper to check if a node is within the line range
+    let in_range = |node: &tree_sitter::Node| {
+      let node_start = node.start_position().row as u32 + 1;
+      let node_end = node.end_position().row as u32 + 1;
+      node_start >= start_line && node_end <= end_line
+    };
+
+    // Run imports query
+    if let Some(query) = &queries.imports {
+      let mut cursor = QueryCursor::new();
+      let mut matches = cursor.matches(query, cached.tree.root_node(), content.as_bytes());
+      while let Some(match_) = matches.next() {
+        for cap in match_.captures {
+          if in_range(&cap.node)
+            && let Ok(text) = cap.node.utf8_text(content.as_bytes())
+          {
+            let cleaned = text.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == '<' || c == '>');
+            if !cleaned.is_empty() {
+              imports.push(cleaned.to_string());
+            }
+          }
+        }
+      }
+    }
+
+    // Run calls query
+    if let Some(query) = &queries.calls {
+      let mut cursor = QueryCursor::new();
+      let mut matches = cursor.matches(query, cached.tree.root_node(), content.as_bytes());
+      while let Some(match_) = matches.next() {
+        for cap in match_.captures {
+          if in_range(&cap.node)
+            && let Ok(text) = cap.node.utf8_text(content.as_bytes())
+          {
+            let cleaned = text.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == '<' || c == '>');
+            if !cleaned.is_empty() {
+              calls.push(cleaned.to_string());
+            }
+          }
+        }
+      }
+    }
+
+    // Deduplicate while preserving order
+    let mut seen: HashSet<String> = HashSet::new();
+    imports.retain(|s| seen.insert(s.clone()));
+
+    seen.clear();
+    calls.retain(|s| seen.insert(s.clone()));
+
+    (imports, calls)
+  }
+
+  /// Clear the tree cache (call when switching to a different file)
+  pub fn clear_cache(&mut self) {
+    self.tree_cache.clear();
   }
 
   /// Check if a language is supported for parsing
@@ -67,6 +301,67 @@ impl TreeSitterParser {
   /// Extract function/method calls from code
   pub fn extract_calls(&mut self, content: &str, lang: Language) -> Vec<String> {
     self.run_query(content, lang, |q| &q.calls)
+  }
+
+  /// Extract imports and calls in a single parse (more efficient for per-chunk extraction)
+  pub fn extract_imports_and_calls(&mut self, content: &str, lang: Language) -> (Vec<String>, Vec<String>) {
+    self.ensure_loaded(lang);
+
+    let Some(parser) = self.parsers.get_mut(&lang) else {
+      return (Vec::new(), Vec::new());
+    };
+
+    let Some(tree) = parser.parse(content, None) else {
+      return (Vec::new(), Vec::new());
+    };
+
+    let Some(queries) = self.queries.get(&lang) else {
+      return (Vec::new(), Vec::new());
+    };
+
+    let mut imports = Vec::new();
+    let mut calls = Vec::new();
+
+    // Run imports query
+    if let Some(query) = &queries.imports {
+      let mut cursor = QueryCursor::new();
+      let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
+      while let Some(match_) = matches.next() {
+        for cap in match_.captures {
+          if let Ok(text) = cap.node.utf8_text(content.as_bytes()) {
+            let cleaned = text.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == '<' || c == '>');
+            if !cleaned.is_empty() {
+              imports.push(cleaned.to_string());
+            }
+          }
+        }
+      }
+    }
+
+    // Run calls query (reusing the same parse tree)
+    if let Some(query) = &queries.calls {
+      let mut cursor = QueryCursor::new();
+      let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
+      while let Some(match_) = matches.next() {
+        for cap in match_.captures {
+          if let Ok(text) = cap.node.utf8_text(content.as_bytes()) {
+            let cleaned = text.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == '<' || c == '>');
+            if !cleaned.is_empty() {
+              calls.push(cleaned.to_string());
+            }
+          }
+        }
+      }
+    }
+
+    // Deduplicate while preserving order
+    let mut seen: HashSet<String> = HashSet::new();
+    imports.retain(|s| seen.insert(s.clone()));
+
+    seen.clear();
+    calls.retain(|s| seen.insert(s.clone()));
+
+    (imports, calls)
   }
 
   /// Extract symbol definitions from code

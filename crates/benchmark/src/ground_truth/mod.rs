@@ -9,6 +9,6 @@ mod annotations;
 mod call_graph;
 mod patterns;
 
-pub use annotations::{load_scenario_annotations, Annotations, ExplorationPath};
+pub use annotations::{Annotations, ExplorationPath, load_scenario_annotations};
 pub use call_graph::CallGraph;
 pub use patterns::NoisePatterns;
