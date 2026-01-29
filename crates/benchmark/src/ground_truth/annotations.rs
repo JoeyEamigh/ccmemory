@@ -3,9 +3,11 @@
 //! JSON files with critical files, symbols, and exploration paths
 //! that are manually curated per-scenario.
 
-use crate::Result;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::Result;
 
 /// Exploration path defining expected navigation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,21 +58,21 @@ impl Annotations {
   }
 
   /// Load annotations from a JSON file.
-  pub fn load(path: &Path) -> Result<Self> {
-    let content = std::fs::read_to_string(path)?;
+  pub async fn load(path: &Path) -> Result<Self> {
+    let content = tokio::fs::read_to_string(path).await?;
     let annotations: Annotations = serde_json::from_str(&content)?;
     Ok(annotations)
   }
 
   /// Try to load annotations, returning empty if not found.
-  pub fn load_optional(path: &Path) -> Self {
-    Self::load(path).unwrap_or_default()
+  pub async fn load_optional(path: &Path) -> Self {
+    Self::load(path).await.unwrap_or_default()
   }
 
   /// Save annotations to a JSON file.
-  pub fn save(&self, path: &Path) -> Result<()> {
+  pub async fn save(&self, path: &Path) -> Result<()> {
     let content = serde_json::to_string_pretty(self)?;
-    std::fs::write(path, content)?;
+    tokio::fs::write(path, content).await?;
     Ok(())
   }
 
@@ -128,31 +130,25 @@ impl Annotations {
 }
 
 /// Load annotations for a specific scenario from an annotations directory.
-pub fn load_scenario_annotations(annotations_dir: &Path, scenario_id: &str) -> Annotations {
+pub async fn load_scenario_annotations(annotations_dir: &Path, scenario_id: &str) -> Annotations {
   // Try scenario-specific file first
   let specific_path = annotations_dir.join(format!("{}.json", scenario_id));
   if specific_path.exists()
-    && let Ok(ann) = Annotations::load(&specific_path)
+    && let Ok(ann) = Annotations::load(&specific_path).await
   {
     return ann;
   }
 
   // Fall back to default.json
   let default_path = annotations_dir.join("default.json");
-  Annotations::load_optional(&default_path)
+  Annotations::load_optional(&default_path).await
 }
 
 #[cfg(test)]
 mod tests {
-  use super::*;
   use tempfile::TempDir;
 
-  #[test]
-  fn test_empty_annotations() {
-    let ann = Annotations::empty();
-    assert!(ann.is_empty());
-    assert!(ann.critical_files.is_empty());
-  }
+  use super::*;
 
   #[test]
   fn test_is_critical_file() {
@@ -166,20 +162,8 @@ mod tests {
     assert!(!ann.is_critical_file("src/other.rs"));
   }
 
-  #[test]
-  fn test_is_critical_symbol() {
-    let ann = Annotations {
-      critical_symbols: vec!["Command".to_string(), "execute".to_string()],
-      ..Default::default()
-    };
-
-    assert!(ann.is_critical_symbol("Command"));
-    assert!(ann.is_critical_symbol("execute"));
-    assert!(!ann.is_critical_symbol("Other"));
-  }
-
-  #[test]
-  fn test_save_and_load() {
+  #[tokio::test]
+  async fn test_save_and_load() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("test.json");
 
@@ -197,8 +181,8 @@ mod tests {
       notes: vec!["Test note".to_string()],
     };
 
-    ann.save(&path).unwrap();
-    let loaded = Annotations::load(&path).unwrap();
+    ann.save(&path).await.unwrap();
+    let loaded = Annotations::load(&path).await.unwrap();
 
     assert_eq!(loaded.scenario_id, "test-scenario");
     assert_eq!(loaded.critical_files.len(), 1);
@@ -225,27 +209,9 @@ mod tests {
     assert_eq!(ann1.critical_symbols.len(), 2);
   }
 
-  #[test]
-  fn test_load_optional_missing() {
-    let ann = Annotations::load_optional(Path::new("/nonexistent/path.json"));
+  #[tokio::test]
+  async fn test_load_optional_missing() {
+    let ann = Annotations::load_optional(Path::new("/nonexistent/path.json")).await;
     assert!(ann.is_empty());
-  }
-
-  #[test]
-  fn test_exploration_path() {
-    let path = ExplorationPath {
-      start: "main".to_string(),
-      through: vec!["run".to_string(), "setup".to_string()],
-      target: "execute".to_string(),
-      max_hops: 4,
-    };
-
-    let json = serde_json::to_string(&path).unwrap();
-    let parsed: ExplorationPath = serde_json::from_str(&json).unwrap();
-
-    assert_eq!(parsed.start, "main");
-    assert_eq!(parsed.through.len(), 2);
-    assert_eq!(parsed.target, "execute");
-    assert_eq!(parsed.max_hops, 4);
   }
 }

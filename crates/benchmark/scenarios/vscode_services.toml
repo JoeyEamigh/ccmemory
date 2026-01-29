@@ -17,10 +17,13 @@ intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/instantiation/**/*.ts",
-    "**/services/**/*.ts",
+    "**/platform/instantiation/common/instantiation.ts",
+    "**/platform/instantiation/common/instantiationService.ts",
+    "**/platform/instantiation/common/extensions.ts",
+    "**/platform/instantiation/common/serviceCollection.ts",
+    "**/platform/instantiation/common/descriptors.ts",
 ]
-must_find_symbols = ["IInstantiationService", "createDecorator", "registerSingleton", "inject"]
+must_find_symbols = ["IInstantiationService", "createDecorator", "registerSingleton", "ServiceCollection", "SyncDescriptor", "InstantiationType"]
 noise_patterns = ["**/test/**", "*.test.ts", "*.spec.ts", "__tests__/**", "mock*"]
 
 # Step 1: Dependency question
@@ -78,18 +81,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "What pattern does VSCode use for dependency injection?"
-expected_concepts = ["decorator", "service", "instantiation", "inject"]
+expected_concepts = ["createDecorator", "ServiceIdentifier", "parameter decorator", "IInstantiationService"]
 wrong_concepts = ["manual wiring", "global variables", "singletons only"]
 weight = 2.0
 
 [[llm_judge.comprehension_questions]]
 question = "How would you add a new service that other components can use?"
-expected_concepts = ["interface", "decorator", "register", "singleton"]
+expected_concepts = ["createDecorator", "registerSingleton", "SyncDescriptor", "ServiceCollection"]
 wrong_concepts = ["export function", "global object"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "How does a class declare what services it needs?"
-expected_concepts = ["constructor", "decorator", "interface"]
+expected_concepts = ["constructor", "@IServiceName decorator", "storeServiceDependency", "parameter position"]
 wrong_concepts = ["import statement only", "call getInstance"]
 weight = 1.0

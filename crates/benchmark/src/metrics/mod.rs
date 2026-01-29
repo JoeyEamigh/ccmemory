@@ -5,15 +5,16 @@
 //! - Accuracy: discovery rate, noise ratio, navigation quality
 
 mod accuracy;
-mod performance;
+pub mod performance;
 
 pub use accuracy::{
-  AccuracyMetrics, AccuracyMetricsBuilder, BloatDiagnosis, ConvergenceDiagnosis, DiscoveryPattern,
-  ExplorationDiagnostics, OverExpandedStep, QueryIssue, QueryIssueType, RecallCategoryBreakdown, RecallDiagnosis,
+  AccuracyMetrics, BloatDiagnosis, ConvergenceDiagnosis, DiscoveryPattern, ExplorationDiagnostics, OverExpandedStep,
+  RecallCategoryBreakdown, RecallDiagnosis,
 };
 pub use performance::{
-  IndexingMetrics, LatencyStats, LatencyTracker, PerformanceMetrics, ResourceMonitor, ResourceSnapshot, SearchMetrics,
-  StepMetrics,
+  BatchChangeResult, FileOperationsResult, GitignoreResult, IncrementalBenchResult, IncrementalReport,
+  IncrementalSummary, IndexingMetrics, LargeFileBenchResult, LatencyTracker, OperationResult, PerformanceMetrics,
+  ResourceMonitor, SingleChangeResult, StepMetrics, WatcherLifecycleResult, WatcherReport, WatcherSummary,
 };
 
 /// All metrics targets from the plan.
@@ -28,12 +29,8 @@ pub struct MetricTargets {
   pub mrr: f64,
   /// Max noise ratio (≤25%)
   pub noise_ratio: f64,
-  /// Max top-3 noise (≤10%)
-  pub top3_noise: f64,
   /// Hint utility target (≥60%)
   pub hint_utility: f64,
-  /// Suggestion quality target (≥50%)
-  pub suggestion_quality: f64,
   /// Convergence rate target (≥70%)
   pub convergence_rate: f64,
   /// Navigation efficiency target (≥50%)
@@ -54,26 +51,12 @@ impl Default for MetricTargets {
       max_steps_to_core: 3,
       mrr: 0.50,
       noise_ratio: 0.25,
-      top3_noise: 0.10,
       hint_utility: 0.60,
-      suggestion_quality: 0.50,
       convergence_rate: 0.70,
       navigation_efficiency: 0.50,
       context_bloat: 0.30,
       dead_end_ratio: 0.20,
       file_diversity: 0.60,
     }
-  }
-}
-
-impl MetricTargets {
-  /// Check if accuracy metrics meet all targets.
-  pub fn check_accuracy(&self, metrics: &AccuracyMetrics) -> bool {
-    metrics.file_recall >= self.file_recall
-      && metrics.symbol_recall >= self.symbol_recall
-      && metrics.steps_to_core.is_none_or(|s| s <= self.max_steps_to_core)
-      && metrics.mrr >= self.mrr
-      && metrics.noise_ratio <= self.noise_ratio
-      && metrics.top3_noise <= self.top3_noise
   }
 }

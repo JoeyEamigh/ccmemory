@@ -1,0 +1,72 @@
+mod ollama;
+mod openrouter;
+mod rate_limit;
+mod resilient;
+pub mod validation;
+
+use std::sync::Arc;
+
+pub use ollama::OllamaProvider;
+pub use openrouter::OpenRouterProvider;
+use resilient::{ResilientProvider, RetryConfig};
+
+use crate::domain::config::{EmbeddingConfig, EmbeddingProvider as ConfigEmbeddingProvider};
+
+/// Embedding mode determines how text is formatted before embedding.
+///
+/// qwen3-embedding (and similar instruction-following embedding models) produce
+/// better results when queries are prefixed with a task instruction, while
+/// documents are embedded without any prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmbeddingMode {
+  /// Embedding a document for storage/indexing.
+  /// Text is embedded as-is without any prefix.
+  #[default]
+  Document,
+  /// Embedding a query for retrieval/search.
+  /// Text is prefixed with a task instruction for better retrieval.
+  Query,
+}
+
+#[async_trait::async_trait]
+pub trait EmbeddingProvider: Send + Sync {
+  fn name(&self) -> &str;
+  fn model_id(&self) -> &str;
+  fn dimensions(&self) -> usize;
+
+  async fn embed(&self, text: &str, mode: EmbeddingMode) -> Result<Vec<f32>, EmbeddingError>;
+  async fn embed_batch(&self, texts: &[&str], mode: EmbeddingMode) -> Result<Vec<Vec<f32>>, EmbeddingError>;
+}
+
+impl dyn EmbeddingProvider {
+  pub fn from_config(config: &EmbeddingConfig) -> Result<Arc<dyn EmbeddingProvider>, EmbeddingError> {
+    match config.provider {
+      ConfigEmbeddingProvider::Ollama => {
+        let provider = OllamaProvider::new(config)?;
+
+        Ok(Arc::new(provider))
+      }
+      ConfigEmbeddingProvider::OpenRouter => {
+        let provider = OpenRouterProvider::new(config)?;
+
+        // Wrap with resilient retry logic (handles 429s, timeouts, etc.)
+        let resilient = ResilientProvider::with_config(provider, RetryConfig::for_cloud());
+        Ok(Arc::new(resilient))
+      }
+    }
+  }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EmbeddingError {
+  #[error("No api key configured for provider")]
+  NoApiKey,
+  #[error("Request failed: {0}")]
+  Request(#[from] reqwest::Error),
+  #[error("Provider error: {0}")]
+  ProviderError(String),
+  #[error("Network error: {0}")]
+  Network(String),
+  #[error("Request timed out")]
+  Timeout,
+}

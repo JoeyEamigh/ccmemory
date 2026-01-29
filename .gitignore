@@ -4,7 +4,6 @@
 
 # IDE
 .idea/
-.vscode/
 *.swp
 
 # OS
@@ -26,5 +25,5 @@ plugin/bin/
 # Coverage
 coverage/
 
-# bench results
+/backup
 /bench-results

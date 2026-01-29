@@ -93,37 +93,6 @@ impl Default for NoisePatterns {
 }
 
 impl NoisePatterns {
-  /// Create empty patterns (nothing is noise).
-  pub fn none() -> Self {
-    Self {
-      file_patterns: vec![],
-      symbol_patterns: vec![],
-      content_patterns: vec![],
-    }
-  }
-
-  /// Create with custom file patterns only.
-  pub fn with_file_patterns(patterns: Vec<String>) -> Self {
-    Self {
-      file_patterns: patterns,
-      symbol_patterns: vec![],
-      content_patterns: vec![],
-    }
-  }
-
-  /// Add custom patterns.
-  pub fn add_file_pattern(&mut self, pattern: &str) {
-    self.file_patterns.push(pattern.to_string());
-  }
-
-  pub fn add_symbol_pattern(&mut self, pattern: &str) {
-    self.symbol_patterns.push(pattern.to_string());
-  }
-
-  pub fn add_content_pattern(&mut self, pattern: &str) {
-    self.content_patterns.push(pattern.to_string());
-  }
-
   /// Check if a file path is noise.
   pub fn is_noise_file(&self, path: &str) -> bool {
     for pattern in &self.file_patterns {
@@ -196,12 +165,12 @@ mod tests {
     let patterns = NoisePatterns::default();
 
     assert!(patterns.is_noise_file("src/tests/test_main.rs"));
-    assert!(patterns.is_noise_file("crates/core/benches/bench.rs"));
+    assert!(patterns.is_noise_file("crates/model/benches/bench.rs"));
     assert!(patterns.is_noise_file("src/__tests__/foo.ts"));
     assert!(patterns.is_noise_file("src/component.test.tsx"));
 
     assert!(!patterns.is_noise_file("src/main.rs"));
-    assert!(!patterns.is_noise_file("crates/core/src/lib.rs"));
+    assert!(!patterns.is_noise_file("crates/model/src/lib.rs"));
   }
 
   #[test]
@@ -254,23 +223,5 @@ mod tests {
     let ratio = patterns.noise_ratio(&files, &symbols);
     // 1 noise file + 1 noise symbol out of 6 total
     assert!((ratio - 2.0 / 6.0).abs() < f64::EPSILON);
-  }
-
-  #[test]
-  fn test_empty_patterns() {
-    let patterns = NoisePatterns::none();
-
-    assert!(!patterns.is_noise_file("src/tests/test.rs"));
-    assert!(!patterns.is_noise_symbol("test_foo"));
-    assert!(!patterns.has_noise_content("#[test]"));
-  }
-
-  #[test]
-  fn test_custom_patterns() {
-    let mut patterns = NoisePatterns::none();
-    patterns.add_file_pattern("**/vendor/**");
-
-    assert!(patterns.is_noise_file("vendor/lib/foo.rs"));
-    assert!(!patterns.is_noise_file("src/main.rs"));
   }
 }

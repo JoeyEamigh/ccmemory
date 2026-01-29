@@ -17,11 +17,13 @@ intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/editor/common/**/*.ts",
-    "**/editor/browser/**/*.ts",
-    "**/textModel/**/*.ts",
+    "**/editor/common/model/textModel.ts",
+    "**/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts",
+    "**/editor/common/viewModel/viewModelImpl.ts",
+    "**/editor/browser/widget/codeEditor/codeEditorWidget.ts",
+    "**/editor/browser/view.ts",
 ]
-must_find_symbols = ["TextModel", "ViewModel", "CodeEditor", "ITextModel"]
+must_find_symbols = ["TextModel", "ITextModel", "PieceTreeTextBuffer", "ViewModel", "CodeEditorWidget", "ViewLines"]
 noise_patterns = ["**/test/**", "*.test.ts", "*.spec.ts", "__tests__/**", "mock*"]
 
 # Step 1: Start from observable behavior
@@ -78,18 +80,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "What data structure does VSCode use to store text efficiently?"
-expected_concepts = ["piece tree", "buffer", "TextModel", "lines"]
+expected_concepts = ["PieceTreeTextBuffer", "PieceTreeBase", "Piece", "StringBuffer"]
 wrong_concepts = ["single string", "array of characters", "DOM"]
 weight = 2.0
 
 [[llm_judge.comprehension_questions]]
 question = "What is the relationship between TextModel and ViewModel?"
-expected_concepts = ["model", "view", "separation", "rendering"]
+expected_concepts = ["TextModel", "ViewModel", "ICoordinatesConverter", "line wrapping", "projection"]
 wrong_concepts = ["same thing", "no separation"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "How does the editor handle very large files efficiently?"
-expected_concepts = ["virtualization", "viewport", "piece tree", "lazy"]
+expected_concepts = ["ViewLines", "virtualization", "viewport", "VisibleLinesCollection"]
 wrong_concepts = ["loads everything", "no optimization"]
 weight = 1.0

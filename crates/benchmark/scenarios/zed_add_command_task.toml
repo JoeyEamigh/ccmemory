@@ -46,10 +46,10 @@ must_find_related_concerns = [
 
 # Patterns that indicate a modification point
 modification_point_indicators = [
-    "impl_actions",
+    "actions!",
     "register_action",
-    "actions.rs",
-    "Action trait",
+    "editor/src/actions.rs",
+    "derive(Action)",
 ]
 
 # Patterns that indicate a good example
@@ -58,14 +58,15 @@ example_indicators = [
     "SelectAll",
     "Copy",
     "Paste",
-    "action!",
+    "Undo",
+    "Redo",
 ]
 
 # Map concerns to their indicator patterns
 [task_requirements.concern_indicators]
-"action definition" = ["Action", "impl_actions", "actions!", "derive(Action)"]
-"command registration" = ["register", "ActionRegistry", "dispatch"]
-"keybinding" = ["keymap", "KeyBinding", "bindings", "ctrl", "cmd"]
+"action definition" = ["Action", "actions!", "derive(Action)", "editor/src/actions.rs"]
+"command registration" = ["register_action", "on_action", "element.rs"]
+"keybinding" = ["assets/keymaps", "KeyBinding", "default-linux.json", "key_context"]
 
 # Step 1: Find how commands work
 [[steps]]
@@ -124,18 +125,18 @@ min_comprehension_score = 0.6
 
 [[llm_judge.comprehension_questions]]
 question = "Based on what you found, what files would you create or modify to add a new command?"
-expected_concepts = ["Action", "impl_actions", "register", "keymap"]
+expected_concepts = ["editor/src/actions.rs", "actions!", "element.rs", "assets/keymaps"]
 wrong_concepts = ["main.rs only", "config file only"]
 weight = 2.0
 
 [[llm_judge.comprehension_questions]]
 question = "What are the steps to implement a new command in Zed?"
-expected_concepts = ["define Action", "implement", "register", "keybinding"]
+expected_concepts = ["actions!", "derive(Action)", "register_action", "keymap JSON"]
 wrong_concepts = ["plugin", "extension"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "How would you make your command show a notification to the user?"
-expected_concepts = ["notification", "workspace", "cx"]
+expected_concepts = ["workspace", "show_notification", "cx", "Context"]
 wrong_concepts = ["alert", "console.log"]
 weight = 1.0

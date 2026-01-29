@@ -17,11 +17,13 @@ intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/lsp/**/*.rs",
-    "**/language.rs",
-    "**/languages/**",
+    "**/lsp/src/lsp.rs",
+    "**/language/src/language.rs",
+    "**/project/src/lsp_store.rs",
+    "**/project/src/lsp_command.rs",
+    "**/languages/src/*.rs",
 ]
-must_find_symbols = ["LanguageServer", "LspAdapter", "completion", "hover", "definition"]
+must_find_symbols = ["LanguageServer", "LspAdapter", "GetCompletions", "GetHover", "GetDefinitions", "LspCommand"]
 noise_patterns = ["**/tests/**", "test_*", "Mock*", "*_test.rs", "**/fixtures/**"]
 
 # Step 1: Start from what the agent can observe
@@ -79,18 +81,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "What protocol or mechanism does Zed use to get code intelligence?"
-expected_concepts = ["Language Server Protocol", "LSP", "JSON-RPC", "language server"]
+expected_concepts = ["Language Server Protocol", "LSP", "JSON-RPC", "LanguageServer"]
 wrong_concepts = ["built-in parser only", "regex", "ctags"]
 weight = 2.0
 
 [[llm_judge.comprehension_questions]]
 question = "How does Zed support multiple programming languages?"
-expected_concepts = ["adapter", "language", "server", "extension"]
+expected_concepts = ["LspAdapter", "CachedLspAdapter", "languages crate", "LanguageServerBinary"]
 wrong_concepts = ["hardcoded", "one language"]
 weight = 1.0
 
 [[llm_judge.comprehension_questions]]
 question = "What happens when you trigger autocomplete?"
-expected_concepts = ["request", "server", "completion", "response"]
+expected_concepts = ["GetCompletions", "LspCommand", "lsp_store", "completions"]
 wrong_concepts = ["local dictionary", "spell check"]
 weight = 1.0

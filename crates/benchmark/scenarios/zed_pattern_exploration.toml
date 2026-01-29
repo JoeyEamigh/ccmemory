@@ -17,18 +17,19 @@ intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/http_client/**",
-    "**/client/**",
-    "**/api/**",
-    "**/rpc/**",
+    "**/http_client/src/http_client.rs",
+    "**/reqwest_client/src/reqwest_client.rs",
+    "**/client/src/client.rs",
+    "**/cloud_api_client/src/cloud_api_client.rs",
 ]
 must_find_symbols = [
-    "Client",
-    "request",
     "HttpClient",
-    "auth",
-    "token",
-    "Response",
+    "HttpClientWithUrl",
+    "ReqwestClient",
+    "Credentials",
+    "access_token",
+    "authorization_header",
+    "RedirectPolicy",
 ]
 noise_patterns = [
     "**/tests/**",
@@ -88,18 +89,18 @@ min_comprehension_score = 0.4
 
 [[llm_judge.comprehension_questions]]
 question = "What HTTP client does Zed use for external requests?"
-expected_concepts = ["HttpClient", "async", "request"]
+expected_concepts = ["HttpClient", "ReqwestClient", "reqwest", "async"]
 wrong_concepts = ["curl", "wget"]
 weight = 1.0
 
 [[llm_judge.comprehension_questions]]
 question = "How does Zed authenticate with cloud services?"
-expected_concepts = ["token", "auth", "credentials"]
+expected_concepts = ["Credentials", "access_token", "authorization_header", "user_id"]
 wrong_concepts = ["OAuth browser flow", "API key in URL"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "What patterns does Zed use for handling API failures?"
-expected_concepts = ["retry", "error", "Result", "timeout"]
+expected_concepts = ["exponential backoff", "INITIAL_RECONNECTION_DELAY", "MAX_RECONNECTION_DELAY", "Status"]
 wrong_concepts = []
 weight = 1.0

@@ -2,17 +2,21 @@
 name = "llm"
 version.workspace = true
 edition.workspace = true
-description = "LLM inference for CCEngram via Claude CLI"
 
 [lib]
 doctest = false
 
 [dependencies]
-tokio = { workspace = true, features = ["process", "io-util"] }
+tokio = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+dyn-clone = "1.0.20"
 
-[dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+[features]
+default = ["claude"]
+claude = []

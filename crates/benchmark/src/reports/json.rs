@@ -1,10 +1,11 @@
 //! JSON report format for benchmark results.
 
-use crate::Result;
-use crate::scenarios::ScenarioResult;
+use std::path::Path;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+
+use crate::{Result, scenarios::ScenarioResult};
 
 /// Complete benchmark report in JSON format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,15 +247,15 @@ impl BenchmarkReport {
   }
 
   /// Save report to a JSON file.
-  pub fn save(&self, path: &Path) -> Result<()> {
+  pub async fn save(&self, path: &Path) -> Result<()> {
     let json = serde_json::to_string_pretty(self)?;
-    std::fs::write(path, json)?;
+    tokio::fs::write(path, json).await?;
     Ok(())
   }
 
   /// Load report from a JSON file.
-  pub fn load(path: &Path) -> Result<Self> {
-    let json = std::fs::read_to_string(path)?;
+  pub async fn load(path: &Path) -> Result<Self> {
+    let json = tokio::fs::read_to_string(path).await?;
     let report = serde_json::from_str(&json)?;
     Ok(report)
   }
@@ -262,9 +263,10 @@ impl BenchmarkReport {
 
 #[cfg(test)]
 mod tests {
-  use super::*;
-  use crate::metrics::{AccuracyMetrics, LatencyStats, PerformanceMetrics};
   use tempfile::TempDir;
+
+  use super::*;
+  use crate::metrics::{AccuracyMetrics, PerformanceMetrics, performance::LatencyStats};
 
   fn sample_result(id: &str, passed: bool) -> ScenarioResult {
     ScenarioResult {
@@ -367,16 +369,16 @@ mod tests {
     assert!((report.summary.accuracy.avg_noise_ratio - 0.15).abs() < f64::EPSILON);
   }
 
-  #[test]
-  fn test_save_and_load() {
+  #[tokio::test]
+  async fn test_save_and_load() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("report.json");
 
     let results = vec![sample_result("test-1", true)];
     let report = BenchmarkReport::from_results(&results);
 
-    report.save(&path).unwrap();
-    let loaded = BenchmarkReport::load(&path).unwrap();
+    report.save(&path).await.unwrap();
+    let loaded = BenchmarkReport::load(&path).await.unwrap();
 
     assert_eq!(loaded.summary.passed, 1);
     assert_eq!(loaded.scenarios.len(), 1);

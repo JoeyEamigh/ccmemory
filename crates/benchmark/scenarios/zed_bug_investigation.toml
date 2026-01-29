@@ -24,11 +24,12 @@ intent = "bug_investigation"
 [expected]
 # Investigation targets - but agent doesn't know these upfront
 must_find_files = [
-    "**/buffer.rs",
-    "**/worktree.rs",
-    "**/project.rs",
+    "**/language/src/buffer.rs",
+    "**/worktree/src/worktree.rs",
+    "**/project/src/buffer_store.rs",
+    "**/editor/src/items.rs",
 ]
-must_find_symbols = ["save", "Buffer", "dirty", "write", "flush"]
+must_find_symbols = ["save", "Buffer", "is_dirty", "write_file", "did_save", "save_local_buffer"]
 noise_patterns = [
     "**/tests/**",
     "**/test/**",
@@ -94,18 +95,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "What are the key steps in the save operation flow?"
-expected_concepts = ["Buffer", "write", "file system", "dirty"]
+expected_concepts = ["BufferStore", "save_local_buffer", "Worktree", "write_file", "did_save"]
 wrong_concepts = []
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "What could cause a save to fail silently?"
-expected_concepts = ["error", "async", "permission", "path"]
+expected_concepts = ["anyhow", "Result", "permission", "DiskState"]
 wrong_concepts = []
 weight = 2.0
 
 [[llm_judge.comprehension_questions]]
 question = "How would you debug a save failure based on what you found?"
-expected_concepts = ["log", "trace", "Buffer", "dirty flag"]
+expected_concepts = ["tracing", "BufferEvent", "is_dirty", "saved_version"]
 wrong_concepts = []
 weight = 1.5

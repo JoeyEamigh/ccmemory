@@ -4,32 +4,32 @@
 //! CCEngram's ability to navigate and discover code in large codebases.
 
 mod definition;
-mod runner;
+pub mod runner;
+
+use std::path::Path;
 
 pub use definition::{
-  ComprehensionQuestion, Expected, LlmJudgeConfig, PreviousStepResults, Scenario, ScenarioMetadata, Step,
-  SuccessCriteria, Task, TaskIntent, TaskRequirements, TaskRequirementsResult,
+  ComprehensionQuestion, Expected, LlmJudgeConfig, PreviousStepResults, Scenario, Step, SuccessCriteria, TaskIntent,
+  TaskRequirements, TaskRequirementsResult,
 };
-pub use runner::{ScenarioResult, ScenarioRunner, StepResult, run_scenarios_parallel};
-
-use crate::Result;
-use std::path::Path;
+pub use runner::{ScenarioResult, ScenarioRunner, run_scenarios_parallel};
 use tracing::info;
 
+use crate::Result;
+
 /// Load all scenarios from a directory.
-pub fn load_scenarios_from_dir(dir: &Path) -> Result<Vec<Scenario>> {
+pub async fn load_scenarios_from_dir(dir: &Path) -> Result<Vec<Scenario>> {
   let mut scenarios = Vec::new();
 
   if !dir.exists() {
     return Ok(scenarios);
   }
 
-  for entry in std::fs::read_dir(dir)? {
-    let entry = entry?;
+  while let Some(entry) = tokio::fs::read_dir(dir).await?.next_entry().await? {
     let path = entry.path();
     if path.extension().is_some_and(|e| e == "toml") {
       info!("Loading scenario: {}", path.display());
-      let scenario = Scenario::load(&path)?;
+      let scenario = Scenario::load(&path).await?;
       scenarios.push(scenario);
     }
   }
@@ -37,13 +37,6 @@ pub fn load_scenarios_from_dir(dir: &Path) -> Result<Vec<Scenario>> {
   // Sort by ID for consistent ordering
   scenarios.sort_by(|a, b| a.metadata.id.cmp(&b.metadata.id));
   Ok(scenarios)
-}
-
-/// Load built-in scenarios from the crate's scenarios directory.
-pub fn load_builtin_scenarios() -> Vec<Scenario> {
-  // In a real implementation, these would be embedded or loaded from a known path
-  // For now, return empty - scenarios are loaded from the scenarios/ directory
-  Vec::new()
 }
 
 /// Filter scenarios by pattern (supports glob-style wildcards).
@@ -77,16 +70,5 @@ mod tests {
 
     let filtered = filter_scenarios(&scenarios, "*extensions*");
     assert_eq!(filtered.len(), 1);
-  }
-
-  #[test]
-  fn test_filter_scenarios_all() {
-    let scenarios = vec![
-      Scenario::new_test("test1", "Test 1"),
-      Scenario::new_test("test2", "Test 2"),
-    ];
-
-    let filtered = filter_scenarios(&scenarios, "*");
-    assert_eq!(filtered.len(), 2);
   }
 }

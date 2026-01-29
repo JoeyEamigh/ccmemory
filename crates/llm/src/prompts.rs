@@ -1,112 +1,117 @@
 //! LLM prompts for extraction, classification, and analysis
 //!
-//! All prompts are designed to return JSON for structured parsing.
+//! Uses JSON schemas for structured output validation.
 
 use tracing::trace;
 
-/// Prompt for classifying user input signals
-pub const SIGNAL_CLASSIFICATION_PROMPT: &str = r#"You are a signal classifier. Analyze the user's message and classify it.
+/// JSON schema for signal classification response
+pub const SIGNAL_CLASSIFICATION_SCHEMA: &str = r#"{
+  "type": "object",
+  "properties": {
+    "category": {
+      "type": "string",
+      "enum": ["correction", "preference", "context", "task", "question", "feedback", "other"]
+    },
+    "is_extractable": { "type": "boolean" },
+    "summary": { "type": ["string", "null"] }
+  },
+  "required": ["category", "is_extractable"]
+}"#;
 
-Categories:
-- correction: User correcting previous behavior or output
-- preference: User expressing a preference about how things should be done
-- context: User providing information or context
-- task: User requesting a task to be performed
-- question: User asking a question
-- feedback: User giving feedback about results
+/// JSON schema for memory extraction response
+pub const EXTRACTION_SCHEMA: &str = r#"{
+  "type": "object",
+  "properties": {
+    "memories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "string" },
+          "summary": { "type": ["string", "null"] },
+          "memory_type": {
+            "type": "string",
+            "enum": ["preference", "codebase", "decision", "gotcha", "pattern", "turn_summary", "task_completion"]
+          },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "required": ["content", "memory_type", "confidence"]
+      }
+    }
+  },
+  "required": ["memories"]
+}"#;
+
+/// JSON schema for superseding detection response
+pub const SUPERSEDING_SCHEMA: &str = r#"{
+  "type": "object",
+  "properties": {
+    "supersedes": { "type": "boolean" },
+    "superseded_memory_id": { "type": ["string", "null"] },
+    "reason": { "type": ["string", "null"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  },
+  "required": ["supersedes", "confidence"]
+}"#;
+
+/// Prompt for classifying user input signals
+pub const SIGNAL_CLASSIFICATION_PROMPT: &str = r#"Classify this user message:
+- correction: User correcting previous behavior
+- preference: User expressing a preference
+- context: User providing information
+- task: User requesting work
+- question: User asking something
+- feedback: User giving feedback
 - other: None of the above
 
-Respond with JSON only:
-{
-  "category": "<category>",
-  "is_extractable": <boolean>,
-  "summary": "<brief summary if extractable, null otherwise>"
-}
+Set is_extractable=true if the message contains memorable information.
 
-User message to classify:
+Message:
 "#;
 
 /// Prompt for extracting memories from conversation context
-pub const MEMORY_EXTRACTION_PROMPT: &str = r#"You are a memory extraction system. Extract valuable long-term memories from this conversation segment.
-
-Extract memories that would be useful to recall in future sessions:
-- User preferences (coding style, tools, workflows)
-- Project-specific knowledge (architecture decisions, gotchas, patterns)
-- Important decisions and their rationale
-- Learned patterns or best practices
-- Task completions and outcomes
+pub const MEMORY_EXTRACTION_PROMPT: &str = r#"Extract valuable long-term memories from this conversation segment.
 
 Memory types:
 - preference: User's stated preference
-- codebase: Knowledge about the codebase
-- decision: Design or implementation decision
-- gotcha: Something to watch out for
+- codebase: Knowledge about code structure/behavior
+- decision: Design or implementation decision with rationale
+- gotcha: Pitfall or warning to remember
 - pattern: Recurring pattern or best practice
 - turn_summary: Summary of what was accomplished
-- task_completion: Task that was completed
-
-Respond with JSON only:
-{
-  "memories": [
-    {
-      "content": "<full memory content>",
-      "summary": "<brief 1-line summary>",
-      "memory_type": "<type>",
-      "sector": "<user|assistant|system or null>",
-      "tags": ["<relevant>", "<tags>"],
-      "confidence": <0.0-1.0>
-    }
-  ]
-}
+- task_completion: Record of completed task
 
 Only extract memories with confidence >= 0.6. Return empty array if nothing worth extracting.
 
-Conversation segment:
+Conversation:
 "#;
 
 /// Prompt for detecting if new memory supersedes existing ones
-pub const SUPERSEDING_DETECTION_PROMPT: &str = r#"You are comparing memories to detect supersession.
+pub const SUPERSEDING_DETECTION_PROMPT: &str = r#"Does the new memory supersede any existing memory?
 
-A new memory SUPERSEDES an existing memory when:
-- It updates or replaces the same information
-- It contradicts and provides a newer truth
-- It refines or clarifies the same concept with more detail
-- It explicitly overrides a previous decision
-
-It does NOT supersede when:
-- It's about a different topic
-- It adds new information without contradicting
-- It's a related but distinct piece of knowledge
-
-Respond with JSON only:
-{
-  "supersedes": <boolean>,
-  "superseded_memory_id": "<id if supersedes, null otherwise>",
-  "reason": "<brief explanation>",
-  "confidence": <0.0-1.0>
-}
+Supersedes when: updates/replaces same info, contradicts with newer truth, refines same concept.
+Does NOT supersede when: different topic, adds without contradicting, related but distinct.
 
 New memory:
 {new_memory}
 
-Candidate existing memories to check:
+Existing memories:
 {existing_memories}
 "#;
 
 /// System prompt for extraction context
-pub const EXTRACTION_SYSTEM_PROMPT: &str = r#"You are CCEngram's memory extraction system. Your role is to identify and extract valuable information from Claude Code conversation segments that would be useful to recall in future sessions.
+pub const EXTRACTION_SYSTEM_PROMPT: &str = r#"You are CCEngram's memory extraction system. Extract valuable information from Claude Code conversations that would be useful in future sessions.
 
 Guidelines:
-1. Focus on information with lasting value - not ephemeral task details
-2. Prefer explicit statements over inferred knowledge
-3. Include enough context to be useful standalone
+1. Focus on lasting value, not ephemeral details
+2. Prefer explicit statements over inferences
+3. Include enough context to be standalone
 4. Use clear, concise language
-5. Assign appropriate confidence scores
-6. Tag memories with relevant keywords
+5. Assign appropriate confidence scores"#;
 
-Always respond with valid JSON matching the requested schema."#;
-
-/// Prompt for analyzing code changes and extracting patterns
+#[allow(dead_code)]
+/// Prompt for analyzing code changes and extracting patterns (may use at some point - lot of inference though)
 pub const CODE_ANALYSIS_PROMPT: &str = r#"You are analyzing code changes to extract patterns and learnings.
 
 Look for:
@@ -153,20 +158,29 @@ pub fn build_extraction_prompt(context: &ExtractionContext) -> String {
     prompt.push_str(user_prompt);
   }
 
-  if !context.files_read.is_empty() {
-    prompt.push_str("\nFiles read: ");
-    prompt.push_str(&context.files_read.join(", "));
-  }
+  // Include detailed tool uses if available (preferred over legacy fields)
+  if !context.tool_uses.is_empty() {
+    prompt.push_str("\n\nTool sequence:");
+    for tool_use in &context.tool_uses {
+      prompt.push_str(&format!("\n  - {}", tool_use.format_for_prompt()));
+    }
+  } else {
+    // Fallback to legacy fields if no detailed tool uses
+    if !context.files_read.is_empty() {
+      prompt.push_str("\nFiles read: ");
+      prompt.push_str(&context.files_read.join(", "));
+    }
 
-  if !context.files_modified.is_empty() {
-    prompt.push_str("\nFiles modified: ");
-    prompt.push_str(&context.files_modified.join(", "));
-  }
+    if !context.files_modified.is_empty() {
+      prompt.push_str("\nFiles modified: ");
+      prompt.push_str(&context.files_modified.join(", "));
+    }
 
-  if !context.commands_run.is_empty() {
-    prompt.push_str("\nCommands run: ");
-    for (cmd, exit_code) in &context.commands_run {
-      prompt.push_str(&format!("\n  - {} (exit: {})", cmd, exit_code));
+    if !context.commands_run.is_empty() {
+      prompt.push_str("\nCommands run: ");
+      for (cmd, exit_code) in &context.commands_run {
+        prompt.push_str(&format!("\n  - {} (exit: {})", cmd, exit_code));
+      }
     }
   }
 
@@ -194,6 +208,7 @@ pub fn build_extraction_prompt(context: &ExtractionContext) -> String {
     template_len = MEMORY_EXTRACTION_PROMPT.len(),
     total_len = prompt.len(),
     has_user_prompt = context.user_prompt.is_some(),
+    tool_uses_count = context.tool_uses.len(),
     files_read_count = context.files_read.len(),
     files_modified_count = context.files_modified.len(),
     commands_run_count = context.commands_run.len(),
@@ -237,6 +252,259 @@ pub fn build_superseding_prompt(new_memory: &str, existing_memories: &[(String, 
   prompt
 }
 
+/// Typed tool use data for extraction context
+#[derive(Debug, Clone)]
+pub enum ToolUse {
+  /// File read operation
+  Read { file_path: String },
+  /// File edit operation
+  Edit {
+    file_path: String,
+    /// Brief description of what was changed (first ~100 chars of old_string)
+    change_preview: Option<String>,
+  },
+  /// File write operation
+  Write { file_path: String },
+  /// Notebook edit operation
+  NotebookEdit { notebook_path: String },
+  /// Bash command execution
+  Bash { command: String, exit_code: i32 },
+  /// Glob file search
+  Glob { pattern: String },
+  /// Grep content search
+  Grep { pattern: String },
+  /// Task/subagent spawn
+  Task { description: Option<String> },
+  /// Todo list management
+  TodoWrite {
+    completed_tasks: Vec<String>,
+    pending_tasks: Vec<String>,
+  },
+  /// Web fetch
+  WebFetch { url: String },
+  /// Web search
+  WebSearch { query: String },
+  /// Other tool (catch-all)
+  Other { tool_name: String },
+}
+
+impl ToolUse {
+  /// Parse a tool use from raw hook event data.
+  ///
+  /// # Arguments
+  /// * `tool_name` - The name of the tool
+  /// * `params` - The tool input parameters (from hook event)
+  /// * `result` - Optional tool result (from hook event, used for exit codes etc.)
+  pub fn from_hook_event(tool_name: &str, params: &serde_json::Value, result: Option<&serde_json::Value>) -> Self {
+    match tool_name {
+      "Read" => {
+        let file_path = params
+          .get("file_path")
+          .and_then(|v| v.as_str())
+          .unwrap_or("")
+          .to_string();
+        ToolUse::Read { file_path }
+      }
+      "Edit" => {
+        let file_path = params
+          .get("file_path")
+          .and_then(|v| v.as_str())
+          .unwrap_or("")
+          .to_string();
+        let change_preview = params
+          .get("old_string")
+          .and_then(|v| v.as_str())
+          .map(|s| s.chars().take(100).collect());
+        ToolUse::Edit {
+          file_path,
+          change_preview,
+        }
+      }
+      "Write" => {
+        let file_path = params
+          .get("file_path")
+          .and_then(|v| v.as_str())
+          .unwrap_or("")
+          .to_string();
+        ToolUse::Write { file_path }
+      }
+      "NotebookEdit" => {
+        let notebook_path = params
+          .get("notebook_path")
+          .and_then(|v| v.as_str())
+          .unwrap_or("")
+          .to_string();
+        ToolUse::NotebookEdit { notebook_path }
+      }
+      "Bash" => {
+        let command = params.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        // exit_code comes from result, not params
+        let exit_code = result
+          .and_then(|r| r.get("exit_code"))
+          .and_then(|v| v.as_i64())
+          .unwrap_or(0) as i32;
+        ToolUse::Bash { command, exit_code }
+      }
+      "Glob" => {
+        let pattern = params.get("pattern").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        ToolUse::Glob { pattern }
+      }
+      "Grep" => {
+        let pattern = params.get("pattern").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        ToolUse::Grep { pattern }
+      }
+      "Task" => {
+        let description = params.get("description").and_then(|v| v.as_str()).map(String::from);
+        ToolUse::Task { description }
+      }
+      "TodoWrite" => {
+        let mut completed_tasks = Vec::new();
+        let mut pending_tasks = Vec::new();
+        if let Some(todos) = params.get("todos").and_then(|v| v.as_array()) {
+          for todo in todos {
+            if let Some(content) = todo.get("content").and_then(|v| v.as_str()) {
+              if todo.get("status").and_then(|v| v.as_str()) == Some("completed") {
+                completed_tasks.push(content.to_string());
+              } else {
+                pending_tasks.push(content.to_string());
+              }
+            }
+          }
+        }
+        ToolUse::TodoWrite {
+          completed_tasks,
+          pending_tasks,
+        }
+      }
+      "WebFetch" => {
+        let url = params.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        ToolUse::WebFetch { url }
+      }
+      "WebSearch" => {
+        let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        ToolUse::WebSearch { query }
+      }
+      _ => ToolUse::Other {
+        tool_name: tool_name.to_string(),
+      },
+    }
+  }
+
+  /// Get the tool name
+  pub fn name(&self) -> &str {
+    match self {
+      ToolUse::Read { .. } => "Read",
+      ToolUse::Edit { .. } => "Edit",
+      ToolUse::Write { .. } => "Write",
+      ToolUse::NotebookEdit { .. } => "NotebookEdit",
+      ToolUse::Bash { .. } => "Bash",
+      ToolUse::Glob { .. } => "Glob",
+      ToolUse::Grep { .. } => "Grep",
+      ToolUse::Task { .. } => "Task",
+      ToolUse::TodoWrite { .. } => "TodoWrite",
+      ToolUse::WebFetch { .. } => "WebFetch",
+      ToolUse::WebSearch { .. } => "WebSearch",
+      ToolUse::Other { tool_name } => tool_name,
+    }
+  }
+
+  /// Get the file path if this tool operates on a file
+  pub fn file_path(&self) -> Option<&str> {
+    match self {
+      ToolUse::Read { file_path } => Some(file_path),
+      ToolUse::Edit { file_path, .. } => Some(file_path),
+      ToolUse::Write { file_path } => Some(file_path),
+      ToolUse::NotebookEdit { notebook_path } => Some(notebook_path),
+      _ => None,
+    }
+  }
+
+  /// Check if this is a file modification (Edit, Write, NotebookEdit)
+  pub fn is_file_modification(&self) -> bool {
+    matches!(
+      self,
+      ToolUse::Edit { .. } | ToolUse::Write { .. } | ToolUse::NotebookEdit { .. }
+    )
+  }
+
+  /// Check if this is a file read
+  pub fn is_file_read(&self) -> bool {
+    matches!(self, ToolUse::Read { .. })
+  }
+
+  /// Get command info if this is a Bash tool use
+  pub fn command_info(&self) -> Option<(&str, i32)> {
+    match self {
+      ToolUse::Bash { command, exit_code } => Some((command, *exit_code)),
+      _ => None,
+    }
+  }
+
+  /// Get search pattern if this is a search tool
+  pub fn search_pattern(&self) -> Option<&str> {
+    match self {
+      ToolUse::Glob { pattern } | ToolUse::Grep { pattern } => Some(pattern),
+      _ => None,
+    }
+  }
+
+  /// Get completed tasks if this is a TodoWrite
+  pub fn completed_tasks(&self) -> Option<&[String]> {
+    match self {
+      ToolUse::TodoWrite { completed_tasks, .. } => Some(completed_tasks),
+      _ => None,
+    }
+  }
+
+  /// Format for LLM prompt inclusion
+  pub fn format_for_prompt(&self) -> String {
+    match self {
+      ToolUse::Read { file_path } => format!("Read: {}", file_path),
+      ToolUse::Edit {
+        file_path,
+        change_preview,
+      } => {
+        if let Some(preview) = change_preview {
+          format!("Edit: {} (changed: {}...)", file_path, preview)
+        } else {
+          format!("Edit: {}", file_path)
+        }
+      }
+      ToolUse::Write { file_path } => format!("Write: {}", file_path),
+      ToolUse::NotebookEdit { notebook_path } => format!("NotebookEdit: {}", notebook_path),
+      ToolUse::Bash { command, exit_code } => {
+        if *exit_code == 0 {
+          format!("Bash: {}", command)
+        } else {
+          format!("Bash: {} (exit: {})", command, exit_code)
+        }
+      }
+      ToolUse::Glob { pattern } => format!("Glob: {}", pattern),
+      ToolUse::Grep { pattern } => format!("Grep: {}", pattern),
+      ToolUse::Task { description } => {
+        if let Some(desc) = description {
+          format!("Task: {}", desc)
+        } else {
+          "Task: (subagent)".to_string()
+        }
+      }
+      ToolUse::TodoWrite {
+        completed_tasks,
+        pending_tasks,
+      } => {
+        format!(
+          "TodoWrite: {} completed, {} pending",
+          completed_tasks.len(),
+          pending_tasks.len()
+        )
+      }
+      ToolUse::WebFetch { url } => format!("WebFetch: {}", url),
+      ToolUse::WebSearch { query } => format!("WebSearch: {}", query),
+      ToolUse::Other { tool_name } => tool_name.clone(),
+    }
+  }
+}
+
 /// Context for memory extraction
 #[derive(Debug, Default, Clone)]
 pub struct ExtractionContext {
@@ -258,6 +526,8 @@ pub struct ExtractionContext {
   pub last_assistant_message: Option<String>,
   /// Total tool calls in this segment
   pub tool_call_count: usize,
+  /// Detailed tool use records
+  pub tool_uses: Vec<ToolUse>,
 }
 
 impl ExtractionContext {
@@ -279,69 +549,5 @@ impl ExtractionContext {
     // Corrections or preferences trigger immediate extraction
     // This will be determined by signal classification
     false // Placeholder - actual check happens via LLM classification
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn test_build_signal_classification_prompt() {
-    let prompt = build_signal_classification_prompt("I prefer tabs over spaces");
-    assert!(prompt.contains("I prefer tabs over spaces"));
-    assert!(prompt.contains("correction"));
-    assert!(prompt.contains("preference"));
-  }
-
-  #[test]
-  fn test_build_extraction_prompt_minimal() {
-    let ctx = ExtractionContext::new();
-    let prompt = build_extraction_prompt(&ctx);
-    assert!(prompt.contains("memory_type"));
-  }
-
-  #[test]
-  fn test_build_extraction_prompt_full() {
-    let ctx = ExtractionContext {
-      user_prompt: Some("Fix the bug".into()),
-      files_read: vec!["src/main.rs".into()],
-      files_modified: vec!["src/lib.rs".into()],
-      commands_run: vec![("cargo test".into(), 0)],
-      errors_encountered: vec!["type error on line 5".into()],
-      searches_performed: vec!["error handling".into()],
-      completed_tasks: vec!["Fix type error".into()],
-      last_assistant_message: Some("I fixed the bug".into()),
-      tool_call_count: 10,
-    };
-    let prompt = build_extraction_prompt(&ctx);
-    assert!(prompt.contains("Fix the bug"));
-    assert!(prompt.contains("src/main.rs"));
-    assert!(prompt.contains("cargo test"));
-  }
-
-  #[test]
-  fn test_build_superseding_prompt() {
-    let existing = vec![
-      ("mem1".into(), "Use tabs for indentation".into()),
-      ("mem2".into(), "Project uses React".into()),
-    ];
-    let prompt = build_superseding_prompt("Use spaces for indentation", &existing);
-    assert!(prompt.contains("Use spaces for indentation"));
-    assert!(prompt.contains("mem1"));
-    assert!(prompt.contains("Use tabs for indentation"));
-  }
-
-  #[test]
-  fn test_extraction_context_meaningful() {
-    let mut ctx = ExtractionContext::new();
-    assert!(!ctx.has_meaningful_content());
-
-    ctx.tool_call_count = 3;
-    assert!(ctx.has_meaningful_content());
-
-    ctx.tool_call_count = 0;
-    ctx.files_modified.push("test.rs".into());
-    assert!(ctx.has_meaningful_content());
   }
 }

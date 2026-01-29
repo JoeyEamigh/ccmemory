@@ -17,11 +17,13 @@ intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/extensionHost/**/*.ts",
-    "**/extensionManagement/**/*.ts",
-    "**/extensionsWorkbench/**/*.ts",
+    "**/services/extensions/electron-browser/localProcessExtensionHost.ts",
+    "**/services/extensions/common/abstractExtensionService.ts",
+    "**/api/common/extHostExtensionService.ts",
+    "**/api/common/extHostExtensionActivator.ts",
+    "**/platform/extensions/common/extensions.ts",
 ]
-must_find_symbols = ["ExtensionHost", "activate", "IExtension", "ExtensionService"]
+must_find_symbols = ["NativeLocalProcessExtensionHost", "IExtensionHost", "ExtensionsActivator", "IExtensionService", "activateByEvent"]
 noise_patterns = ["**/test/**", "*.test.ts", "*.spec.ts", "__tests__/**", "mock*"]
 
 # Step 1: Observable behavior
@@ -79,18 +81,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "How does VSCode isolate extensions from the main process?"
-expected_concepts = ["ExtensionHost", "process", "IPC", "separate"]
+expected_concepts = ["NativeLocalProcessExtensionHost", "IExtensionHost", "separate process", "IPC"]
 wrong_concepts = ["same process", "no isolation", "iframe"]
 weight = 2.0
 
 [[llm_judge.comprehension_questions]]
 question = "What triggers an extension to be activated?"
-expected_concepts = ["activation", "event", "onCommand", "onLanguage"]
+expected_concepts = ["activationEvents", "activateByEvent", "onCommand", "onLanguage", "ExtensionsActivator"]
 wrong_concepts = ["always running", "manual only"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "How do extensions contribute features like commands or menus?"
-expected_concepts = ["contribution", "manifest", "package.json", "register"]
+expected_concepts = ["IExtensionContributions", "package.json", "contributes", "register"]
 wrong_concepts = ["monkey patch", "direct modification"]
 weight = 1.0

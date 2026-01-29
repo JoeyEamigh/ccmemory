@@ -39,23 +39,23 @@ must_find_related_concerns = [
 ]
 
 modification_point_indicators = [
-    "TokenType",
+    "StandardTokenType",
     "TokenMetadata",
-    "registerTokenStyleDefault",
-    "contributes.languages",
+    "TMGrammarFactory",
+    "grammarsExtPoint",
 ]
 
 example_indicators = [
-    "keyword",
-    "string",
-    "comment",
-    "semantic",
+    "comment.line",
+    "string.quoted",
+    "keyword.control",
+    "scopeName",
 ]
 
 [task_requirements.concern_indicators]
-"token types" = ["Token", "TokenType", "TokenMetadata"]
-"textmate grammar" = ["TextMate", "grammar", "scope", "pattern"]
-"theme colors" = ["theme", "color", "foreground", "style"]
+"token types" = ["StandardTokenType", "TokenMetadata", "encodedTokenAttributes"]
+"textmate grammar" = ["TMGrammarFactory", "TMScopeRegistry", "IValidGrammarDefinition", "tmLanguage.json"]
+"theme colors" = ["TokenTheme", "ITokenThemeRule", "tokenColors", "ColorMap"]
 
 # Step 1: How syntax highlighting works
 [[steps]]
@@ -105,18 +105,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "What files or systems would you modify to add a new token type?"
-expected_concepts = ["grammar", "token", "theme", "contribution"]
+expected_concepts = ["tmLanguage.json", "TMGrammarFactory", "ITokenThemeRule", "package.json contributes"]
 wrong_concepts = ["single config file", "hardcode colors"]
 weight = 2.0
 
 [[llm_judge.comprehension_questions]]
 question = "How does the tokenizer work with themes to produce colored text?"
-expected_concepts = ["token", "scope", "theme", "color", "mapping"]
+expected_concepts = ["TokenTheme", "ThemeTrieElement", "ColorMap", "TokenMetadata"]
 wrong_concepts = ["inline styles", "CSS classes only"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "What is TextMate grammar and how does VSCode use it?"
-expected_concepts = ["TextMate", "scope", "pattern", "tokenize"]
+expected_concepts = ["TMGrammarFactory", "scopeName", "patterns", "vscode-textmate"]
 wrong_concepts = ["proprietary", "built-in only"]
 weight = 1.0

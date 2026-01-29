@@ -1,21 +1,16 @@
 //! Log viewing commands
 
+use std::{
+  io::{BufRead, BufReader},
+  path::PathBuf,
+  process::{Command, Stdio},
+};
+
 use anyhow::{Context, Result};
-use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
-/// Get the log directory path
+/// Get the log directory path (logs are stored in the data directory)
 fn log_dir() -> PathBuf {
-  // Check XDG_DATA_HOME first
-  if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
-    return PathBuf::from(xdg_data).join("ccengram");
-  }
-
-  // Fall back to platform default
-  dirs::data_local_dir()
-    .unwrap_or_else(|| PathBuf::from("."))
-    .join("ccengram")
+  ccengram::dirs::default_data_dir()
 }
 
 /// View daemon logs
@@ -102,10 +97,8 @@ pub fn cmd_logs(follow: bool, lines: usize, date: Option<&str>, level: Option<&s
       // Filter output by level
       if let Some(stdout) = cmd.stdout.take() {
         let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-          if let Ok(line) = line
-            && line.to_uppercase().contains(&level_upper)
-          {
+        for line in reader.lines().map_while(Result::ok) {
+          if line.to_uppercase().contains(&level_upper) {
             println!("{}", line);
           }
         }

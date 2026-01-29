@@ -1,7 +1,8 @@
 //! Agent and TUI commands
 
-use anyhow::Result;
 use std::path::PathBuf;
+
+use anyhow::Result;
 use tracing::error;
 
 /// Generate a MemExplore subagent for Claude Code
@@ -19,13 +20,13 @@ pub async fn cmd_agent(output: Option<&str>, force: bool) -> Result<()> {
 
   // Create parent directories
   if let Some(parent) = output_path.parent() {
-    std::fs::create_dir_all(parent)?;
+    tokio::fs::create_dir_all(parent).await?;
   }
 
   // Generate agent content
   let agent_content = generate_memexplore_agent();
 
-  std::fs::write(&output_path, &agent_content)?;
+  tokio::fs::write(&output_path, &agent_content).await?;
 
   println!("Generated MemExplore agent: {:?}", output_path);
   println!();
@@ -38,7 +39,7 @@ pub async fn cmd_agent(output: Option<&str>, force: bool) -> Result<()> {
 /// Launch interactive TUI
 pub async fn cmd_tui(project: Option<PathBuf>) -> Result<()> {
   let path = project.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-  tui::run(path).await
+  crate::tui::run(path).await
 }
 
 /// Generate the MemExplore agent markdown content

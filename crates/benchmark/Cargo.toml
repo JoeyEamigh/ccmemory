@@ -7,18 +7,10 @@ edition.workspace = true
 name = "ccengram-bench"
 path = "src/main.rs"
 
-[lib]
-doctest = false
-
 [dependencies]
 # Internal crates
-engram-core = { workspace = true }
-db = { workspace = true }
-daemon = { workspace = true }
-index = { workspace = true }
-embedding = { workspace = true }
+ccengram = { workspace = true }
 llm = { workspace = true }
-ipc = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }

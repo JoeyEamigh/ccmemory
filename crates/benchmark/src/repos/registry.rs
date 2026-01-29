@@ -98,11 +98,6 @@ impl RepoRegistry {
     }
   }
 
-  /// Get all repository configurations.
-  pub fn all() -> Vec<RepoConfig> {
-    TargetRepo::all().iter().map(|r| Self::get(*r)).collect()
-  }
-
   fn zed_config() -> RepoConfig {
     RepoConfig {
       repo: TargetRepo::Zed,
@@ -173,11 +168,5 @@ mod tests {
 
     let config = RepoRegistry::get(TargetRepo::Vscode);
     assert_eq!(config.extracted_dir_name(), "vscode-1.108.1");
-  }
-
-  #[test]
-  fn test_all_repos() {
-    let configs = RepoRegistry::all();
-    assert_eq!(configs.len(), 2);
   }
 }

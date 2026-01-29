@@ -17,18 +17,20 @@ intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/buffer.rs",
-    "**/worktree.rs",
-    "**/project.rs",
-    "**/persistence/**",
+    "**/language/src/buffer.rs",
+    "**/worktree/src/worktree.rs",
+    "**/project/src/project.rs",
+    "**/project/src/buffer_store.rs",
 ]
 must_find_symbols = [
     "save",
     "Buffer",
-    "dirty",
-    "write",
-    "modified",
-    "Snapshot",
+    "is_dirty",
+    "has_unsaved_edits",
+    "write_file",
+    "did_save",
+    "BufferSnapshot",
+    "DiskState",
 ]
 noise_patterns = [
     "**/tests/**",
@@ -79,18 +81,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "How does Zed track whether a file has unsaved changes?"
-expected_concepts = ["Buffer", "dirty", "modified", "snapshot"]
+expected_concepts = ["Buffer", "is_dirty", "has_unsaved_edits", "saved_version", "version"]
 wrong_concepts = ["autosave timer", "polling"]
 weight = 1.0
 
 [[llm_judge.comprehension_questions]]
 question = "What happens when a user saves a file in Zed?"
-expected_concepts = ["Buffer", "write", "file system", "worktree"]
+expected_concepts = ["Buffer", "write_file", "Worktree", "did_save", "BufferStore"]
 wrong_concepts = []
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
-question = "How does Zed handle multiple buffers for the same file?"
-expected_concepts = ["Buffer", "Snapshot", "synchronization"]
+question = "What is the role of BufferSnapshot in the save process?"
+expected_concepts = ["BufferSnapshot", "immutable", "version", "text"]
 wrong_concepts = []
 weight = 1.0

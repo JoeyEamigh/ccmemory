@@ -4,9 +4,12 @@
 //! - Verify reachability between symbols
 //! - Score navigation hints (are callers/callees in the graph?)
 
-use petgraph::algo::dijkstra;
-use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
+
+use petgraph::{
+  algo::dijkstra,
+  graph::{DiGraph, NodeIndex},
+};
 
 /// Call graph for analyzing symbol relationships.
 #[derive(Debug)]
@@ -203,12 +206,5 @@ mod tests {
     let (found, total) = graph.score_hints(&hints);
     assert_eq!(found, 2);
     assert_eq!(total, 3);
-  }
-
-  #[test]
-  fn test_counts() {
-    let graph = sample_graph();
-    assert_eq!(graph.symbol_count(), 6);
-    assert_eq!(graph.edge_count(), 5);
   }
 }

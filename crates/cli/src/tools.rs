@@ -1,8 +1,9 @@
 //! MCP tool definitions with config-based filtering.
 
-use engram_core::Config;
-use serde_json::{Value, json};
 use std::collections::HashMap;
+
+use ccengram::config::Config;
+use serde_json::{Value, json};
 
 /// Get all tool definitions as a map of name -> definition
 pub fn all_tool_definitions() -> HashMap<&'static str, Value> {
@@ -37,11 +38,6 @@ pub fn all_tool_definitions() -> HashMap<&'static str, Value> {
                     "type": "number",
                     "description": "Max results per scope (default: 10)"
                 },
-                "format": {
-                    "type": "string",
-                    "enum": ["json", "text"],
-                    "description": "Output format: 'json' for structured data, 'text' for human-readable with code blocks (default: json)"
-                }
             },
             "required": ["query"]
         }
@@ -69,11 +65,6 @@ pub fn all_tool_definitions() -> HashMap<&'static str, Value> {
                     "type": "number",
                     "description": "Items per section - callers, callees, etc. (default: 5)"
                 },
-                "format": {
-                    "type": "string",
-                    "enum": ["json", "text"],
-                    "description": "Output format: 'json' for structured data, 'text' for human-readable with code blocks (default: json)"
-                }
             }
         }
     }),
@@ -300,24 +291,6 @@ pub fn all_tool_definitions() -> HashMap<&'static str, Value> {
                 "language": { "type": "string", "description": "Filter by language" },
                 "file_path": { "type": "string", "description": "Filter by file path prefix" }
             }
-        }
-    }),
-  );
-
-  tools.insert(
-    "code_import_chunk",
-    json!({
-        "name": "code_import_chunk",
-        "description": "Import a code chunk directly (for bulk imports).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "chunk": {
-                    "type": "object",
-                    "description": "Code chunk to import"
-                }
-            },
-            "required": ["chunk"]
         }
     }),
   );
@@ -680,22 +653,23 @@ pub fn get_filtered_tool_definitions(config: &Config) -> Value {
 }
 
 /// Get tool definitions filtered by the config loaded from current directory
-pub fn get_tool_definitions_for_cwd() -> Value {
+pub async fn get_tool_definitions_for_cwd() -> Value {
   let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-  let config = Config::load_for_project(&cwd);
+  let config = Config::load_for_project(&cwd).await;
   get_filtered_tool_definitions(&config)
 }
 
 #[cfg(test)]
 mod tests {
+  use ccengram::config::{ToolConfig, ToolPreset};
+
   use super::*;
-  use engram_core::{ToolConfig, ToolPreset};
 
   #[test]
   fn test_all_tools_defined() {
     let tools = all_tool_definitions();
     // Verify all tools from ALL_TOOLS constant are defined
-    for tool_name in engram_core::ALL_TOOLS {
+    for tool_name in ccengram::config::ALL_TOOLS {
       assert!(
         tools.contains_key(tool_name),
         "Missing definition for tool: {}",
@@ -747,6 +721,6 @@ mod tests {
     let filtered = get_filtered_tool_definitions(&config);
     let arr = filtered.as_array().unwrap();
 
-    assert_eq!(arr.len(), engram_core::ALL_TOOLS.len());
+    assert_eq!(arr.len(), ccengram::config::ALL_TOOLS.len());
   }
 }

@@ -6,18 +6,17 @@
 //! 2. Evaluate answers against expected concepts
 //! 3. Score overall comprehension
 
-use crate::scenarios::{ComprehensionQuestion, LlmJudgeConfig, ScenarioResult};
-use llm::{InferenceRequest, Model};
+use llm::{InferenceRequest, LlmProvider};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::scenarios::{ComprehensionQuestion, LlmJudgeConfig, ScenarioResult};
 
 /// Errors from LLM judge evaluation.
 #[derive(Debug, Error)]
 pub enum JudgeError {
   #[error("LLM error: {0}")]
   Llm(String),
-  #[error("Parse error: {0}")]
-  Parse(String),
   #[error("Configuration error: {0}")]
   Config(String),
 }
@@ -72,10 +71,10 @@ impl Default for ComprehensionResult {
 }
 
 /// Configuration for the LLM judge.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct JudgeConfiguration {
   /// Model to use for evaluation
-  pub model: Model,
+  pub model: String,
   /// Timeout for LLM calls in seconds
   pub timeout_secs: u64,
 }
@@ -83,7 +82,7 @@ pub struct JudgeConfiguration {
 impl Default for JudgeConfiguration {
   fn default() -> Self {
     Self {
-      model: Model::Haiku, // Use Haiku for speed/cost efficiency
+      model: "haiku".to_string(),
       timeout_secs: 60,
     }
   }
@@ -92,6 +91,7 @@ impl Default for JudgeConfiguration {
 /// LLM judge for comprehension evaluation.
 pub struct LlmJudge {
   config: JudgeConfiguration,
+  provider: Box<dyn LlmProvider>,
 }
 
 impl LlmJudge {
@@ -102,15 +102,10 @@ impl LlmJudge {
 
   /// Create a new LLM judge with custom configuration.
   pub fn with_config(config: JudgeConfiguration) -> Self {
-    Self { config }
-  }
-
-  /// Create a new LLM judge with a specific model.
-  pub fn with_model(model: Model) -> Self {
-    Self::with_config(JudgeConfiguration {
-      model,
-      ..Default::default()
-    })
+    Self {
+      config,
+      provider: llm::create_provider().expect("No LLM provider available. Enable a provider feature (e.g., 'claude')."),
+    }
   }
 
   /// Check if the judge is properly configured.
@@ -251,12 +246,15 @@ impl LlmJudge {
       context, question
     );
 
-    let request = InferenceRequest::new(prompt)
-      .with_system_prompt(system_prompt)
-      .with_model(self.config.model)
-      .with_timeout(self.config.timeout_secs);
+    let request = InferenceRequest {
+      prompt,
+      system_prompt: Some(system_prompt.to_string()),
+      model: self.config.model.clone(),
+      timeout_secs: self.config.timeout_secs,
+      ..Default::default()
+    };
 
-    let response = llm::infer(request).await?;
+    let response = self.provider.infer(request).await?;
 
     Ok(response.text)
   }
@@ -403,25 +401,5 @@ mod tests {
     // Found the expected concept but also found a wrong one
     assert!(result.score < 1.0);
     assert!(!result.wrong_concepts_found.is_empty());
-  }
-
-  #[test]
-  fn test_is_configured_checks_claude_cli() {
-    let judge = LlmJudge::new();
-    // This test will pass if claude CLI is available, skip if not
-    let _ = judge.is_configured();
-  }
-
-  #[test]
-  fn test_default_config_uses_haiku() {
-    let config = JudgeConfiguration::default();
-    assert_eq!(config.model, Model::Haiku);
-    assert_eq!(config.timeout_secs, 60);
-  }
-
-  #[test]
-  fn test_with_model() {
-    let judge = LlmJudge::with_model(Model::Sonnet);
-    assert_eq!(judge.config.model, Model::Sonnet);
   }
 }

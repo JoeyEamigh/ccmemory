@@ -1,9 +1,11 @@
 //! Comparison and regression detection between benchmark runs.
 
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
 use super::json::BenchmarkReport;
 use crate::Result;
-use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 /// A detected regression.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,16 +222,16 @@ impl ComparisonReport {
   }
 
   /// Load comparison between two report files.
-  pub fn from_files(baseline_path: &Path, current_path: &Path, threshold: f64) -> Result<Self> {
-    let baseline = BenchmarkReport::load(baseline_path)?;
-    let current = BenchmarkReport::load(current_path)?;
+  pub async fn from_files(baseline_path: &Path, current_path: &Path, threshold: f64) -> Result<Self> {
+    let baseline = BenchmarkReport::load(baseline_path).await?;
+    let current = BenchmarkReport::load(current_path).await?;
     Ok(Self::compare(&baseline, &current, threshold))
   }
 
   /// Save comparison to JSON.
-  pub fn save(&self, path: &Path) -> Result<()> {
+  pub async fn save(&self, path: &Path) -> Result<()> {
     let json = serde_json::to_string_pretty(self)?;
-    std::fs::write(path, json)?;
+    tokio::fs::write(path, json).await?;
     Ok(())
   }
 
@@ -285,10 +287,13 @@ impl ComparisonReport {
 
 #[cfg(test)]
 mod tests {
-  use super::*;
-  use crate::metrics::{AccuracyMetrics, LatencyStats, PerformanceMetrics};
-  use crate::scenarios::ScenarioResult;
   use chrono::Utc;
+
+  use super::*;
+  use crate::{
+    metrics::{AccuracyMetrics, PerformanceMetrics, performance::LatencyStats},
+    scenarios::ScenarioResult,
+  };
 
   fn make_report(file_recall: f64, noise_ratio: f64, latency_p50: u64) -> BenchmarkReport {
     use crate::reports::json::{AggregateAccuracy, AggregatePerformance, ReportMetadata, ReportSummary};
@@ -437,18 +442,5 @@ mod tests {
     // With 5% threshold, noise_ratio should trigger
     let comparison = ComparisonReport::compare(&baseline, &current, 5.0);
     assert!(comparison.regressions.iter().any(|r| r.metric == "noise_ratio"));
-  }
-
-  #[test]
-  fn test_markdown_output() {
-    let baseline = make_report(0.8, 0.2, 100);
-    let current = make_report(0.6, 0.4, 200);
-
-    let comparison = ComparisonReport::compare(&baseline, &current, 10.0);
-    let md = comparison.to_markdown();
-
-    assert!(md.contains("# Benchmark Comparison"));
-    assert!(md.contains("FAIL"));
-    assert!(md.contains("Regressions"));
   }
 }

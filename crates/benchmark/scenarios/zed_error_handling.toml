@@ -17,11 +17,12 @@ intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/error.rs",
-    "**/notification.rs",
-    "**/result.rs",
+    "**/proto/src/error.rs",
+    "**/workspace/src/notifications.rs",
+    "**/util/src/util.rs",
+    "**/client/src/client.rs",
 ]
-must_find_symbols = ["Error", "Result", "anyhow", "notify", "Notification"]
+must_find_symbols = ["RpcError", "ErrorCode", "ResultExt", "NotifyResultExt", "log_err", "show_error"]
 noise_patterns = [
     "**/tests/**",
     "**/test/**",
@@ -79,18 +80,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "What error handling pattern does this codebase use?"
-expected_concepts = ["Result", "anyhow", "propagate", "?"]
+expected_concepts = ["Result", "anyhow", "thiserror", "?", "log_err"]
 wrong_concepts = ["try-catch", "exceptions", "panic everywhere"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "How are errors communicated to users?"
-expected_concepts = ["notification", "message", "UI"]
+expected_concepts = ["NotifyResultExt", "show_error", "notify_err", "workspace"]
 wrong_concepts = ["console only", "crash dialog"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "How would you add error handling to a new feature?"
-expected_concepts = ["Result", "anyhow", "context", "notify"]
+expected_concepts = ["Result", "anyhow", "context", "notify_err", "log_err"]
 wrong_concepts = ["unwrap", "panic"]
 weight = 1.0

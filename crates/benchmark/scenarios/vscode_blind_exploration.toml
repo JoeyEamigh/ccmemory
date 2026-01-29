@@ -100,34 +100,34 @@ min_comprehension_score = 0.5
 # Core architecture question
 [[llm_judge.comprehension_questions]]
 question = "What architectural pattern does VSCode use for its services and dependency injection?"
-expected_concepts = ["service", "instantiation", "decorator", "inject", "register"]
+expected_concepts = ["createDecorator", "IInstantiationService", "registerSingleton", "ServiceCollection"]
 wrong_concepts = ["Redux", "MVC", "Angular"]
 weight = 2.0
 
 # Workbench understanding
 [[llm_judge.comprehension_questions]]
 question = "What is the Workbench and what role does it play?"
-expected_concepts = ["IWorkbench", "workbench", "layout", "parts", "container"]
+expected_concepts = ["Workbench", "Layout", "Parts", "IWorkbenchLayoutService"]
 wrong_concepts = []
 weight = 1.5
 
 # Editor model
 [[llm_judge.comprehension_questions]]
 question = "How does the editor handle text and models?"
-expected_concepts = ["ITextModel", "editor", "model", "buffer", "piece tree"]
+expected_concepts = ["TextModel", "ITextModel", "PieceTreeTextBuffer", "CodeEditorWidget"]
 wrong_concepts = ["DOM", "innerHTML"]
 weight = 1.5
 
 # Extension system
 [[llm_judge.comprehension_questions]]
 question = "How does the extension system work at a high level?"
-expected_concepts = ["extension", "host", "API", "activate", "contribute"]
+expected_concepts = ["NativeLocalProcessExtensionHost", "IExtensionService", "activateByEvent", "IExtensionContributions"]
 wrong_concepts = ["plugin.xml", "manifest.json only"]
 weight = 1.5
 
 # Practical question
 [[llm_judge.comprehension_questions]]
 question = "Based on what you found, how would you start implementing a new language feature?"
-expected_concepts = ["service", "register", "provider", "extension"]
+expected_concepts = ["registerSingleton", "createDecorator", "provider", "extension contributes"]
 wrong_concepts = ["hardcode", "modify core directly"]
 weight = 1.0

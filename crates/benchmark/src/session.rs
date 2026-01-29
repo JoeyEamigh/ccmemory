@@ -15,14 +15,19 @@
 //! - **Path-based failures**: Consecutive steps in wrong direction (rabbit holes)
 //! - **Context budget**: Cumulative bytes returned vs useful bytes
 
-use crate::ground_truth::{CallGraph, ExplorationPath, NoisePatterns};
-use crate::metrics::{
-  AccuracyMetrics, BloatDiagnosis, ConvergenceDiagnosis, DiscoveryPattern, ExplorationDiagnostics, LatencyTracker,
-  OverExpandedStep, PerformanceMetrics, RecallCategoryBreakdown, RecallDiagnosis, StepMetrics,
+use std::{
+  collections::{HashMap, HashSet},
+  time::{Duration, Instant},
 };
-use crate::scenarios::{Expected, SuccessCriteria, TaskRequirements, TaskRequirementsResult};
-use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+
+use crate::{
+  ground_truth::{CallGraph, ExplorationPath, NoisePatterns},
+  metrics::{
+    AccuracyMetrics, BloatDiagnosis, ConvergenceDiagnosis, DiscoveryPattern, ExplorationDiagnostics, LatencyTracker,
+    OverExpandedStep, PerformanceMetrics, RecallCategoryBreakdown, RecallDiagnosis, StepMetrics,
+  },
+  scenarios::{Expected, SuccessCriteria, TaskRequirements, TaskRequirementsResult},
+};
 
 /// Per-step discovery record for convergence analysis.
 #[derive(Debug, Clone, Default)]
@@ -42,27 +47,8 @@ pub struct StepDiscovery {
 /// Record of a navigation hint shown to the user.
 #[derive(Debug, Clone)]
 pub struct HintRecord {
-  /// Step when hint was shown
-  pub step: usize,
-  /// Source chunk ID
-  pub source_id: String,
-  /// Hint type
-  pub hint_type: HintType,
   /// Target identifier (symbol or file)
   pub target: String,
-}
-
-/// Type of navigation hint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HintType {
-  /// Caller of the current symbol
-  Caller,
-  /// Callee of the current symbol
-  Callee,
-  /// Sibling (same file/module)
-  Sibling,
-  /// Suggestion for follow-up query
-  Suggestion,
 }
 
 /// Record of a context call and its value.
@@ -78,34 +64,17 @@ pub struct ContextCallRecord {
   pub new_symbols: usize,
   /// Bytes returned by this context call
   pub bytes_returned: usize,
-  /// Bytes that contained useful information (expected symbols/files)
-  pub useful_bytes: usize,
-}
-
-/// Record of a call relationship discovered during exploration.
-#[derive(Debug, Clone)]
-pub struct CallRelation {
-  /// Caller symbol
-  pub caller: String,
-  /// Callee symbol
-  pub callee: String,
-  /// Step when this was discovered
-  pub step: usize,
 }
 
 /// Per-step relevance tracking for path-based failure detection.
 #[derive(Debug, Clone)]
 pub struct StepRelevance {
-  /// Step index
-  pub step: usize,
   /// Whether this step found any expected files
   pub found_expected_file: bool,
   /// Whether this step found any expected symbols
   pub found_expected_symbol: bool,
   /// Count of relevant results in this step
   pub relevant_count: usize,
-  /// Total results in this step
-  pub total_count: usize,
 }
 
 /// Context budget tracking for cumulative efficiency.
@@ -122,8 +91,6 @@ pub struct ContextBudget {
 /// State for a multi-step exploration session.
 #[derive(Debug)]
 pub struct ExplorationSession {
-  /// Session/scenario ID
-  pub id: String,
   /// All discovered files
   discovered_files: HashSet<String>,
   /// All discovered symbols
@@ -166,8 +133,6 @@ pub struct ExplorationSession {
   // === Navigation efficiency tracking ===
   /// Call graph built from exploration (callers/callees from hints)
   call_graph: CallGraph,
-  /// Call relations discovered during exploration
-  call_relations: Vec<CallRelation>,
   /// When each symbol was first discovered (symbol -> step index)
   symbol_discovery_step: std::collections::HashMap<String, usize>,
 
@@ -192,9 +157,8 @@ pub struct ExplorationSession {
 
 impl ExplorationSession {
   /// Create a new exploration session.
-  pub fn new(id: &str) -> Self {
+  pub fn new() -> Self {
     Self {
-      id: id.to_string(),
       discovered_files: HashSet::new(),
       discovered_symbols: HashSet::new(),
       all_result_ids: HashSet::new(),
@@ -216,7 +180,6 @@ impl ExplorationSession {
       symbols_before_step: 0,
       // Navigation efficiency
       call_graph: CallGraph::new(),
-      call_relations: Vec::new(),
       symbol_discovery_step: std::collections::HashMap::new(),
       // Path-based failure tracking
       step_relevance: Vec::new(),
@@ -228,13 +191,6 @@ impl ExplorationSession {
       // File diversity
       step_files: HashMap::new(),
     }
-  }
-
-  /// Create with custom noise patterns.
-  pub fn with_noise_patterns(id: &str, patterns: NoisePatterns) -> Self {
-    let mut session = Self::new(id);
-    session.noise_patterns = patterns;
-    session
   }
 
   /// Record results from an explore step.
@@ -284,13 +240,6 @@ impl ExplorationSession {
     }
   }
 
-  /// Mark that a core result was found at the current step.
-  pub fn mark_core_found(&mut self) {
-    if self.first_core_step.is_none() {
-      self.first_core_step = Some(self.current_step.saturating_sub(1));
-    }
-  }
-
   // === Exploration tracking methods ===
 
   /// Record step discoveries for convergence analysis.
@@ -326,17 +275,9 @@ impl ExplorationSession {
     }
   }
 
-  /// Get the time to first relevant result, if any was found.
-  pub fn time_to_first_relevant(&self) -> Option<Duration> {
-    self.first_relevant_result_time
-  }
-
   /// Record a navigation hint shown to the user.
-  pub fn record_hint(&mut self, source_id: &str, hint_type: HintType, target: &str) {
+  pub fn record_hint(&mut self, target: &str) {
     self.hints_shown.push(HintRecord {
-      step: self.current_step.saturating_sub(1),
-      source_id: source_id.to_string(),
-      hint_type,
       target: target.to_string(),
     });
   }
@@ -366,7 +307,6 @@ impl ExplorationSession {
       new_files,
       new_symbols,
       bytes_returned,
-      useful_bytes,
     });
 
     // Update context budget
@@ -384,11 +324,6 @@ impl ExplorationSession {
   /// Record a call relationship discovered from explore/context hints.
   pub fn record_call_relation(&mut self, caller: &str, callee: &str) {
     self.call_graph.add_call(caller, callee);
-    self.call_relations.push(CallRelation {
-      caller: caller.to_string(),
-      callee: callee.to_string(),
-      step: self.current_step.saturating_sub(1),
-    });
   }
 
   /// Record when a symbol was first discovered (for navigation efficiency).
@@ -403,14 +338,11 @@ impl ExplorationSession {
     found_expected_file: bool,
     found_expected_symbol: bool,
     relevant_count: usize,
-    total_count: usize,
   ) {
     self.step_relevance.push(StepRelevance {
-      step: self.current_step.saturating_sub(1),
       found_expected_file,
       found_expected_symbol,
       relevant_count,
-      total_count,
     });
   }
 
@@ -494,40 +426,6 @@ impl ExplorationSession {
       .count();
 
     empty_calls as f64 / self.context_calls.len() as f64
-  }
-
-  /// Calculate hint utility (% of hints that were relevant/followed).
-  pub fn calculate_hint_utility(&self) -> f64 {
-    if self.hints_shown.is_empty() {
-      return 1.0; // No hints = no problem
-    }
-
-    let followed_count = self
-      .hints_shown
-      .iter()
-      .filter(|h| self.hints_followed.contains(&h.target))
-      .count();
-
-    followed_count as f64 / self.hints_shown.len() as f64
-  }
-
-  /// Calculate suggestion quality (% of suggestions that were used).
-  pub fn calculate_suggestion_quality(&self) -> f64 {
-    if self.suggestions_shown.is_empty() {
-      return 1.0; // No suggestions = no problem
-    }
-
-    self.suggestions_used.len() as f64 / self.suggestions_shown.len() as f64
-  }
-
-  /// Calculate MRR (Mean Reciprocal Rank) from recorded result ranks.
-  pub fn calculate_mrr(&self) -> f64 {
-    for (is_relevant, rank) in &self.result_ranks {
-      if *is_relevant && *rank > 0 {
-        return 1.0 / *rank as f64;
-      }
-    }
-    0.0
   }
 
   /// Calculate dead end ratio (% of steps that found nothing relevant).
@@ -616,6 +514,9 @@ impl ExplorationSession {
         // Use the call graph to check if there's a shorter path
         let graph_hops = self.call_graph.path_length(&path.start, &path.target);
 
+        // Check if the path is reachable within the max_hops constraint
+        let within_max_hops = self.is_reachable_within(&path.start, &path.target, path.max_hops);
+
         // Optimal = min of annotated max_hops and graph path (if available)
         let optimal_hops = graph_hops.map(|g| g.min(path.max_hops)).unwrap_or(path.max_hops);
 
@@ -623,6 +524,17 @@ impl ExplorationSession {
         let efficiency = (optimal_hops as f64 / actual_hops as f64).min(1.0);
         total_efficiency += efficiency;
         valid_paths += 1;
+
+        // Log path details for debugging
+        tracing::trace!(
+          "Path {} -> {}: actual={}, optimal={}, within_max={}, efficiency={:.2}",
+          path.start,
+          path.target,
+          actual_hops,
+          optimal_hops,
+          within_max_hops,
+          efficiency
+        );
       }
     }
 
@@ -686,36 +598,69 @@ impl ExplorationSession {
     (max_consecutive, total_rabbit_hole_steps, ratio)
   }
 
-  /// Get the call graph built during exploration.
-  pub fn call_graph(&self) -> &CallGraph {
-    &self.call_graph
+  /// Calculate the overall noise ratio for this session.
+  /// Uses the NoisePatterns::noise_ratio method for consistent calculation.
+  pub fn calculate_noise_ratio(&self) -> f64 {
+    let files: Vec<String> = self.discovered_files.iter().cloned().collect();
+    let symbols: Vec<String> = self.discovered_symbols.iter().cloned().collect();
+    self.noise_patterns.noise_ratio(&files, &symbols)
   }
 
-  /// Check if a file matches expected files (with glob support).
-  pub fn file_matches_expected(&self, file: &str, expected: &[String]) -> bool {
-    for pattern in expected {
-      if let Ok(glob) = glob::Pattern::new(pattern)
-        && glob.matches(file)
-      {
-        return true;
-      }
-      // Also check suffix match
-      if file.ends_with(pattern) || file == pattern {
-        return true;
+  /// Check if a specific result is noise (file, symbol, or content).
+  pub fn is_noise_result(&self, file: Option<&str>, symbol: Option<&str>, content: Option<&str>) -> bool {
+    self.noise_patterns.is_noise(file, symbol, content)
+  }
+
+  /// Validate hints using the call graph.
+  /// Returns (valid_hints_count, total_hints_count).
+  pub fn validate_hints_with_call_graph(&self, expected_symbols: &[String]) -> (usize, usize) {
+    let mut valid_count = 0;
+    let total = self.hints_shown.len();
+
+    for hint in &self.hints_shown {
+      // A hint is valid if it leads to an expected symbol (reachable in call graph)
+      let is_valid = expected_symbols.iter().any(|expected| {
+        self.call_graph.is_reachable(&hint.target, expected) || self.call_graph.is_reachable(expected, &hint.target)
+      });
+
+      if is_valid {
+        valid_count += 1;
       }
     }
-    false
+
+    (valid_count, total)
   }
 
-  /// Count noise results among given IDs.
-  pub fn count_noise_results(&self, _result_ids: &[String]) -> usize {
-    // For now, just count based on file patterns in discovered files
-    // In a full implementation, we'd track more metadata per result
-    self
-      .discovered_files
-      .iter()
-      .filter(|f| self.noise_patterns.is_noise_file(f))
-      .count()
+  /// Score the hints shown during exploration against the call graph.
+  /// Returns the ratio of hints that exist in the discovered call graph.
+  pub fn score_hints(&self) -> (usize, usize) {
+    let hints: Vec<String> = self.hints_shown.iter().map(|h| h.target.clone()).collect();
+    self.call_graph.score_hints(&hints)
+  }
+
+  /// Get the callers of a symbol from the discovered call graph.
+  pub fn get_callers(&self, symbol: &str) -> Vec<String> {
+    self.call_graph.callers(symbol)
+  }
+
+  /// Get the callees of a symbol from the discovered call graph.
+  pub fn get_callees(&self, symbol: &str) -> Vec<String> {
+    self.call_graph.callees(symbol)
+  }
+
+  /// Check if a path exists between two symbols in the discovered call graph.
+  pub fn is_reachable(&self, source: &str, target: &str) -> bool {
+    self.call_graph.is_reachable(source, target)
+  }
+
+  /// Check if a path exists within N hops in the discovered call graph.
+  pub fn is_reachable_within(&self, source: &str, target: &str, max_hops: usize) -> bool {
+    self.call_graph.is_reachable_within(source, target, max_hops)
+  }
+
+  /// Get call graph statistics.
+  pub fn call_graph_stats(&self) -> (usize, usize) {
+    (self.call_graph.symbol_count(), self.call_graph.edge_count())
   }
 
   /// Get all discovered files.
@@ -758,10 +703,17 @@ impl ExplorationSession {
       .record_files(self.discovered_files.iter().cloned())
       .record_symbols(self.discovered_symbols.iter().cloned());
 
-    // Record noise for all discovered files
+    // Record noise for all discovered files and symbols
     for file in &self.discovered_files {
       builder = builder.record_noise(self.noise_patterns.is_noise_file(file));
     }
+    for symbol in &self.discovered_symbols {
+      builder = builder.record_noise(self.noise_patterns.is_noise_symbol(symbol));
+    }
+
+    // Also calculate the overall noise ratio using the more comprehensive method
+    let noise_ratio = self.calculate_noise_ratio();
+    tracing::debug!("Overall noise ratio: {:.2}%", noise_ratio * 100.0);
 
     // Record MRR data from result ranks
     for (is_relevant, rank) in &self.result_ranks {
@@ -827,6 +779,37 @@ impl ExplorationSession {
     let avg_diversity = self.calculate_avg_file_diversity();
     builder = builder.set_avg_file_diversity_top5(avg_diversity);
 
+    // Validate hints against the discovered call graph
+    // This helps understand if our hints point to real code structure
+    let (hints_in_graph, total_hints) = self.score_hints();
+    if total_hints > 0 {
+      let hint_graph_coverage = hints_in_graph as f64 / total_hints as f64;
+      // If many hints aren't in our graph, the call graph may be incomplete
+      // or hints may be pointing to irrelevant code
+      tracing::debug!(
+        "Hint graph coverage: {}/{} ({:.1}%)",
+        hints_in_graph,
+        total_hints,
+        hint_graph_coverage * 100.0
+      );
+    }
+
+    // Validate hints lead to expected symbols using call graph reachability
+    let (valid_hints, _total) = self.validate_hints_with_call_graph(&expected.must_find_symbols);
+    tracing::debug!(
+      "Hints validated against expected symbols: {}/{}",
+      valid_hints,
+      total_hints
+    );
+
+    // Log call graph statistics for debugging
+    let (symbol_count, edge_count) = self.call_graph_stats();
+    tracing::debug!("Discovered call graph: {} symbols, {} edges", symbol_count, edge_count);
+
+    // Log the actual symbols in the call graph at trace level
+    let graph_symbols = self.call_graph.symbols();
+    tracing::trace!("Call graph symbols: {:?}", graph_symbols);
+
     builder.build()
   }
 
@@ -843,16 +826,6 @@ impl ExplorationSession {
     metrics.navigation_efficiency = self.calculate_navigation_efficiency(exploration_paths);
 
     metrics
-  }
-
-  /// Get the number of steps executed.
-  pub fn step_count(&self) -> usize {
-    self.current_step
-  }
-
-  /// Get step metrics.
-  pub fn step_metrics(&self) -> &[StepMetrics] {
-    &self.step_metrics
   }
 
   /// Compute exploration diagnostics for actionable insights.
@@ -994,7 +967,7 @@ impl ExplorationSession {
       .sum();
 
     // Identify over-expanded steps by comparing expand_top to useful expansions
-    // For now, we track steps where context calls yielded nothing
+    // TODO: For now, we track steps where context calls yielded nothing
     for (step, calls_in_step) in self.context_calls.iter().fold(
       std::collections::HashMap::<usize, Vec<&ContextCallRecord>>::new(),
       |mut acc, call| {
@@ -1056,7 +1029,7 @@ impl ExplorationSession {
     };
 
     // Categorize missed items
-    // For now, we can't distinguish between "not in index" and "not retrieved"
+    // TODO: For now, we can't distinguish between "not in index" and "not retrieved"
     // without access to the index. We'll mark all as "not retrieved" and let
     // the user investigate further.
 
@@ -1083,8 +1056,27 @@ impl ExplorationSession {
         .iter()
         .any(|s| s.contains(missed_symbol) || missed_symbol.contains(s));
 
-      if partial_match {
+      // Also check if we can reach the missed symbol from any discovered symbol
+      // This helps determine if it's a navigation issue vs. retrieval issue
+      let reachable_from_discovered = accuracy
+        .symbols_found
+        .iter()
+        .any(|found| self.is_reachable(found, missed_symbol) || self.is_reachable(missed_symbol, found));
+
+      if partial_match || reachable_from_discovered {
         diagnosis.in_index_not_retrieved.push(missed_symbol.clone());
+
+        // Log callers/callees that might help navigate to the missed symbol
+        let callers = self.get_callers(missed_symbol);
+        let callees = self.get_callees(missed_symbol);
+        if !callers.is_empty() || !callees.is_empty() {
+          tracing::debug!(
+            "Missed symbol '{}' has {} callers and {} callees in discovered graph",
+            missed_symbol,
+            callers.len(),
+            callees.len()
+          );
+        }
       } else {
         diagnosis.not_in_index.push(missed_symbol.clone());
       }
@@ -1259,34 +1251,8 @@ mod tests {
   use super::*;
 
   #[test]
-  fn test_session_creation() {
-    let session = ExplorationSession::new("test-scenario");
-    assert_eq!(session.id, "test-scenario");
-    assert!(session.discovered_files.is_empty());
-    assert!(session.discovered_symbols.is_empty());
-  }
-
-  #[test]
-  fn test_record_explore_step() {
-    let mut session = ExplorationSession::new("test");
-
-    session.record_explore_step(
-      "test query",
-      &["id1".to_string(), "id2".to_string()],
-      &["src/main.rs".to_string()],
-      &["main".to_string(), "run".to_string()],
-      Duration::from_millis(100),
-    );
-
-    assert_eq!(session.step_count(), 1);
-    assert!(session.discovered_files.contains("src/main.rs"));
-    assert!(session.discovered_symbols.contains("main"));
-    assert!(session.discovered_symbols.contains("run"));
-  }
-
-  #[test]
   fn test_record_context_call() {
-    let mut session = ExplorationSession::new("test");
+    let mut session = ExplorationSession::new();
 
     // First record an explore step
     session.record_explore_step("q", &["id1".to_string()], &[], &[], Duration::from_millis(50));
@@ -1294,13 +1260,13 @@ mod tests {
     // Then record a context call
     session.record_context_call("id1", Duration::from_millis(30));
 
-    assert_eq!(session.context_latencies.count(), 1);
+    assert_eq!(session.context_latencies.stats().count, 1);
     assert_eq!(session.step_metrics[0].context_latencies_ms.len(), 1);
   }
 
   #[test]
   fn test_performance_metrics() {
-    let mut session = ExplorationSession::new("test");
+    let mut session = ExplorationSession::new();
 
     session.record_explore_step("q1", &["id1".to_string()], &[], &[], Duration::from_millis(100));
     session.record_explore_step("q2", &["id2".to_string()], &[], &[], Duration::from_millis(200));
@@ -1314,7 +1280,7 @@ mod tests {
 
   #[test]
   fn test_accuracy_metrics_with_expectations() {
-    let mut session = ExplorationSession::new("test");
+    let mut session = ExplorationSession::new();
 
     session.record_explore_step(
       "test",
@@ -1340,61 +1306,8 @@ mod tests {
   }
 
   #[test]
-  fn test_file_matches_expected() {
-    let session = ExplorationSession::new("test");
-
-    let expected = vec!["src/commands.rs".to_string(), "**/keymap.rs".to_string()];
-
-    assert!(session.file_matches_expected("src/commands.rs", &expected));
-    assert!(session.file_matches_expected("crates/gpui/src/keymap.rs", &expected));
-    assert!(!session.file_matches_expected("src/other.rs", &expected));
-  }
-
-  #[test]
-  fn test_time_to_first_relevant() {
-    let mut session = ExplorationSession::new("test");
-
-    // Initially, no relevant result found
-    assert!(session.time_to_first_relevant().is_none());
-
-    // Record some non-relevant results
-    session.record_result_rank(false, 1);
-    session.record_result_rank(false, 2);
-    assert!(session.time_to_first_relevant().is_none());
-
-    // Record first relevant result
-    session.record_result_rank(true, 3);
-    assert!(session.time_to_first_relevant().is_some());
-    let first_time = session.time_to_first_relevant().unwrap();
-
-    // Recording more relevant results shouldn't change the time
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    session.record_result_rank(true, 1);
-    assert_eq!(session.time_to_first_relevant(), Some(first_time));
-  }
-
-  #[test]
-  fn test_time_to_first_relevant_none_when_no_relevant() {
-    let mut session = ExplorationSession::new("test");
-
-    // Only record non-relevant results
-    session.record_result_rank(false, 1);
-    session.record_result_rank(false, 2);
-    session.record_result_rank(false, 3);
-
-    // Time should still be None
-    assert!(session.time_to_first_relevant().is_none());
-
-    // Check that accuracy metrics also return None
-    let expected = Expected::default();
-    let criteria = SuccessCriteria::default();
-    let metrics = session.compute_accuracy_metrics(&expected, &criteria);
-    assert!(metrics.time_to_first_relevant_ms.is_none());
-  }
-
-  #[test]
   fn test_file_diversity_all_different_files() {
-    let mut session = ExplorationSession::new("test");
+    let mut session = ExplorationSession::new();
 
     // Record step with 5 different files - perfect diversity
     session.record_explore_step(
@@ -1427,7 +1340,7 @@ mod tests {
 
   #[test]
   fn test_file_diversity_all_same_file() {
-    let mut session = ExplorationSession::new("test");
+    let mut session = ExplorationSession::new();
 
     // Record step with 5 results all from the same file - worst diversity
     session.record_explore_step(
@@ -1460,7 +1373,7 @@ mod tests {
 
   #[test]
   fn test_file_diversity_mixed() {
-    let mut session = ExplorationSession::new("test");
+    let mut session = ExplorationSession::new();
 
     // Record step with 3 unique files out of 5 results
     session.record_explore_step(
@@ -1493,7 +1406,7 @@ mod tests {
 
   #[test]
   fn test_file_diversity_fewer_than_n_results() {
-    let mut session = ExplorationSession::new("test");
+    let mut session = ExplorationSession::new();
 
     // Record step with only 2 files, ask for top-5
     session.record_explore_step(
@@ -1515,7 +1428,7 @@ mod tests {
 
   #[test]
   fn test_file_diversity_empty_results() {
-    let mut session = ExplorationSession::new("test");
+    let mut session = ExplorationSession::new();
 
     // Record step with no files
     session.record_explore_step("query", &[], &[], &[], Duration::from_millis(100));
@@ -1531,7 +1444,7 @@ mod tests {
 
   #[test]
   fn test_file_diversity_missing_step() {
-    let session = ExplorationSession::new("test");
+    let session = ExplorationSession::new();
 
     // Query step that doesn't exist - should return 1.0
     let diversity = session.calculate_step_file_diversity(99, 5);
@@ -1544,7 +1457,7 @@ mod tests {
 
   #[test]
   fn test_avg_file_diversity() {
-    let mut session = ExplorationSession::new("test");
+    let mut session = ExplorationSession::new();
 
     // Step 0: Perfect diversity (5 unique)
     session.record_explore_step(
@@ -1599,7 +1512,7 @@ mod tests {
 
   #[test]
   fn test_file_diversity_in_accuracy_metrics() {
-    let mut session = ExplorationSession::new("test");
+    let mut session = ExplorationSession::new();
 
     // Record step with 3 unique files out of 5
     session.record_explore_step(

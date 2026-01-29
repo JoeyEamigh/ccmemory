@@ -18,11 +18,13 @@ intent = "architectural_discovery"
 [expected]
 # These are validation targets, but the queries shouldn't assume knowledge of them
 must_find_files = [
-    "**/actions.rs",
-    "**/keymap/**",
+    "**/editor/src/actions.rs",
+    "**/gpui/src/keymap.rs",
     "**/gpui/src/action.rs",
+    "**/gpui/src/key_dispatch.rs",
+    "**/editor/src/element.rs",
 ]
-must_find_symbols = ["Action", "dispatch", "Keymap", "KeyBinding", "impl_actions"]
+must_find_symbols = ["Action", "dispatch", "Keymap", "KeyBinding", "actions!", "DispatchTree", "register_action"]
 noise_patterns = ["**/tests/**", "test_*", "Mock*", "*_test.rs", "**/fixtures/**"]
 
 # Step 1: Natural question - no jargon
@@ -72,18 +74,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "How are commands/actions represented in this editor's architecture?"
-expected_concepts = ["Action", "trait", "dispatch", "GPUI"]
+expected_concepts = ["Action", "trait", "actions!", "derive(Action)", "GPUI"]
 wrong_concepts = ["Command pattern class", "event listeners", "Redux"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "What is the flow from pressing a key to executing functionality?"
-expected_concepts = ["keymap", "binding", "Action", "dispatch"]
+expected_concepts = ["DispatchTree", "KeyBinding", "Action", "on_action", "key_context"]
 wrong_concepts = ["DOM events", "event bubbling"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "How would you add a new keyboard shortcut for a custom action?"
-expected_concepts = ["Action", "keymap", "register", "impl"]
+expected_concepts = ["Action", "keymap JSON", "register_action", "actions!"]
 wrong_concepts = ["config file only", "plugin"]
 weight = 1.0

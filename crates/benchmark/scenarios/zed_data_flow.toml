@@ -19,12 +19,13 @@ intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/input.rs",
-    "**/buffer.rs",
-    "**/editor.rs",
-    "**/element.rs",
+    "**/gpui/src/input.rs",
+    "**/language/src/buffer.rs",
+    "**/editor/src/editor.rs",
+    "**/editor/src/element.rs",
+    "**/gpui/src/key_dispatch.rs",
 ]
-must_find_symbols = ["input", "Buffer", "Editor", "render", "insert", "paint"]
+must_find_symbols = ["EntityInputHandler", "handle_input", "Buffer", "Editor", "Render", "EditorElement", "DispatchTree"]
 noise_patterns = [
     "**/tests/**",
     "**/test/**",
@@ -90,18 +91,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "Describe the path a keystroke takes from keyboard to screen."
-expected_concepts = ["input", "event", "buffer", "render", "GPUI"]
+expected_concepts = ["DispatchTree", "EntityInputHandler", "handle_input", "Buffer", "Render"]
 wrong_concepts = []
 weight = 2.0
 
 [[llm_judge.comprehension_questions]]
 question = "What component owns the text content?"
-expected_concepts = ["Buffer", "model", "state"]
+expected_concepts = ["Buffer", "TextBuffer", "Entity", "Model"]
 wrong_concepts = ["DOM", "string variable"]
 weight = 1.0
 
 [[llm_judge.comprehension_questions]]
 question = "How does the editor know to repaint after an edit?"
-expected_concepts = ["notify", "invalidate", "observable", "model"]
+expected_concepts = ["notify", "cx.notify", "Context", "Entity"]
 wrong_concepts = ["timer", "polling"]
 weight = 1.5

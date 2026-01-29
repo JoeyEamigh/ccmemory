@@ -1,18 +1,21 @@
 //! CCEngram CLI - Intelligent memory and code search for Claude Code
 
+use std::{io, path::PathBuf};
+
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
-use std::io;
-use std::path::PathBuf;
 
 mod commands;
+mod format;
 mod logging;
 mod mcp;
+mod tools;
+mod tui;
 
 use commands::{
   cmd_agent, cmd_archive, cmd_config_init, cmd_config_reset, cmd_config_show, cmd_context, cmd_daemon, cmd_delete,
-  cmd_deleted, cmd_export, cmd_health, cmd_hook, cmd_index, cmd_logs, cmd_logs_list, cmd_migrate, cmd_projects_clean,
+  cmd_deleted, cmd_health, cmd_hook, cmd_index, cmd_logs, cmd_logs_list, cmd_migrate, cmd_projects_clean,
   cmd_projects_clean_all, cmd_projects_list, cmd_projects_show, cmd_restore, cmd_search, cmd_search_code,
   cmd_search_docs, cmd_show, cmd_stats, cmd_tui, cmd_update, cmd_watch,
 };
@@ -49,12 +52,6 @@ pub enum IndexCommand {
     /// Show index statistics
     #[arg(long)]
     stats: bool,
-    /// Export index to file
-    #[arg(long, value_name = "FILE")]
-    export: Option<String>,
-    /// Load index from file
-    #[arg(long, value_name = "FILE")]
-    load: Option<String>,
   },
   /// Index documents from a directory
   Docs {
@@ -187,15 +184,6 @@ pub enum MemoryCommand {
     #[arg(long)]
     hard: bool,
   },
-  /// Export memories to file
-  Export {
-    /// Output file path
-    #[arg(short, long)]
-    output: Option<String>,
-    /// Output format (json or csv)
-    #[arg(short, long, default_value = "json")]
-    format: String,
-  },
   /// Archive old low-salience memories
   #[command(
     long_about = "Archive old, low-salience memories by soft-deleting them.\n\n\
@@ -298,6 +286,9 @@ enum Commands {
     Use --foreground for persistent daemon that logs to console.\n\
     Use --background when auto-starting from CLI commands.")]
   Daemon {
+    /// Stop the running daemon
+    #[arg(long, conflicts_with_all = ["foreground", "background"])]
+    stop: bool,
     /// Run in foreground (disables auto-shutdown, logs to console)
     #[arg(long, conflicts_with = "background")]
     foreground: bool,
@@ -526,7 +517,7 @@ async fn main() -> Result<()> {
 
   // Use file logging for daemon (background mode), console-only for other commands
   let _guard = match &cli.command {
-    Commands::Daemon { foreground, .. } => init_daemon_logging_with_config(*foreground),
+    Commands::Daemon { foreground, .. } => init_daemon_logging_with_config(*foreground).await,
     _ => {
       init_cli_logging();
       None
@@ -535,11 +526,12 @@ async fn main() -> Result<()> {
 
   match cli.command {
     Commands::Daemon {
+      stop,
       foreground,
       background,
       embedding_provider,
       openrouter_api_key,
-    } => cmd_daemon(foreground, background, embedding_provider, openrouter_api_key).await,
+    } => cmd_daemon(stop, foreground, background, embedding_provider, openrouter_api_key).await,
     Commands::Mcp => cmd_mcp().await,
     Commands::Hook { name } => cmd_hook(&name).await,
 
@@ -606,7 +598,6 @@ async fn main() -> Result<()> {
     Commands::Memory { command } => match command {
       MemoryCommand::Show { id, related, json } => cmd_show(&id, related, json).await,
       MemoryCommand::Delete { id, hard } => cmd_delete(&id, hard).await,
-      MemoryCommand::Export { output, format } => cmd_export(output.as_deref(), &format).await,
       MemoryCommand::Archive {
         before,
         threshold,

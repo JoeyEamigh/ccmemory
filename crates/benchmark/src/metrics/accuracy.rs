@@ -1,7 +1,8 @@
 //! Accuracy metrics for exploration quality.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+
+use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // Diagnostic Breakdown Types
@@ -238,20 +239,6 @@ impl AccuracyMetrics {
   pub fn builder() -> AccuracyMetricsBuilder {
     AccuracyMetricsBuilder::new()
   }
-
-  /// Check if metrics meet minimum thresholds.
-  pub fn passes_thresholds(
-    &self,
-    min_file_recall: f64,
-    min_symbol_recall: f64,
-    max_noise_ratio: f64,
-    max_steps_to_core: usize,
-  ) -> bool {
-    self.file_recall >= min_file_recall
-      && self.symbol_recall >= min_symbol_recall
-      && self.noise_ratio <= max_noise_ratio
-      && self.steps_to_core.is_none_or(|s| s <= max_steps_to_core)
-  }
 }
 
 /// Builder for computing accuracy metrics.
@@ -340,14 +327,6 @@ impl AccuracyMetricsBuilder {
     self
   }
 
-  /// Record multiple noise statuses.
-  pub fn record_noise_batch(mut self, noise_flags: impl IntoIterator<Item = bool>) -> Self {
-    for flag in noise_flags {
-      self.noise_results.push(flag);
-    }
-    self
-  }
-
   /// Record whether a hint (caller/callee) was relevant.
   pub fn record_hint_relevance(mut self, is_relevant: bool) -> Self {
     self.hint_relevance.push(is_relevant);
@@ -388,12 +367,6 @@ impl AccuracyMetricsBuilder {
     self
   }
 
-  /// Set navigation efficiency (computed externally by session).
-  pub fn set_navigation_efficiency(mut self, efficiency: f64) -> Self {
-    self.navigation_efficiency = Some(efficiency);
-    self
-  }
-
   /// Set dead end ratio (computed externally by session).
   pub fn set_dead_end_ratio(mut self, ratio: f64) -> Self {
     self.dead_end_ratio = Some(ratio);
@@ -425,12 +398,6 @@ impl AccuracyMetricsBuilder {
   /// Set average file diversity for top-5 results.
   pub fn set_avg_file_diversity_top5(mut self, diversity: f64) -> Self {
     self.avg_file_diversity_top5 = Some(diversity);
-    self
-  }
-
-  /// Set exploration diagnostics (actionable insights for poor metrics).
-  pub fn set_diagnostics(mut self, diagnostics: ExplorationDiagnostics) -> Self {
-    self.diagnostics = Some(diagnostics);
     self
   }
 
@@ -632,24 +599,6 @@ mod tests {
   }
 
   #[test]
-  fn test_noise_ratio() {
-    let metrics = AccuracyMetrics::builder()
-      .record_noise_batch([false, true, false, false, true])
-      .build();
-
-    assert!((metrics.noise_ratio - 0.4).abs() < f64::EPSILON);
-  }
-
-  #[test]
-  fn test_top3_noise() {
-    let metrics = AccuracyMetrics::builder()
-      .record_noise_batch([true, false, false, true, true])
-      .build();
-
-    assert!((metrics.top3_noise - 1.0 / 3.0).abs() < f64::EPSILON);
-  }
-
-  #[test]
   fn test_hint_utility() {
     let metrics = AccuracyMetrics::builder()
       .record_hint_relevance(true)
@@ -659,20 +608,6 @@ mod tests {
       .build();
 
     assert!((metrics.hint_utility - 0.75).abs() < f64::EPSILON);
-  }
-
-  #[test]
-  fn test_passes_thresholds() {
-    let metrics = AccuracyMetrics {
-      file_recall: 0.8,
-      symbol_recall: 0.75,
-      noise_ratio: 0.2,
-      steps_to_core: Some(2),
-      ..Default::default()
-    };
-
-    assert!(metrics.passes_thresholds(0.7, 0.7, 0.25, 3));
-    assert!(!metrics.passes_thresholds(0.9, 0.7, 0.25, 3)); // file_recall too low
   }
 
   #[test]

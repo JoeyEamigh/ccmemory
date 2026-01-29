@@ -17,16 +17,20 @@ intent = "architectural_discovery"
 
 [expected]
 must_find_files = [
-    "**/actions.rs",
-    "**/commands/**",
-    "**/keymap/**",
+    "**/editor/src/actions.rs",
+    "**/gpui/src/action.rs",
+    "**/gpui/src/keymap.rs",
+    "**/gpui/src/keymap/binding.rs",
+    "**/assets/keymaps/*.json",
 ]
 must_find_symbols = [
-    "register",
-    "Command",
+    "register_action",
     "Action",
-    "actions",
+    "actions!",
     "impl_actions",
+    "ActionRegistry",
+    "KeyBinding",
+    "Keymap",
 ]
 noise_patterns = [
     "**/tests/**",
@@ -78,18 +82,18 @@ min_comprehension_score = 0.5
 
 [[llm_judge.comprehension_questions]]
 question = "Where would you add a new editor action in Zed?"
-expected_concepts = ["actions.rs", "impl_actions", "Action trait"]
+expected_concepts = ["editor/src/actions.rs", "actions!", "Action", "derive(Action)"]
 wrong_concepts = ["main.rs", "config file"]
 weight = 1.5
 
 [[llm_judge.comprehension_questions]]
 question = "How are actions registered with the editor?"
-expected_concepts = ["register", "ActionRegistry", "gpui"]
+expected_concepts = ["register_action", "ActionRegistry", "on_action", "element.rs"]
 wrong_concepts = ["plugin system", "dynamic loading"]
 weight = 1.0
 
 [[llm_judge.comprehension_questions]]
 question = "What files need to change to add a new keybinding?"
-expected_concepts = ["keymap", "default.json", "KeyBinding"]
+expected_concepts = ["assets/keymaps", "default-linux.json", "KeyBinding", "context"]
 wrong_concepts = []
 weight = 1.0

@@ -1,14 +1,18 @@
 //! Repository downloading and cache management.
 
-use super::registry::{RepoConfig, RepoRegistry, TargetRepo};
-use crate::{BenchmarkError, Result};
+use std::path::{Path, PathBuf};
+
 use flate2::read::GzDecoder;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::fs::{self, File};
-use std::io::{self, BufWriter};
-use std::path::{Path, PathBuf};
 use tar::Archive;
+use tokio::{
+  fs::{self, File},
+  io,
+};
 use tracing::{debug, info, warn};
+
+use super::registry::{RepoConfig, RepoRegistry, TargetRepo};
+use crate::{BenchmarkError, Result};
 
 /// Cache manager for benchmark repositories.
 pub struct RepoCache {
@@ -51,7 +55,7 @@ impl RepoCache {
     let config = RepoRegistry::get(repo);
 
     // Ensure cache directory exists
-    fs::create_dir_all(&self.cache_dir)?;
+    fs::create_dir_all(&self.cache_dir).await?;
 
     let tarball_path = self.cache_dir.join(format!("{}.tar.gz", config.name));
 
@@ -62,7 +66,7 @@ impl RepoCache {
     self.extract_tarball(&tarball_path, &self.cache_dir)?;
 
     // Clean up tarball
-    if let Err(e) = fs::remove_file(&tarball_path) {
+    if let Err(e) = fs::remove_file(&tarball_path).await {
       warn!("Failed to remove tarball: {}", e);
     }
 
@@ -95,8 +99,7 @@ impl RepoCache {
         .progress_chars("#>-"),
     );
 
-    let file = File::create(dest)?;
-    let mut writer = BufWriter::new(file);
+    let mut writer = File::create(dest).await?;
 
     let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
@@ -104,7 +107,7 @@ impl RepoCache {
     use futures::StreamExt;
     while let Some(chunk) = stream.next().await {
       let chunk = chunk?;
-      io::copy(&mut chunk.as_ref(), &mut writer)?;
+      io::copy(&mut chunk.as_ref(), &mut writer).await?;
       downloaded += chunk.len() as u64;
       pb.set_position(downloaded);
     }
@@ -118,7 +121,7 @@ impl RepoCache {
   fn extract_tarball(&self, tarball: &Path, dest: &Path) -> Result<()> {
     info!("Extracting {} to {}", tarball.display(), dest.display());
 
-    let file = File::open(tarball)?;
+    let file = std::fs::File::open(tarball)?;
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
 
@@ -144,61 +147,21 @@ impl RepoCache {
   }
 
   /// Remove a cached repository.
-  pub fn remove(&self, repo: TargetRepo) -> Result<()> {
+  pub async fn remove(&self, repo: TargetRepo) -> Result<()> {
     let path = self.repo_path(repo);
     if path.exists() {
-      fs::remove_dir_all(&path)?;
+      fs::remove_dir_all(&path).await?;
       info!("Removed cached repository: {}", path.display());
     }
     Ok(())
   }
 
   /// Remove all cached repositories.
-  pub fn clean_all(&self) -> Result<()> {
+  pub async fn clean_all(&self) -> Result<()> {
     if self.cache_dir.exists() {
-      fs::remove_dir_all(&self.cache_dir)?;
+      fs::remove_dir_all(&self.cache_dir).await?;
       info!("Cleaned all cached repositories");
     }
     Ok(())
-  }
-
-  /// List all cached repositories.
-  pub fn list_cached(&self) -> Vec<TargetRepo> {
-    TargetRepo::all()
-      .iter()
-      .filter(|r| self.is_cached(**r))
-      .copied()
-      .collect()
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use tempfile::TempDir;
-
-  #[test]
-  fn test_repo_cache_path() {
-    let temp = TempDir::new().unwrap();
-    let cache = RepoCache::new(temp.path().to_path_buf());
-
-    let path = cache.repo_path(TargetRepo::Zed);
-    assert!(path.to_string_lossy().contains("zed-0.220.3"));
-  }
-
-  #[test]
-  fn test_is_not_cached() {
-    let temp = TempDir::new().unwrap();
-    let cache = RepoCache::new(temp.path().to_path_buf());
-
-    assert!(!cache.is_cached(TargetRepo::Zed));
-  }
-
-  #[test]
-  fn test_list_cached_empty() {
-    let temp = TempDir::new().unwrap();
-    let cache = RepoCache::new(temp.path().to_path_buf());
-
-    assert!(cache.list_cached().is_empty());
   }
 }

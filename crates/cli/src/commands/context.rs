@@ -1,182 +1,115 @@
 //! Context retrieval commands for code and document chunks
 
 use anyhow::{Context, Result};
-use daemon::connect_or_start;
-use ipc::{CodeContextParams, DocContextParams, Method, Request};
+use ccengram::ipc::{code::CodeContextParams, docs::DocContextParams};
 use tracing::error;
 
 /// Get context around a chunk (auto-detects code vs document)
 pub async fn cmd_context(chunk_id: &str, before: Option<usize>, after: Option<usize>, json_output: bool) -> Result<()> {
-  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
-
-  let cwd = std::env::current_dir()
-    .ok()
-    .map(|p| p.to_string_lossy().to_string())
-    .unwrap_or_else(|| ".".to_string());
+  let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+  let client = ccengram::Daemon::connect_or_start(cwd)
+    .await
+    .context("Failed to connect to daemon")?;
 
   // Try code_context first
-  let code_params = CodeContextParams {
-    chunk_id: chunk_id.to_string(),
-    cwd: Some(cwd.clone()),
-    before,
-    after,
-  };
-
-  let code_request = Request {
-    id: Some(1),
-    method: Method::CodeContext,
-    params: code_params,
-  };
-
-  let code_response = client
-    .request(cli::to_daemon_request(code_request))
-    .await
-    .context("Failed to get code context")?;
+  let code_result = client
+    .call(CodeContextParams {
+      chunk_id: chunk_id.to_string(),
+      before,
+      after,
+    })
+    .await;
 
   // Check if code_context succeeded
-  if code_response.error.is_none()
-    && let Some(result) = code_response.result
-  {
+  if let Ok(result) = code_result {
     if json_output {
       println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
-      print_code_context(&result)?;
+      print_code_context(&result);
     }
     return Ok(());
   }
 
   // If code_context failed, try doc_context
-  let doc_params = DocContextParams {
-    doc_id: chunk_id.to_string(),
-    cwd: Some(cwd),
-    before: Some(before.unwrap_or(1)),
-    after: Some(after.unwrap_or(1)),
-  };
+  let doc_result = client
+    .call(DocContextParams {
+      doc_id: chunk_id.to_string(),
+      before: Some(before.unwrap_or(1)),
+      after: Some(after.unwrap_or(1)),
+    })
+    .await;
 
-  let doc_request = Request {
-    id: Some(2),
-    method: Method::DocContext,
-    params: doc_params,
-  };
-
-  let doc_response = client
-    .request(cli::to_daemon_request(doc_request))
-    .await
-    .context("Failed to get document context")?;
-
-  if let Some(err) = doc_response.error {
-    // Both failed - show the original code error if we have it, otherwise the doc error
-    let code_err = code_response
-      .error
-      .map(|e| e.message)
-      .unwrap_or_else(|| "unknown error".to_string());
-    error!(
-      "Chunk not found in code or documents. Code error: {}. Doc error: {}",
-      code_err, err.message
-    );
-    std::process::exit(1);
-  }
-
-  if let Some(result) = doc_response.result {
-    if json_output {
-      println!("{}", serde_json::to_string_pretty(&result)?);
-    } else {
-      print_doc_context(&result)?;
+  match doc_result {
+    Ok(result) => {
+      if json_output {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+      } else {
+        print_doc_context(&result);
+      }
+      Ok(())
+    }
+    Err(doc_err) => {
+      // Both failed - show error
+      error!("Chunk not found in code or documents. Error: {}", doc_err);
+      std::process::exit(1);
     }
   }
-
-  Ok(())
 }
 
 /// Print code context in a readable format
-fn print_code_context(result: &serde_json::Value) -> Result<()> {
-  let file_path = result.get("file_path").and_then(|v| v.as_str()).unwrap_or("?");
-  let language = result.get("language").and_then(|v| v.as_str()).unwrap_or("unknown");
-  let total_lines = result.get("total_file_lines").and_then(|v| v.as_u64()).unwrap_or(0);
-
-  println!("File: {} ({})", file_path, language);
-  println!("Total lines: {}", total_lines);
+fn print_code_context(result: &ccengram::ipc::code::CodeContextResponse) {
+  println!("File: {} ({})", result.file_path, result.language);
+  println!("Total lines: {}", result.total_file_lines);
+  if let Some(warning) = &result.warning {
+    println!("Warning: {}", warning);
+  }
   println!();
 
-  if let Some(context) = result.get("context") {
-    // Print before section
-    if let Some(before) = context.get("before") {
-      let start_line = before.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0);
-      let content = before.get("content").and_then(|v| v.as_str()).unwrap_or("");
-      if !content.is_empty() {
-        println!("--- Before (line {}) ---", start_line);
-        println!("{}", content);
-        println!();
-      }
-    }
-
-    // Print target section
-    if let Some(target) = context.get("target") {
-      let start_line = target.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0);
-      let end_line = target.get("end_line").and_then(|v| v.as_u64()).unwrap_or(0);
-      let content = target.get("content").and_then(|v| v.as_str()).unwrap_or("");
-      println!(">>> Target (lines {}-{}) <<<", start_line, end_line);
-      println!("{}", content);
-      println!();
-    }
-
-    // Print after section
-    if let Some(after) = context.get("after") {
-      let start_line = after.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0);
-      let content = after.get("content").and_then(|v| v.as_str()).unwrap_or("");
-      if !content.is_empty() {
-        println!("--- After (line {}) ---", start_line);
-        println!("{}", content);
-      }
-    }
+  // Print before section
+  if !result.context.before.content.is_empty() {
+    println!("--- Before (line {}) ---", result.context.before.start_line);
+    println!("{}", result.context.before.content);
+    println!();
   }
 
-  Ok(())
+  // Print target section
+  println!(
+    ">>> Target (lines {}-{}) <<<",
+    result.context.target.start_line, result.context.target.end_line
+  );
+  println!("{}", result.context.target.content);
+  println!();
+
+  // Print after section
+  if !result.context.after.content.is_empty() {
+    println!("--- After (line {}) ---", result.context.after.start_line);
+    println!("{}", result.context.after.content);
+  }
 }
 
 /// Print document context in a readable format
-fn print_doc_context(result: &serde_json::Value) -> Result<()> {
-  let title = result.get("title").and_then(|v| v.as_str()).unwrap_or("?");
-  let source = result.get("source").and_then(|v| v.as_str()).unwrap_or("?");
-  let total_chunks = result.get("total_chunks").and_then(|v| v.as_u64()).unwrap_or(0);
-
-  println!("Document: {}", title);
-  println!("Source: {}", source);
-  println!("Total chunks: {}", total_chunks);
+fn print_doc_context(result: &ccengram::ipc::docs::DocContextResult) {
+  println!("Document: {}", result.title);
+  println!("Source: {}", result.source);
+  println!("Total chunks: {}", result.total_chunks);
   println!();
 
-  if let Some(context) = result.get("context") {
-    // Print before chunks
-    if let Some(before) = context.get("before").and_then(|v| v.as_array()) {
-      for chunk in before {
-        let index = chunk.get("chunk_index").and_then(|v| v.as_u64()).unwrap_or(0);
-        let content = chunk.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        println!("--- Chunk {} ---", index);
-        println!("{}", content);
-        println!();
-      }
-    }
-
-    // Print target chunk
-    if let Some(target) = context.get("target") {
-      let index = target.get("chunk_index").and_then(|v| v.as_u64()).unwrap_or(0);
-      let content = target.get("content").and_then(|v| v.as_str()).unwrap_or("");
-      println!(">>> Chunk {} (target) <<<", index);
-      println!("{}", content);
-      println!();
-    }
-
-    // Print after chunks
-    if let Some(after) = context.get("after").and_then(|v| v.as_array()) {
-      for chunk in after {
-        let index = chunk.get("chunk_index").and_then(|v| v.as_u64()).unwrap_or(0);
-        let content = chunk.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        println!("--- Chunk {} ---", index);
-        println!("{}", content);
-        println!();
-      }
-    }
+  // Print before chunks
+  for chunk in &result.context.before {
+    println!("--- Chunk {} ---", chunk.chunk_index);
+    println!("{}", chunk.content);
+    println!();
   }
 
-  Ok(())
+  // Print target chunk
+  println!(">>> Chunk {} (target) <<<", result.context.target.chunk_index);
+  println!("{}", result.context.target.content);
+  println!();
+
+  // Print after chunks
+  for chunk in &result.context.after {
+    println!("--- Chunk {} ---", chunk.chunk_index);
+    println!("{}", chunk.content);
+    println!();
+  }
 }

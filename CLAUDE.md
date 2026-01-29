@@ -4,191 +4,90 @@ You are building **CCEngram** - intelligent memory and code search for Claude Co
 
 ## Architecture Summary
 
-**Single daemon + thin clients** via Unix socket IPC:
-
-- `ccengram daemon` - Long-running process (embeddings, file watcher, all logic)
-- `ccengram mcp` - Thin stdio proxy for Claude Code MCP
-- `ccengram hook <name>` - Thin hook client, sends event to daemon
-
+**Single daemon + thin clients** via Unix socket IPC
 **Storage: LanceDB** (per-project isolation)
-
-- Each project gets its own database at `~/.local/share/ccengram/projects/<hash>/`
-- Tables: `memories`, `code_chunks`, `documents`, `sessions`, `entities`
-
 **Search: Pure vector** - Semantic similarity via embeddings
 
-## Crate Structure
+## Project Structure
 
 ```
-crates/
-├── core/       # Domain types (Memory, Sector, CodeChunk, Config)
-├── db/         # LanceDB wrapper, per-project connections
-├── embedding/  # Ollama embedding provider
-├── index/      # File scanner, tree-sitter parser, chunker
-├── extract/    # Dedup (SimHash), decay, sector classification
-├── llm/        # LLM integration for summarization
-├── daemon/     # Unix socket server, request router, tools/hooks
-├── tui/        # Terminal user interface (ratatui)
-└── cli/        # Binary: main.rs, MCP proxy, hook client, commands
+crates
+├── backend (name: ccengram)
+├── benchmark
+├── cli
+└── llm
 ```
 
-## Type Safety Rules
+### Dependency Graph
 
-- **NO `any`**. NO `unwrap()` in library code. Use `?` and proper error types.
-- Use `thiserror` for error enums
-- Validate all inputs at boundaries
+```
+benchmark
+├── ccengram
+│   └── llm
+└── llm
 
-## Testing
+ccengram
+└── llm
 
-- Unit tests: Colocated in `src/` as `#[cfg(test)]` modules
-- Integration tests: `tests/integration/`
-- Run with `cargo test`
+cli
+└── ccengram
+    └── llm
+
+llm
+
+```
+
+## Docs
+
+there are some docs in the `docs/` folder. search for relevant topics.
 
 ## Sample Commands
 
 ```bash
-cargo build                               # Build all
-cargo test                                # Run tests
-cargo clippy --all-targets --all-features # Lint all
-cargo fmt --all                           # Format all
+cargo check -p llm        # check llm crate
+cargo check -p ccengram   # check backend crate
+cargo check -p cli        # check cli crate
+cargo check --all         # check all crates (recommended when changing backend)
+cargo nextest run         # Run tests (use nextest over cargo test)
+cargo xfmt                # Format (yes, this is intentionally `xfmt` not `fmt`)
 ```
 
-## MCP Tools
+## Test Guidelines
 
-### Unified Exploration Tools (Minimal Preset - Recommended)
+All tests can reasonably expect Openrouter to be available.
 
-The minimal preset provides 2 powerful tools optimized for codebase exploration:
+NEVER test trivial things. Focus on integration and e2e tests. asserts should have descriptive messages.
 
-#### `explore` - Universal semantic search
+### What NOT to Test
 
-Search code, memories, and docs with one tool. Returns ranked results with navigation hints.
+- **Default values** - If they're wrong, you'll notice immediately
+- **Type conversions** - The compiler checks these
+- **Display/FromStr** - These are formatting, not logic
+- **Struct field assignment** - This is what Rust's type system is for
+- **Trivial math/comparisons/etc** - `50/100 = 0.5` doesn't need a test
+- **Library behavior** - `HashMap::insert` works, so does `serde_json`'s `to_value` and `to_string`
+- **Trivial functions** - simple functions with no calls to other functions or complex logic
 
-```json
-{
-  "query": "authentication flow",  // Natural language or symbol name
-  "scope": "all",                  // "code" | "memory" | "docs" | "all"
-  "expand_top": 3,                 // Include full context for top N results
-  "limit": 10                      // Max results per scope
-}
-```
+### What to Test
 
-**Response includes:**
-- Ranked results with preview, file:line, and type
-- Navigation hints (caller count, callee count, related memory count)
-- Full context for top `expand_top` results (callers, callees, siblings, memories)
-- Suggested related queries for further exploration
+- **Integration tests** - Test how components work together
+- **E2E tests** - Test full workflows from start to finish
+- **Edge cases** - Test unusual or extreme inputs
 
-#### `context` - Comprehensive drill-down
+When a test fails, don't immediately go and edit the test. First, investigate if the failure indicates a real bug in the code. If a test fails, it often means there's a bug in the code, not the test itself. Only when you are certain the test is incorrect should you modify it. **NEVER SIMPLIFY A TEST TO MAKE IT PASS.** I would MUCH rather you leave a test failing than make it pass incorrectly.
 
-Get full context for any explore result. Auto-detects type (code/memory/doc).
+When writing a test, think to yourself: "Is this complex enough that it could have a bug that wouldn't be obvious? Am I testing multiple behaviors?" If the answer is no, reconsider if the test is necessary.
 
-```json
-{
-  "id": "abc123",      // Single ID from explore results
-  "ids": ["a", "b"],   // OR array of IDs (max 5) for batch context
-  "depth": 5           // Items per section (callers, callees, etc.)
-}
-```
+## Code Rules
 
-**Returns for code:** content, callers, callees, siblings, related memories
-**Returns for memory:** content, timeline, related memories
-**Returns for docs:** content, before/after chunks
-
-### Typical Exploration Flow
-
-```
-# 1. Start broad - find entry points
-explore("authentication", expand_top=3)
-
-# 2. Drill into specific result if needed
-context("chunk_abc123")
-
-# 3. Follow suggestions or callers/callees
-explore("session management", scope="code")
-```
-
-## Tool Presets
-
-| Preset | Tools | Description |
-|--------|-------|-------------|
-| **minimal** | `explore`, `context` | Streamlined exploration (2 tools) - **Recommended** |
-| **standard** | Above + memory management, code maintenance, diagnostics | Daily driver (11 tools) |
-| **full** | All 40 tools including legacy search tools | Everything |
-
-Initialize project config:
-
-```bash
-ccengram config init --preset minimal
-```
-
-## CLI Commands
-
-```bash
-# Core
-ccengram daemon                     # Start daemon (required)
-ccengram watch                      # Start file watcher
-ccengram tui                        # Launch TUI
-ccengram mcp                        # MCP server (for plugin)
-ccengram hook <name>                # Handle hook event
-
-# Search (memories, code, docs)
-ccengram search memories "query"    # Search memories
-ccengram search code "query"        # Search code
-ccengram search docs "query"        # Search documents
-
-# Context retrieval
-ccengram context <chunk_id>         # Get context (auto-detects code vs doc)
-ccengram context <id> --before 30   # More lines/chunks before
-ccengram context <id> --after 30    # More lines/chunks after
-ccengram context <id> --json        # JSON output
-
-# Memory management
-ccengram memory show <id>           # Show memory details
-ccengram memory delete <id>         # Soft-delete a memory
-ccengram memory restore <id>        # Restore a soft-deleted memory
-ccengram memory deleted             # List soft-deleted memories
-ccengram memory export              # Export memories to file
-ccengram memory archive             # Archive old low-salience memories
-
-# Index management
-ccengram index                      # Index code (default)
-ccengram index code                 # Index code files
-ccengram index code --force         # Re-index all code
-ccengram index code --stats         # Show code index stats
-ccengram index docs                 # Index documents from configured directory
-ccengram index docs --directory ./  # Index docs from specific directory
-ccengram index file <path>          # Index a single file (auto-detects type)
-
-# Configuration
-ccengram config help                # Show presets and config locations
-ccengram config show                # Show effective config
-ccengram config init                # Create project config (standard preset)
-ccengram config init --preset minimal
-ccengram config reset               # Reset user config to defaults
-
-# Project management
-ccengram projects list              # List all indexed projects
-ccengram projects show <path>       # Show project details
-ccengram projects clean <path>      # Remove a project's data
-ccengram projects clean-all         # Remove all project data
-
-# Logs
-ccengram logs                       # Show last 50 lines of logs
-ccengram logs -f                    # Follow logs in real-time
-ccengram logs -n 100                # Show last 100 lines
-ccengram logs --level error         # Filter by log level
-ccengram logs --open                # Open log directory
-
-# Utilities
-ccengram stats                      # Show statistics
-ccengram health                     # Health check
-ccengram migrate                    # Migrate embeddings
-ccengram update                     # Check for updates
-ccengram agent                      # Generate MemExplore agent
-
-# Shell completions
-ccengram completions bash           # Generate bash completions
-ccengram completions zsh            # Generate zsh completions
-ccengram completions fish           # Generate fish completions
-ccengram completions powershell     # Generate PowerShell completions
-```
+- **NO `any`**. NO `unwrap()` or `expect()` in library code. Use `?` and proper error types.
+- Use `thiserror` for error enums
+- use `anyhow` only in binary code, not in library code
+- validate all inputs at boundaries using serde derives
+- do not globally pub anything additional from lib.rs **THIS IS CRITICAL!!!**
+- do not "flatten" exports - ie `pub use` from submods in the mod.rs. just import from the path. the mods are organized how they are for a reason. **THIS IS CRITICAL!!!**
+- always use message passing over shared state
+- use `tracing` for logging, using `trace!`, `debug!`, `info!`, `warn!`, and `error!` as appropriate (`trace!` and `debug!` can be especially useful). you should use `#[tracing::instrument]` at a trace level (for the span close mainly) on functions when interacting with external systems or performing significant operations (io, db access, etc)
+- NEVER use `std::io` or `std::fs` directly. use `tokio::fs` and `tokio::io` only. all io MUST be async.
+- do NOT fix warnings, especially dead code warnings. do not disable the warnings. just ignore them. **IGNORE THEM!**
+- do NOT use excessive comments. well-written code is self-explanatory. avoid inline comments unless necessary for clarity (non-obvious behavior).

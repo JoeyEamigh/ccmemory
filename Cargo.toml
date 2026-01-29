@@ -1,19 +1,6 @@
 [workspace]
-resolver = "2"
-members = [
-    "crates/core",
-    "crates/db",
-    "crates/embedding",
-    "crates/index",
-    "crates/extract",
-    "crates/llm",
-    "crates/daemon",
-    "crates/cli",
-    "crates/tui",
-    "crates/parser",
-    "crates/benchmark",
-    "crates/ipc",
-]
+resolver = "3"
+members = ["crates/backend", "crates/llm", "crates/cli", "crates/benchmark"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,19 +8,12 @@ edition = "2024"
 
 [workspace.dependencies]
 # Internal crates
-engram-core = { path = "crates/core" }
-db = { path = "crates/db" }
-embedding = { path = "crates/embedding" }
-index = { path = "crates/index" }
-extract = { path = "crates/extract" }
-llm = { path = "crates/llm" }
-daemon = { path = "crates/daemon" }
-tui = { path = "crates/tui" }
-parser = { path = "crates/parser" }
-ipc = { path = "crates/ipc" }
+ccengram = { path = "crates/backend" }
+llm = { path = "crates/llm", default-features = false }
 
 # External dependencies (add with cargo add)
 anyhow = "1"
+async-trait = "0.1"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"

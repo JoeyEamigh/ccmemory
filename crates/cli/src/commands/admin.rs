@@ -1,267 +1,110 @@
 //! Administrative commands (stats, health, archive, config)
 
 use anyhow::{Context, Result};
-use cli::to_daemon_request;
-use daemon::{connect_or_start, default_socket_path};
-use ipc::{
-  HealthCheckParams, MemoryDeleteParams, MemoryListParams, Method, MetricsParams, PingParams, ProjectStatsParams,
-  Request, StatusParams,
+use ccengram::ipc::{
+  memory::{MemoryDeleteParams, MemoryListParams},
+  system::{HealthCheckParams, MetricsParams, PingParams, ProjectStatsParams, StatusParams},
 };
 use tracing::error;
 
 /// Show statistics
 pub async fn cmd_stats() -> Result<()> {
-  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
+  let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+  let client = ccengram::Daemon::connect_or_start(cwd)
+    .await
+    .context("Failed to connect to daemon")?;
 
   // Get daemon metrics (includes status info plus more)
-  let request = Request {
-    id: Some(1),
-    method: Method::Metrics,
-    params: MetricsParams,
-  };
-
-  let metrics_response = client
-    .request(to_daemon_request(request))
-    .await
-    .context("Failed to get metrics")?;
+  let metrics = client.call(MetricsParams).await.context("Failed to get metrics")?;
 
   println!("CCEngram Statistics");
   println!("===================\n");
 
   // Print daemon metrics
-  if let Some(metrics) = metrics_response.result {
-    println!("--- Daemon ---");
-    if let Some(daemon) = metrics.get("daemon") {
-      if let Some(version) = daemon.get("version").and_then(|v| v.as_str()) {
-        println!("Version:        {}", version);
-      }
-      let foreground = daemon.get("foreground").and_then(|v| v.as_bool()).unwrap_or(false);
-      println!(
-        "Mode:           {}",
-        if foreground { "foreground" } else { "background" }
-      );
-      if let Some(uptime_secs) = daemon.get("uptime_seconds").and_then(|v| v.as_u64()) {
-        println!("Uptime:         {}", format_duration(uptime_secs));
-      }
-      if let Some(idle_secs) = daemon.get("idle_seconds").and_then(|v| v.as_u64()) {
-        println!("Idle:           {}", format_duration(idle_secs));
-      }
+  println!("--- Daemon ---");
+  println!("Version:        {}", metrics.daemon.version);
+  println!(
+    "Mode:           {}",
+    if metrics.daemon.foreground {
+      "foreground"
+    } else {
+      "background"
     }
+  );
+  println!("Uptime:         {}", format_duration(metrics.daemon.uptime_seconds));
+  println!("Idle:           {}", format_duration(metrics.daemon.idle_seconds));
 
-    // Requests
-    if let Some(requests) = metrics.get("requests") {
-      let total = requests.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
-      let per_sec = requests.get("per_second").and_then(|v| v.as_f64()).unwrap_or(0.0);
-      println!("Requests:       {} total ({:.2}/s)", total, per_sec);
-    }
+  // Requests
+  println!(
+    "Requests:       {} total ({:.2}/s)",
+    metrics.requests.total, metrics.requests.per_second
+  );
 
-    // Sessions
-    if let Some(sessions) = metrics.get("sessions") {
-      let active = sessions.get("active").and_then(|v| v.as_u64()).unwrap_or(0);
-      if active > 0 {
-        println!("Sessions:       {} active", active);
-        if let Some(ids) = sessions.get("ids").and_then(|v| v.as_array()) {
-          for id in ids.iter().take(5) {
-            if let Some(s) = id.as_str() {
-              println!("                - {}", s);
-            }
-          }
-          if ids.len() > 5 {
-            println!("                ... and {} more", ids.len() - 5);
-          }
-        }
-      } else {
-        println!("Sessions:       none active");
-      }
+  // Sessions
+  if metrics.sessions.active > 0 {
+    println!("Sessions:       {} active", metrics.sessions.active);
+    for id in metrics.sessions.ids.iter().take(5) {
+      println!("                - {}", id);
     }
+    if metrics.sessions.ids.len() > 5 {
+      println!("                ... and {} more", metrics.sessions.ids.len() - 5);
+    }
+  } else {
+    println!("Sessions:       none active");
+  }
 
-    // Projects
-    if let Some(projects) = metrics.get("projects") {
-      let count = projects.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-      println!("Projects:       {} loaded", count);
-      if let Some(names) = projects.get("names").and_then(|v| v.as_array()) {
-        for name in names.iter().take(5) {
-          if let Some(s) = name.as_str() {
-            println!("                - {}", s);
-          }
-        }
-        if names.len() > 5 {
-          println!("                ... and {} more", names.len() - 5);
-        }
-      }
-    }
+  // Projects
+  println!("Projects:       {} loaded", metrics.projects.count);
+  for name in metrics.projects.names.iter().take(5) {
+    println!("                - {}", name);
+  }
+  if metrics.projects.names.len() > 5 {
+    println!("                ... and {} more", metrics.projects.names.len() - 5);
+  }
 
-    // Embedding provider
-    if let Some(embedding) = metrics.get("embedding")
-      && !embedding.is_null()
-    {
-      println!("\n--- Embedding Provider ---");
-      if let Some(name) = embedding.get("name").and_then(|v| v.as_str()) {
-        println!("Provider:       {}", name);
-      }
-      if let Some(model) = embedding.get("model").and_then(|v| v.as_str()) {
-        println!("Model:          {}", model);
-      }
-      if let Some(dims) = embedding.get("dimensions").and_then(|v| v.as_u64()) {
-        println!("Dimensions:     {}", dims);
-      }
-    }
+  // Embedding provider
+  if let Some(ref embedding) = metrics.embedding {
+    println!("\n--- Embedding Provider ---");
+    println!("Provider:       {}", embedding.name);
+    println!("Model:          {}", embedding.model);
+    println!("Dimensions:     {}", embedding.dimensions);
+  }
 
-    // Memory usage
-    if let Some(memory) = metrics.get("memory")
-      && let Some(rss_kb) = memory.get("rss_kb").and_then(|v| v.as_u64())
-    {
-      println!("\n--- Memory ---");
-      println!("RSS:            {}", format_memory(rss_kb));
-    }
+  // Memory usage
+  println!("\n--- Memory ---");
+  if let Some(rss_kb) = metrics.memory.rss_kb {
+    println!("RSS:            {}", format_memory(rss_kb));
+  } else {
+    println!("RSS:            (unavailable)");
   }
 
   // Get project-specific stats for current directory
-  let cwd = std::env::current_dir()
-    .map(|p| p.to_string_lossy().to_string())
-    .unwrap_or_else(|_| ".".to_string());
-
-  let stats_request = Request {
-    id: Some(2),
-    method: Method::ProjectStats,
-    params: ProjectStatsParams { cwd: Some(cwd) },
-  };
-
-  let stats_response = client
-    .request(to_daemon_request(stats_request))
+  let stats = client
+    .call(ProjectStatsParams)
     .await
     .context("Failed to get project stats")?;
 
-  if let Some(err) = stats_response.error {
-    error!("Stats error: {}", err.message);
-    std::process::exit(1);
-  }
-
-  if let Some(stats) = stats_response.result {
-    println!("\n--- Memory Statistics ---");
-
-    if let Some(memories) = stats.get("memories") {
-      let total = memories.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
-      println!("Total memories: {}", total);
-
-      // By sector
-      if let Some(by_sector) = memories.get("by_sector").and_then(|v| v.as_object()) {
-        println!("\nBy sector:");
-        for (sector, count) in by_sector {
-          let cnt = count.as_u64().unwrap_or(0);
-          if cnt > 0 {
-            println!("  {}: {}", sector, cnt);
-          }
-        }
-      }
-
-      // By tier
-      if let Some(by_tier) = memories.get("by_tier").and_then(|v| v.as_object()) {
-        println!("\nBy tier:");
-        for (tier, count) in by_tier {
-          let cnt = count.as_u64().unwrap_or(0);
-          if cnt > 0 {
-            println!("  {}: {}", tier, cnt);
-          }
-        }
-      }
-
-      // Salience distribution
-      if let Some(by_salience) = memories.get("by_salience") {
-        println!("\nSalience distribution:");
-        let high = by_salience.get("high").and_then(|v| v.as_u64()).unwrap_or(0);
-        let medium = by_salience.get("medium").and_then(|v| v.as_u64()).unwrap_or(0);
-        let low = by_salience.get("low").and_then(|v| v.as_u64()).unwrap_or(0);
-        let very_low = by_salience.get("very_low").and_then(|v| v.as_u64()).unwrap_or(0);
-        println!("  high (>=0.7): {}", high);
-        println!("  medium (0.4-0.7): {}", medium);
-        println!("  low (0.2-0.4): {}", low);
-        println!("  very_low (<0.2): {}", very_low);
-      }
-
-      let superseded = memories.get("superseded_count").and_then(|v| v.as_u64()).unwrap_or(0);
-      if superseded > 0 {
-        println!("\nSuperseded memories: {}", superseded);
-      }
-    }
-
-    println!("\n--- Code Index Statistics ---");
-
-    if let Some(code) = stats.get("code") {
-      let total_chunks = code.get("total_chunks").and_then(|v| v.as_u64()).unwrap_or(0);
-      let total_files = code.get("total_files").and_then(|v| v.as_u64()).unwrap_or(0);
-      println!("Total chunks: {}", total_chunks);
-      println!("Total files: {}", total_files);
-
-      // By language
-      if let Some(by_language) = code.get("by_language").and_then(|v| v.as_object())
-        && !by_language.is_empty()
-      {
-        println!("\nBy language:");
-        let mut langs: Vec<_> = by_language.iter().collect();
-        langs.sort_by(|a, b| b.1.as_u64().unwrap_or(0).cmp(&a.1.as_u64().unwrap_or(0)));
-        for (lang, count) in langs.iter().take(10) {
-          let cnt = count.as_u64().unwrap_or(0);
-          if cnt > 0 {
-            println!("  {}: {}", lang, cnt);
-          }
-        }
-      }
-
-      // Recent activity
-      if let Some(recent) = code.get("recent_indexed").and_then(|v| v.as_array())
-        && !recent.is_empty()
-      {
-        println!("\nRecent index activity:");
-        for item in recent.iter().take(5) {
-          let file_path = item.get("file_path").and_then(|v| v.as_str()).unwrap_or("?");
-          let chunks = item.get("chunks").and_then(|v| v.as_u64()).unwrap_or(0);
-          println!("  {} ({} chunks)", file_path, chunks);
-        }
-      }
-    }
-
-    println!("\n--- Document Statistics ---");
-
-    if let Some(docs) = stats.get("documents") {
-      let total = docs.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
-      let total_chunks = docs.get("total_chunks").and_then(|v| v.as_u64()).unwrap_or(0);
-      println!("Total documents: {}", total);
-      println!("Total document chunks: {}", total_chunks);
-    }
-
-    println!("\n--- Entity Statistics ---");
-
-    if let Some(entities) = stats.get("entities") {
-      let total = entities.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
-      println!("Total entities: {}", total);
-
-      if let Some(by_type) = entities.get("by_type").and_then(|v| v.as_object())
-        && !by_type.is_empty()
-      {
-        println!("\nBy type:");
-        for (entity_type, count) in by_type {
-          let cnt = count.as_u64().unwrap_or(0);
-          if cnt > 0 {
-            println!("  {}: {}", entity_type, cnt);
-          }
-        }
-      }
-    }
-  }
+  println!("\n--- Project Statistics ---");
+  println!("Project ID:     {}", stats.project_id);
+  println!("Path:           {}", stats.path);
+  println!("Total memories: {}", stats.memories);
+  println!("Code chunks:    {}", stats.code_chunks);
+  println!("Documents:      {}", stats.documents);
+  println!("Sessions:       {}", stats.sessions);
 
   Ok(())
 }
 
 /// Health check
 pub async fn cmd_health() -> Result<()> {
-  let socket_path = default_socket_path();
+  let socket_path = ccengram::dirs::default_socket_path();
+  let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
   println!("CCEngram Health Check");
   println!("=====================\n");
 
   // Try to connect (auto-starting if needed)
-  let mut client = match connect_or_start().await {
+  let client = match ccengram::Daemon::connect_or_start(cwd).await {
     Ok(c) => c,
     Err(e) => {
       println!("Daemon:     NOT RUNNING");
@@ -273,16 +116,7 @@ pub async fn cmd_health() -> Result<()> {
   };
 
   // Ping test
-  let ping_request = Request {
-    id: Some(1),
-    method: Method::Ping,
-    params: PingParams,
-  };
-
-  let ping_ok = match client.request(to_daemon_request(ping_request)).await {
-    Ok(response) => response.error.is_none(),
-    Err(_) => false,
-  };
+  let ping_ok = client.call(PingParams).await.is_ok();
 
   if ping_ok {
     println!("Daemon:     HEALTHY");
@@ -293,44 +127,15 @@ pub async fn cmd_health() -> Result<()> {
   println!("Socket:     {:?}", socket_path);
 
   // Get daemon status info
-  let status_request = Request {
-    id: Some(1),
-    method: Method::Status,
-    params: StatusParams::default(),
-  };
-
-  if let Ok(status_response) = client.request(to_daemon_request(status_request)).await
-    && let Some(status) = status_response.result
-  {
+  if let Ok(status) = client.call(StatusParams).await {
     println!("\n--- Daemon Status ---");
-    if let Some(version) = status.get("version").and_then(|v| v.as_str()) {
-      println!("Version:    {}", version);
-    }
-    if let Some(sessions) = status.get("active_sessions").and_then(|v| v.as_u64()) {
-      println!("Sessions:   {} active", sessions);
-    }
-    if let Some(idle_secs) = status.get("idle_seconds").and_then(|v| v.as_u64()) {
-      if idle_secs < 60 {
-        println!("Idle:       {} seconds", idle_secs);
-      } else if idle_secs < 3600 {
-        println!("Idle:       {} minutes", idle_secs / 60);
-      } else {
-        println!("Idle:       {} hours", idle_secs / 3600);
-      }
-    }
-    if let Some(uptime_secs) = status.get("uptime_seconds").and_then(|v| v.as_u64()) {
-      if uptime_secs < 60 {
-        println!("Uptime:     {} seconds", uptime_secs);
-      } else if uptime_secs < 3600 {
-        println!("Uptime:     {} minutes", uptime_secs / 60);
-      } else {
-        println!("Uptime:     {} hours", uptime_secs / 3600);
-      }
-    }
-    let auto_shutdown = status.get("auto_shutdown").and_then(|v| v.as_bool()).unwrap_or(true);
+    println!("Version:    {}", status.version);
+    println!("Sessions:   {} active", status.active_sessions);
+    println!("Idle:       {}", format_duration(status.idle_seconds));
+    println!("Uptime:     {}", format_duration(status.uptime_seconds));
     println!(
       "Auto-shutdown: {}",
-      if auto_shutdown {
+      if status.auto_shutdown {
         "enabled"
       } else {
         "disabled (foreground mode)"
@@ -339,121 +144,36 @@ pub async fn cmd_health() -> Result<()> {
   }
 
   // Get comprehensive health status
-  let cwd = std::env::current_dir()
-    .map(|p| p.to_string_lossy().to_string())
-    .unwrap_or_else(|_| ".".to_string());
+  if let Ok(health) = client.call(HealthCheckParams).await {
+    println!(
+      "\nOverall Health: {}",
+      if health.healthy { "HEALTHY" } else { "UNHEALTHY" }
+    );
 
-  let health_request = Request {
-    id: Some(2),
-    method: Method::HealthCheck,
-    params: HealthCheckParams,
-  };
-
-  if let Ok(response) = client.request(to_daemon_request(health_request)).await
-    && let Some(health) = response.result
-  {
-    // Database status
-    println!("\n--- Database ---");
-    if let Some(db) = health.get("database") {
-      let status = db.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
-      if status == "healthy" {
-        println!("Status:     HEALTHY");
-      } else {
-        let error = db.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
-        println!("Status:     ERROR ({})", error);
-      }
-    }
-
-    // Ollama status
-    println!("\n--- Ollama ---");
-    if let Some(ollama) = health.get("ollama") {
-      let available = ollama.get("available").and_then(|v| v.as_bool()).unwrap_or(false);
-      if available {
-        println!("Status:     AVAILABLE");
-        let models_count = ollama.get("models_count").and_then(|v| v.as_u64()).unwrap_or(0);
-        println!("Models:     {} available", models_count);
-        let configured = ollama
-          .get("configured_model")
-          .and_then(|v| v.as_str())
-          .unwrap_or("unknown");
-        let model_available = ollama
-          .get("configured_model_available")
-          .and_then(|v| v.as_bool())
-          .unwrap_or(false);
-        println!(
-          "Configured: {} ({})",
-          configured,
-          if model_available { "available" } else { "NOT FOUND" }
-        );
-      } else {
-        println!("Status:     NOT AVAILABLE");
-        println!("            Make sure Ollama is running: ollama serve");
-      }
-    }
-
-    // Embedding status
-    println!("\n--- Embedding Service ---");
-    if let Some(embed) = health.get("embedding") {
-      let configured = embed.get("configured").and_then(|v| v.as_bool()).unwrap_or(false);
-      if configured {
-        let provider = embed.get("provider").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let model = embed.get("model").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let dimensions = embed.get("dimensions").and_then(|v| v.as_u64()).unwrap_or(0);
-        let available = embed.get("available").and_then(|v| v.as_bool()).unwrap_or(false);
-
-        println!("Provider:   {}", provider);
-        println!("Model:      {}", model);
-        println!("Dimensions: {}", dimensions);
-        println!("Status:     {}", if available { "AVAILABLE" } else { "NOT AVAILABLE" });
-      } else {
-        println!("Status:     NOT CONFIGURED");
+    for check in &health.checks {
+      println!("\n--- {} ---", check.name);
+      println!("Status:     {}", check.status.to_uppercase());
+      if let Some(ref msg) = check.message {
+        println!("Message:    {}", msg);
       }
     }
   }
-
-  // Use cwd for health check context
-  let _ = cwd;
 
   Ok(())
 }
 
 /// Archive old low-salience memories
 pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) -> Result<()> {
-  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
-
-  let cwd = std::env::current_dir()
-    .map(|p| p.to_string_lossy().to_string())
-    .unwrap_or_else(|_| ".".to_string());
+  let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+  let client = ccengram::Daemon::connect_or_start(cwd)
+    .await
+    .context("Failed to connect to daemon")?;
 
   // First, get all memories to find archival candidates
-  let request = Request {
-    id: Some(1),
-    method: Method::MemoryList,
-    params: MemoryListParams {
-      cwd: Some(cwd.clone()),
-      ..Default::default()
-    },
-  };
-
-  let response = client
-    .request(to_daemon_request(request))
+  let memories = client
+    .call(MemoryListParams::default())
     .await
     .context("Failed to list memories")?;
-
-  if let Some(err) = response.error {
-    error!("Archive error: {}", err.message);
-    std::process::exit(1);
-  }
-
-  let Some(memories) = response.result else {
-    println!("No memories found");
-    return Ok(());
-  };
-
-  let Some(arr) = memories.as_array() else {
-    println!("No memories found");
-    return Ok(());
-  };
 
   // Parse the before date if provided
   let before_date: Option<chrono::NaiveDateTime> = before.and_then(|s| {
@@ -464,8 +184,8 @@ pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) ->
 
   let mut candidates: Vec<(String, f32, String)> = Vec::new();
 
-  for mem in arr {
-    let salience = mem.get("salience").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+  for mem in &memories {
+    let salience = mem.salience;
 
     // Skip if above threshold
     if salience >= threshold {
@@ -474,8 +194,7 @@ pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) ->
 
     // Check date if specified
     if let Some(cutoff) = before_date
-      && let Some(created) = mem.get("created_at").and_then(|v| v.as_str())
-      && let Ok(mem_date) = chrono::DateTime::parse_from_rfc3339(created)
+      && let Ok(mem_date) = chrono::DateTime::parse_from_rfc3339(&mem.created_at)
     {
       let mem_naive: chrono::NaiveDateTime = mem_date.naive_utc();
       if mem_naive >= cutoff {
@@ -483,15 +202,13 @@ pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) ->
       }
     }
 
-    let id = mem.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let content = mem.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let summary = if content.len() > 60 {
-      format!("{}...", &content[..60])
+    let summary = if mem.content.len() > 60 {
+      format!("{}...", &mem.content[..60])
     } else {
-      content
+      mem.content.clone()
     };
 
-    candidates.push((id, salience, summary));
+    candidates.push((mem.id.clone(), salience, summary));
   }
 
   if candidates.is_empty() {
@@ -522,18 +239,9 @@ pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) ->
   // Archive (soft delete) each memory
   let mut archived = 0;
   for (id, _, _) in candidates {
-    let request = Request {
-      id: Some(1),
-      method: Method::MemoryDelete,
-      params: MemoryDeleteParams {
-        memory_id: id.clone(),
-        cwd: Some(cwd.clone()),
-      },
-    };
-
-    match client.request(to_daemon_request(request)).await {
-      Ok(resp) if resp.error.is_none() => archived += 1,
-      _ => error!("Failed to archive memory {}", id),
+    match client.call(MemoryDeleteParams { memory_id: id.clone() }).await {
+      Ok(_) => archived += 1,
+      Err(e) => error!("Failed to archive memory {}: {}", id, e),
     }
   }
 
@@ -543,10 +251,10 @@ pub async fn cmd_archive(before: Option<&str>, threshold: f32, dry_run: bool) ->
 
 /// Show current effective configuration
 pub async fn cmd_config_show() -> Result<()> {
-  use engram_core::Config;
+  use ccengram::config::Config;
 
   let cwd = std::env::current_dir()?;
-  let config = Config::load_for_project(&cwd);
+  let config = Config::load_for_project(&cwd).await;
 
   // Check which config file is being used
   let project_config = Config::project_config_path(&cwd);
@@ -577,7 +285,7 @@ pub async fn cmd_config_show() -> Result<()> {
 
 /// Initialize project configuration file
 pub async fn cmd_config_init(preset: &str) -> Result<()> {
-  use engram_core::{Config, ToolPreset};
+  use ccengram::config::{Config, ToolPreset};
 
   let cwd = std::env::current_dir()?;
   let config_path = Config::project_config_path(&cwd);
@@ -621,7 +329,7 @@ pub async fn cmd_config_init(preset: &str) -> Result<()> {
 
 /// Reset user configuration to defaults
 pub async fn cmd_config_reset() -> Result<()> {
-  use engram_core::{Config, ToolPreset};
+  use ccengram::config::{Config, ToolPreset};
 
   if let Some(user_config_path) = Config::user_config_path() {
     if let Some(parent) = user_config_path.parent() {

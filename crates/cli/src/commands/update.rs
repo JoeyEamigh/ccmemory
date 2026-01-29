@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-const GITHUB_REPO: &str = "joey-goodjob/ccengram";
+const GITHUB_REPO: &str = "JoeyEamigh/ccengram";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Deserialize)]
@@ -137,18 +137,22 @@ pub async fn cmd_update(check_only: bool, target_version: Option<String>) -> Res
 
   // Backup current binary
   println!("Backing up current binary...");
-  std::fs::rename(&current_exe, &backup_path).context("Failed to backup current binary")?;
+  tokio::fs::rename(&current_exe, &backup_path)
+    .await
+    .context("Failed to backup current binary")?;
 
   // Write new binary
   println!("Installing new version...");
-  std::fs::write(&current_exe, &bytes).context("Failed to write new binary")?;
+  tokio::fs::write(&current_exe, &bytes)
+    .await
+    .context("Failed to write new binary")?;
 
   // Set executable permissions on Unix
   #[cfg(unix)]
   {
     use std::os::unix::fs::PermissionsExt;
     let perms = std::fs::Permissions::from_mode(0o755);
-    std::fs::set_permissions(&current_exe, perms)?;
+    tokio::fs::set_permissions(&current_exe, perms).await?;
   }
 
   println!();

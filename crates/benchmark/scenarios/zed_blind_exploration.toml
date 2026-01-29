@@ -97,27 +97,27 @@ min_comprehension_score = 0.5   # Must pass comprehension to succeed
 # Core architecture question
 [[llm_judge.comprehension_questions]]
 question = "What is the core UI framework used by this editor and how does it work?"
-expected_concepts = ["GPUI", "View", "Model", "Element", "render"]
+expected_concepts = ["GPUI", "Render", "Element", "Entity", "Context"]
 wrong_concepts = ["React", "Vue", "Electron", "Qt"]
 weight = 2.0
 
 # Command system understanding
 [[llm_judge.comprehension_questions]]
 question = "How would you add a new keyboard shortcut or command?"
-expected_concepts = ["Action", "Keymap", "dispatch", "register"]
+expected_concepts = ["Action", "actions!", "KeyBinding", "register_action", "keymap JSON"]
 wrong_concepts = ["Redux", "event listener"]
 weight = 1.5
 
 # Component relationships
 [[llm_judge.comprehension_questions]]
 question = "What is the relationship between Workspace, Pane, and Editor?"
-expected_concepts = ["Workspace", "Pane", "Editor", "buffer", "contains"]
+expected_concepts = ["Workspace", "Pane", "Editor", "Buffer", "Entity"]
 wrong_concepts = []
 weight = 1.5
 
 # Practical application question
 [[llm_judge.comprehension_questions]]
 question = "Based on what you found, where would you start to add a new sidebar panel?"
-expected_concepts = ["View", "Panel", "Workspace", "register"]
+expected_concepts = ["Panel", "Dock", "Workspace", "dock.rs"]
 wrong_concepts = ["main.rs", "config"]
 weight = 1.0

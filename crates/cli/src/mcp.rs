@@ -1,9 +1,6 @@
 //! MCP (Model Context Protocol) server for Claude Code integration
 
 use anyhow::{Context, Result};
-use cli::to_daemon_request;
-use daemon::connect_or_start;
-use ipc::{Method, Request};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
@@ -148,7 +145,7 @@ pub async fn cmd_mcp() -> Result<()> {
       "tools/list" => mcp_success(
         mcp_request.id,
         serde_json::to_value(ToolsListResult {
-          tools: cli::get_tool_definitions_for_cwd(),
+          tools: crate::tools::get_tool_definitions_for_cwd().await,
         })
         .unwrap_or_default(),
       ),
@@ -173,75 +170,35 @@ pub async fn cmd_mcp() -> Result<()> {
           );
         }
 
-        // Parse the tool name into a Method enum via serde deserialization
-        let method: Method = match serde_json::from_value(serde_json::Value::String(tool_name.to_string())) {
-          Ok(m) => m,
-          Err(_) => {
-            // Return error for unknown tool
-            let resp = mcp_error(mcp_request.id, -32601, &format!("Unknown tool: {}", tool_name));
-            let out = serde_json::to_string(&resp)? + "\n";
-            stdout.write_all(out.as_bytes()).await?;
-            stdout.flush().await?;
-            continue;
+        // Dispatch tool call to daemon
+        match dispatch_tool_call(tool_name, args).await {
+          Ok(result) => {
+            // Format the result for LLM consumption, falling back to JSON if no formatter
+            let text = crate::format::format_tool_result(tool_name, &result)
+              .unwrap_or_else(|| serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()));
+            mcp_success(
+              mcp_request.id,
+              serde_json::to_value(McpToolResult {
+                content: vec![McpContent {
+                  content_type: "text",
+                  text,
+                }],
+                is_error: None,
+              })
+              .unwrap_or_default(),
+            )
           }
-        };
-
-        // Connect to daemon (auto-starts if not running)
-        match connect_or_start().await {
-          Ok(mut client) => {
-            let request = Request {
-              id: Some(1),
-              method,
-              params: args,
-            };
-
-            match client.request(to_daemon_request(request)).await {
-              Ok(daemon_response) => {
-                if let Some(err) = daemon_response.error {
-                  // Return error as text content (MCP style)
-                  mcp_success(
-                    mcp_request.id,
-                    serde_json::to_value(McpToolResult {
-                      content: vec![McpContent {
-                        content_type: "text",
-                        text: format!("Error: {}", err.message),
-                      }],
-                      is_error: Some(true),
-                    })
-                    .unwrap_or_default(),
-                  )
-                } else if let Some(result) = daemon_response.result {
-                  // Format result as text content
-                  let text = serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
-                  mcp_success(
-                    mcp_request.id,
-                    serde_json::to_value(McpToolResult {
-                      content: vec![McpContent {
-                        content_type: "text",
-                        text,
-                      }],
-                      is_error: None,
-                    })
-                    .unwrap_or_default(),
-                  )
-                } else {
-                  mcp_success(
-                    mcp_request.id,
-                    serde_json::to_value(McpToolResult {
-                      content: vec![McpContent {
-                        content_type: "text",
-                        text: "Success".to_string(),
-                      }],
-                      is_error: None,
-                    })
-                    .unwrap_or_default(),
-                  )
-                }
-              }
-              Err(e) => mcp_error(mcp_request.id, -32000, &format!("Daemon error: {}", e)),
-            }
-          }
-          Err(e) => mcp_error(mcp_request.id, -32000, &format!("Failed to start daemon: {}", e)),
+          Err(e) => mcp_success(
+            mcp_request.id,
+            serde_json::to_value(McpToolResult {
+              content: vec![McpContent {
+                content_type: "text",
+                text: format!("Error: {}", e),
+              }],
+              is_error: Some(true),
+            })
+            .unwrap_or_default(),
+          ),
         }
       }
       // Unknown method
@@ -258,4 +215,91 @@ pub async fn cmd_mcp() -> Result<()> {
   }
 
   Ok(())
+}
+
+/// Dispatch a tool call to the daemon using typed IPC
+async fn dispatch_tool_call(tool_name: &str, args: serde_json::Value) -> Result<serde_json::Value> {
+  use ccengram::ipc::{
+    code::*,
+    docs::*,
+    memory::*,
+    project::*,
+    relationship::*,
+    search::{ContextParams, ExploreParams},
+    system::*,
+    watch::*,
+  };
+
+  let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+  let client = ccengram::Daemon::connect_or_start(cwd)
+    .await
+    .context("Failed to connect to daemon")?;
+
+  // Macro to reduce boilerplate: deserialize args, call client, serialize result
+  macro_rules! call {
+    ($params:ty) => {{
+      let params: $params =
+        serde_json::from_value(args).context(concat!("Invalid params for ", stringify!($params)))?;
+      let result = client.call(params).await?;
+      serde_json::to_value(result).context("Failed to serialize response")
+    }};
+  }
+
+  match tool_name {
+    // Unified exploration tools
+    "explore" => call!(ExploreParams),
+    "context" => call!(ContextParams),
+
+    // Memory tools
+    "memory_search" => call!(MemorySearchParams),
+    "memory_get" => call!(MemoryGetParams),
+    "memory_list" => call!(MemoryListParams),
+    "memory_add" => call!(MemoryAddParams),
+    "memory_reinforce" => call!(MemoryReinforceParams),
+    "memory_deemphasize" => call!(MemoryDeemphasizeParams),
+    "memory_delete" => call!(MemoryDeleteParams),
+    "memory_supersede" => call!(MemorySupersedeParams),
+    "memory_timeline" => call!(MemoryTimelineParams),
+    "memory_related" => call!(MemoryRelatedParams),
+
+    // Code tools
+    "code_search" => call!(CodeSearchParams),
+    "code_context" => call!(CodeContextParams),
+    "code_index" => call!(CodeIndexParams),
+    "code_list" => call!(CodeListParams),
+    "code_stats" => call!(CodeStatsParams),
+    "code_memories" => call!(CodeMemoriesParams),
+    "code_callers" => call!(CodeCallersParams),
+    "code_callees" => call!(CodeCalleesParams),
+    "code_related" => call!(CodeRelatedParams),
+    "code_context_full" => call!(CodeContextFullParams),
+
+    // Watch tools
+    "watch_start" => call!(WatchStartParams),
+    "watch_stop" => call!(WatchStopParams),
+    "watch_status" => call!(WatchStatusParams),
+
+    // Document tools
+    "docs_search" => call!(DocsSearchParams),
+    "doc_context" => call!(DocContextParams),
+    "docs_ingest" => call!(DocsIngestParams),
+
+    // Relationship tools
+    "relationship_add" => call!(RelationshipAddParams),
+    "relationship_list" => call!(RelationshipListParams),
+    "relationship_delete" => call!(RelationshipDeleteParams),
+    "relationship_related" => call!(RelationshipRelatedParams),
+
+    // Project tools
+    "project_list" => call!(ProjectListParams),
+    "project_info" => call!(ProjectInfoParams),
+    "project_clean" => call!(ProjectCleanParams),
+    "project_clean_all" => call!(ProjectCleanAllParams),
+
+    // System tools
+    "project_stats" => call!(ProjectStatsParams),
+    "health_check" => call!(HealthCheckParams),
+
+    _ => anyhow::bail!("Unknown tool: {}", tool_name),
+  }
 }

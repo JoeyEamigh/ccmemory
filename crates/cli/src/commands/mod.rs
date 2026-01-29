@@ -21,7 +21,7 @@ pub use daemon::cmd_daemon;
 pub use hook::cmd_hook;
 pub use index::cmd_index;
 pub use logs::{cmd_logs, cmd_logs_list};
-pub use memory::{cmd_delete, cmd_deleted, cmd_export, cmd_restore, cmd_show};
+pub use memory::{cmd_delete, cmd_deleted, cmd_restore, cmd_show};
 pub use migrate::cmd_migrate;
 pub use projects::{cmd_projects_clean, cmd_projects_clean_all, cmd_projects_list, cmd_projects_show};
 pub use search::{cmd_search, cmd_search_code, cmd_search_docs};

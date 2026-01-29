@@ -1,18 +1,23 @@
 //! Scenario execution against the daemon.
 
-use super::{Expected, PreviousStepResults, Scenario, Step, TaskIntent, TaskRequirementsResult};
-use crate::ground_truth::load_scenario_annotations;
-use crate::llm_judge::{ComprehensionResult, LlmJudge};
-use crate::metrics::{AccuracyMetrics, PerformanceMetrics, ResourceMonitor};
-use crate::session::{ExplorationSession, HintType};
-use crate::{BenchmarkError, Result};
-use ipc::{ContextParams, ExploreParams, HealthCheckParams, Method, Request};
+use std::{path::PathBuf, time::Instant};
+
+use ccengram::ipc::{
+  Client,
+  search::{ContextItem, ContextParams, ExploreParams, ExploreResult},
+  system::HealthCheckParams,
+};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use std::time::Instant;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 use tracing::{debug, info, warn};
+
+use super::{Expected, PreviousStepResults, Scenario, Step, TaskIntent, TaskRequirementsResult};
+use crate::{
+  BenchmarkError, Result,
+  ground_truth::{Annotations, load_scenario_annotations},
+  llm_judge::{ComprehensionResult, LlmJudge},
+  metrics::{AccuracyMetrics, PerformanceMetrics, ResourceMonitor},
+  session::ExplorationSession,
+};
 
 /// Result of running a single scenario.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,9 +78,7 @@ pub struct StepResult {
 /// Runner for executing scenarios against the daemon.
 pub struct ScenarioRunner {
   /// Path to the daemon socket
-  socket_path: String,
-  /// Project path for the benchmark target
-  project_path: String,
+  client: Client,
   /// Optional annotations directory for ground truth
   annotations_dir: Option<PathBuf>,
   /// Optional LLM judge for comprehension evaluation
@@ -84,10 +87,9 @@ pub struct ScenarioRunner {
 
 impl ScenarioRunner {
   /// Create a new scenario runner.
-  pub fn new(socket_path: &str, project_path: &str, annotations_dir: Option<PathBuf>) -> Self {
+  pub fn new(client: Client, annotations_dir: Option<PathBuf>) -> Self {
     Self {
-      socket_path: socket_path.to_string(),
-      project_path: project_path.to_string(),
+      client,
       annotations_dir,
       llm_judge: None,
     }
@@ -117,7 +119,7 @@ impl ScenarioRunner {
   /// Run a single scenario.
   pub async fn run(&self, scenario: &Scenario) -> Result<ScenarioResult> {
     let start = Instant::now();
-    let mut session = ExplorationSession::new(&scenario.metadata.id);
+    let mut session = ExplorationSession::new();
     let mut step_results = Vec::new();
     let mut errors = Vec::new();
 
@@ -133,34 +135,61 @@ impl ScenarioRunner {
     // Load annotations if available and merge with expected values
     let mut expected = scenario.expected.clone();
     let mut exploration_paths = Vec::new();
+    // Start with empty annotations as a baseline
+    let mut annotations: Option<Annotations> = Some(Annotations::empty());
 
     if let Some(annotations_dir) = &self.annotations_dir {
       // Determine repo-specific annotations directory
       let repo_annotations_dir = annotations_dir.join(scenario.metadata.repo.to_string());
-      let annotations = load_scenario_annotations(&repo_annotations_dir, &scenario.metadata.id);
+      let loaded_annotations = load_scenario_annotations(&repo_annotations_dir, &scenario.metadata.id).await;
 
-      if !annotations.is_empty() {
+      if !loaded_annotations.is_empty() {
+        // Log all critical items for debugging
+        let all_critical = loaded_annotations.all_critical();
         debug!(
           "Loaded {} critical files, {} critical symbols, {} exploration paths from annotations",
-          annotations.critical_files.len(),
-          annotations.critical_symbols.len(),
-          annotations.exploration_paths.len()
+          loaded_annotations.critical_files.len(),
+          loaded_annotations.critical_symbols.len(),
+          loaded_annotations.exploration_paths.len()
         );
+        tracing::trace!("All critical items: {:?}", all_critical);
 
         // Merge annotations into expected values
-        for file in &annotations.critical_files {
+        for file in &loaded_annotations.critical_files {
           if !expected.must_find_files.contains(file) {
             expected.must_find_files.push(file.clone());
           }
         }
-        for symbol in &annotations.critical_symbols {
+        for symbol in &loaded_annotations.critical_symbols {
           if !expected.must_find_symbols.contains(symbol) {
             expected.must_find_symbols.push(symbol.clone());
           }
         }
 
         // Store exploration paths for navigation efficiency calculation
-        exploration_paths = annotations.exploration_paths.clone();
+        exploration_paths = loaded_annotations.exploration_paths.clone();
+
+        // Keep annotations for critical item checks during step execution
+        annotations = Some(loaded_annotations);
+      }
+    }
+
+    // Also try to load default annotations and merge if scenario-specific ones exist
+    if let Some(annotations_dir) = &self.annotations_dir {
+      let default_annotations_path = annotations_dir.join("default.json");
+      if default_annotations_path.exists() {
+        let default_annotations = Annotations::load_optional(&default_annotations_path).await;
+        if !default_annotations.is_empty()
+          && let Some(ref mut ann) = annotations
+        {
+          // Merge default annotations into scenario-specific ones
+          ann.merge(&default_annotations);
+          debug!(
+            "Merged default annotations: now {} critical files, {} critical symbols",
+            ann.critical_files.len(),
+            ann.critical_symbols.len()
+          );
+        }
       }
     }
 
@@ -182,7 +211,14 @@ impl ScenarioRunner {
       resource_monitor.snapshot();
 
       match self
-        .execute_step_with_context(&resolved_step, i, &mut session, &expected, &mut previous_results)
+        .execute_step_with_context(
+          &resolved_step,
+          i,
+          &mut session,
+          &expected,
+          &mut previous_results,
+          annotations.as_ref(),
+        )
         .await
       {
         Ok(result) => {
@@ -313,6 +349,7 @@ impl ScenarioRunner {
     index: usize,
     session: &mut ExplorationSession,
     expected: &Expected,
+    annotations: Option<&Annotations>,
   ) -> Result<StepResult> {
     let start = Instant::now();
 
@@ -321,72 +358,37 @@ impl ScenarioRunner {
 
     // Build explore request - use step's expand_top or default to 3
     let expand_top = step.expand_top.unwrap_or(3);
-    let request: Request<ExploreParams> = Request {
-      id: Some(index as u64),
-      method: Method::Explore,
-      params: ExploreParams {
+    let result: ExploreResult = self
+      .client
+      .call(ExploreParams {
         query: step.query.clone(),
         scope: Some(step.scope.as_deref().unwrap_or("all").to_string()),
         expand_top: Some(expand_top),
         limit: Some(10),
-        cwd: Some(self.project_path.clone()),
-        format: None,
-      },
-    };
-
-    // Send request to daemon
-    let response = self.send_typed_request(&request).await?;
+      })
+      .await?;
     let latency = start.elapsed();
 
-    // Parse response
-    let result = response
-      .get("result")
-      .ok_or_else(|| BenchmarkError::Execution("No result in response".into()))?;
+    // Extract result info from typed response
+    let results = &result.results;
 
-    let results = result
-      .get("results")
-      .and_then(|r| r.as_array())
-      .ok_or_else(|| BenchmarkError::Execution("No results array".into()))?;
+    let result_ids: Vec<String> = results.iter().map(|r| r.id.clone()).collect();
 
-    // Extract result info
-    let result_ids: Vec<String> = results
-      .iter()
-      .filter_map(|r| r.get("id").and_then(|id| id.as_str()).map(String::from))
-      .collect();
+    let files_found: Vec<String> = results.iter().filter_map(|r| r.file_path.clone()).collect();
 
-    let files_found: Vec<String> = results
-      .iter()
-      .filter_map(|r| r.get("file").and_then(|f| f.as_str()).map(String::from))
-      .collect();
-
-    let symbols_found: Vec<String> = results
-      .iter()
-      .filter_map(|r| {
-        r.get("symbols").and_then(|s| s.as_array()).map(|arr| {
-          arr
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect::<Vec<_>>()
-        })
-      })
-      .flatten()
-      .collect();
+    let symbols_found: Vec<String> = results.iter().flat_map(|r| r.symbols.clone()).collect();
 
     // Record MRR data - check if each result is relevant
     for (rank, r) in results.iter().enumerate() {
-      let file = r.get("file").and_then(|f| f.as_str()).unwrap_or("");
-      let result_symbols: Vec<&str> = r
-        .get("symbols")
-        .and_then(|s| s.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
+      let file = r.file_path.as_deref().unwrap_or("");
+      let result_symbols: Vec<&str> = r.symbols.iter().map(|s| s.as_str()).collect();
 
-      let is_relevant = self.is_result_relevant(file, &result_symbols, expected);
+      let is_relevant = self.is_result_relevant(file, &result_symbols, expected, annotations);
       session.record_result_rank(is_relevant, rank + 1);
     }
 
     // Track context budget - calculate bytes returned
-    let response_str = serde_json::to_string(&response).unwrap_or_default();
+    let response_str = serde_json::to_string(&result).unwrap_or_default();
     let total_bytes = response_str.len();
 
     // Calculate useful bytes - content containing expected files/symbols
@@ -413,22 +415,13 @@ impl ScenarioRunner {
     let relevant_count = results
       .iter()
       .filter(|r| {
-        let file = r.get("file").and_then(|f| f.as_str()).unwrap_or("");
-        let result_symbols: Vec<&str> = r
-          .get("symbols")
-          .and_then(|s| s.as_array())
-          .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-          .unwrap_or_default();
-        self.is_result_relevant(file, &result_symbols, expected)
+        let file = r.file_path.as_deref().unwrap_or("");
+        let result_symbols: Vec<&str> = r.symbols.iter().map(|s| s.as_str()).collect();
+        self.is_result_relevant(file, &result_symbols, expected, annotations)
       })
       .count();
 
-    session.record_step_relevance(
-      found_expected_file,
-      found_expected_symbol,
-      relevant_count,
-      results.len(),
-    );
+    session.record_step_relevance(found_expected_file, found_expected_symbol, relevant_count);
 
     // Track callers and callees for adaptive templates
     let mut all_callers = Vec::new();
@@ -436,73 +429,49 @@ impl ScenarioRunner {
 
     // Extract hints from expanded context and build call graph
     for r in results {
-      let id = r.get("id").and_then(|id| id.as_str()).unwrap_or("");
-
       // Get the main symbols of this result for call graph
-      let source_symbols: Vec<&str> = r
-        .get("symbols")
-        .and_then(|s| s.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
+      let source_symbols: Vec<&str> = r.symbols.iter().map(|s| s.as_str()).collect();
 
       // Record symbol discovery times
       for symbol in &source_symbols {
         session.record_symbol_discovery(symbol);
       }
 
-      if let Some(context) = r.get("context") {
+      if let Some(context) = &r.context {
         // Record caller hints and build call graph
-        if let Some(callers) = context.get("callers").and_then(|c| c.as_array()) {
-          for caller in callers {
-            if let Some(target) = caller.get("file").and_then(|f| f.as_str()) {
-              session.record_hint(id, HintType::Caller, target);
-            }
-            // Build call graph: caller_symbol -> source_symbol
-            if let Some(caller_symbols) = caller.get("symbols").and_then(|s| s.as_array()) {
-              for caller_sym in caller_symbols.iter().filter_map(|v| v.as_str()) {
-                all_callers.push(caller_sym.to_string());
-                for source_sym in &source_symbols {
-                  session.record_call_relation(caller_sym, source_sym);
-                }
-              }
+        for caller in &context.callers {
+          session.record_hint(&caller.file);
+          // Build call graph: caller_symbol -> source_symbol
+          for caller_sym in &caller.symbols {
+            all_callers.push(caller_sym.clone());
+            for source_sym in &source_symbols {
+              session.record_call_relation(caller_sym, source_sym);
             }
           }
         }
         // Record callee hints and build call graph
-        if let Some(callees) = context.get("callees").and_then(|c| c.as_array()) {
-          for callee in callees {
-            if let Some(target) = callee.get("file").and_then(|f| f.as_str()) {
-              session.record_hint(id, HintType::Callee, target);
-            }
-            // Build call graph: source_symbol -> callee_symbol
-            if let Some(callee_symbols) = callee.get("symbols").and_then(|s| s.as_array()) {
-              for callee_sym in callee_symbols.iter().filter_map(|v| v.as_str()) {
-                all_callees.push(callee_sym.to_string());
-                for source_sym in &source_symbols {
-                  session.record_call_relation(source_sym, callee_sym);
-                }
-              }
+        for callee in &context.callees {
+          session.record_hint(&callee.file);
+          // Build call graph: source_symbol -> callee_symbol
+          for callee_sym in &callee.symbols {
+            all_callees.push(callee_sym.clone());
+            for source_sym in &source_symbols {
+              session.record_call_relation(source_sym, callee_sym);
             }
           }
         }
         // Record sibling hints
-        if let Some(siblings) = context.get("siblings").and_then(|c| c.as_array()) {
-          for sibling in siblings {
-            if let Some(target) = sibling.get("file").and_then(|f| f.as_str()) {
-              session.record_hint(id, HintType::Sibling, target);
-            }
+        for sibling in &context.siblings {
+          if let Some(file) = &sibling.file {
+            session.record_hint(file);
           }
         }
       }
     }
 
     // Extract and record suggestions
-    if let Some(suggestions) = result.get("suggestions").and_then(|s| s.as_array()) {
-      let suggestion_strs: Vec<String> = suggestions
-        .iter()
-        .filter_map(|s| s.as_str().map(String::from))
-        .collect();
-      session.record_suggestions(&suggestion_strs);
+    if let Some(suggestions) = &result.suggestions {
+      session.record_suggestions(suggestions);
     }
 
     // Record in session
@@ -518,8 +487,19 @@ impl ScenarioRunner {
       }
     }
 
-    // Calculate noise ratio for this step
-    let noise_count = session.count_noise_results(&result_ids);
+    // Calculate noise ratio for this step using comprehensive noise detection
+    // Check each result for noise based on file, symbols, and content
+    let noise_count: usize = results
+      .iter()
+      .filter(|r| {
+        let file = r.file_path.as_deref();
+        // Get first symbol if available (main symbol for the chunk)
+        let symbol = r.symbols.first().map(|s| s.as_str());
+        // Use response content to check for noise patterns
+        let content_str = serde_json::to_string(r).unwrap_or_default();
+        session.is_noise_result(file, symbol, Some(&content_str))
+      })
+      .count();
     let noise_ratio = if results.is_empty() {
       0.0
     } else {
@@ -553,8 +533,9 @@ impl ScenarioRunner {
     session: &mut ExplorationSession,
     expected: &Expected,
     previous_results: &mut PreviousStepResults,
+    annotations: Option<&Annotations>,
   ) -> Result<StepResult> {
-    let result = self.execute_step(step, index, session, expected).await?;
+    let result = self.execute_step(step, index, session, expected, annotations).await?;
 
     // Update previous_results for next step's template resolution
     previous_results.ids = result.result_ids.clone();
@@ -567,7 +548,14 @@ impl ScenarioRunner {
   }
 
   /// Check if a result is relevant to the expected values.
-  fn is_result_relevant(&self, file: &str, symbols: &[&str], expected: &Expected) -> bool {
+  /// Also checks against annotations for critical files/symbols if available.
+  fn is_result_relevant(
+    &self,
+    file: &str,
+    symbols: &[&str],
+    expected: &Expected,
+    annotations: Option<&Annotations>,
+  ) -> bool {
     // Check if file matches expected files
     if self.file_matches_expected(file, &expected.must_find_files) {
       return true;
@@ -577,6 +565,21 @@ impl ScenarioRunner {
     for symbol in symbols {
       if expected.must_find_symbols.contains(&symbol.to_string()) {
         return true;
+      }
+    }
+
+    // Also check against annotations if available
+    if let Some(annotations) = annotations {
+      // Check if file is critical according to annotations
+      if annotations.is_critical_file(file) {
+        return true;
+      }
+
+      // Check if any symbol is critical according to annotations
+      for symbol in symbols {
+        if annotations.is_critical_symbol(symbol) {
+          return true;
+        }
       }
     }
 
@@ -606,106 +609,101 @@ impl ScenarioRunner {
     let files_before = session.discovered_files().len();
     let symbols_before = session.discovered_symbols().len();
 
-    let request: Request<ContextParams> = Request {
-      id: Some(1),
-      method: Method::Context,
-      params: ContextParams {
+    let items: Vec<ContextItem> = self
+      .client
+      .call(ContextParams {
         id: Some(id.to_string()),
         ids: None,
         depth: Some(5),
-        cwd: Some(self.project_path.clone()),
-        format: None,
-      },
-    };
-
-    let response = self.send_typed_request(&request).await?;
+      })
+      .await?;
     let latency = start.elapsed();
 
-    // Check for success
-    if response.get("error").is_some() {
-      return Err(BenchmarkError::Execution(format!("Context request failed for {}", id)));
-    }
-
     // Extract new files/symbols from context response
-    let result = response.get("result");
-    if let Some(ctx) = result {
-      // Extract files from callers/callees
-      let mut new_files = Vec::new();
-      let mut new_symbols = Vec::new();
+    let mut new_files = Vec::new();
+    let mut new_symbols = Vec::new();
 
-      for section in ["callers", "callees", "siblings"] {
-        if let Some(items) = ctx.get(section).and_then(|s| s.as_array()) {
-          for item in items {
-            if let Some(file) = item.get("file").and_then(|f| f.as_str())
-              && !session.discovered_files().contains(file)
-            {
-              new_files.push(file.to_string());
-            }
-            if let Some(syms) = item.get("symbols").and_then(|s| s.as_array()) {
-              for sym in syms {
-                if let Some(s) = sym.as_str()
-                  && !session.discovered_symbols().contains(s)
-                {
-                  new_symbols.push(s.to_string());
-                }
-              }
+    for ctx in &items {
+      // Extract from callers
+      if let Some(callers) = &ctx.callers {
+        for caller in callers {
+          if !session.discovered_files().contains(&caller.file_path) {
+            new_files.push(caller.file_path.clone());
+          }
+          for sym in &caller.symbols {
+            if !session.discovered_symbols().contains(sym) {
+              new_symbols.push(sym.clone());
             }
           }
         }
       }
-
-      // Mark hints as followed (context call = following a hint)
-      session.mark_hint_followed(id);
-
-      // Record context call latency
-      session.record_context_call(id, latency);
-
-      // Record context value (how many new things it revealed)
-      let new_file_count = session.discovered_files().len() - files_before + new_files.len();
-      let new_symbol_count = session.discovered_symbols().len() - symbols_before + new_symbols.len();
-      session.record_context_value(id, new_file_count, new_symbol_count);
-    } else {
-      session.record_context_call(id, latency);
-      session.record_context_value(id, 0, 0);
+      // Extract from callees
+      if let Some(callees) = &ctx.callees {
+        for callee in callees {
+          if !session.discovered_files().contains(&callee.file_path) {
+            new_files.push(callee.file_path.clone());
+          }
+          for sym in &callee.symbols {
+            if !session.discovered_symbols().contains(sym) {
+              new_symbols.push(sym.clone());
+            }
+          }
+        }
+      }
     }
+
+    // Mark hints as followed (context call = following a hint)
+    session.mark_hint_followed(id);
+
+    // Record context call latency
+    session.record_context_call(id, latency);
+
+    // Record context value (how many new things it revealed)
+    let new_file_count = session.discovered_files().len() - files_before + new_files.len();
+    let new_symbol_count = session.discovered_symbols().len() - symbols_before + new_symbols.len();
+    session.record_context_value(id, new_file_count, new_symbol_count);
 
     Ok(())
   }
 
-  /// Send a typed JSON-RPC request to the daemon.
-  /// Returns the raw response for flexible parsing of extended result fields.
-  async fn send_typed_request<P: Serialize>(&self, request: &Request<P>) -> Result<serde_json::Value> {
-    let mut stream = UnixStream::connect(&self.socket_path)
-      .await
-      .map_err(|e| BenchmarkError::Execution(format!("Failed to connect to daemon: {}", e)))?;
-
-    // Write request
-    let request_str = serde_json::to_string(request)?;
-    stream.write_all(request_str.as_bytes()).await?;
-    stream.write_all(b"\n").await?;
-    stream.flush().await?;
-
-    // Read response
-    let mut reader = BufReader::new(stream);
-    let mut response_str = String::new();
-    reader.read_line(&mut response_str).await?;
-
-    let response: serde_json::Value = serde_json::from_str(&response_str)?;
-    Ok(response)
-  }
-
   /// Check if the daemon is running.
   pub async fn check_daemon(&self) -> bool {
-    let request: Request<HealthCheckParams> = Request {
-      id: Some(1),
-      method: Method::HealthCheck,
-      params: HealthCheckParams,
-    };
-
-    match self.send_typed_request(&request).await {
-      Ok(response) => response.get("error").is_none(),
+    match self.client.call(HealthCheckParams).await {
+      Ok(result) => result.healthy,
       Err(_) => false,
     }
+  }
+
+  /// Export discovered annotations from a scenario run.
+  /// This can be used to generate initial annotations for new scenarios.
+  pub async fn export_annotations(
+    &self,
+    scenario_id: &str,
+    discovered_files: &[String],
+    discovered_symbols: &[String],
+    output_path: &std::path::Path,
+  ) -> Result<()> {
+    use crate::ground_truth::Annotations;
+
+    let annotations = Annotations {
+      scenario_id: scenario_id.to_string(),
+      critical_files: discovered_files.to_vec(),
+      critical_symbols: discovered_symbols.to_vec(),
+      key_locations: Vec::new(),
+      exploration_paths: Vec::new(),
+      notes: vec![format!("Auto-generated from scenario run at {}", chrono::Utc::now())],
+    };
+
+    annotations.save(output_path).await?;
+    info!("Exported annotations to: {}", output_path.display());
+
+    Ok(())
+  }
+
+  /// Build a call graph from a set of discovered call relationships.
+  /// Useful for analyzing navigation patterns from scenario results.
+  pub fn build_call_graph_from_results(&self, calls: Vec<(String, String)>) -> crate::ground_truth::CallGraph {
+    crate::ground_truth::CallGraph::from_calls(calls)
   }
 }
 
@@ -718,36 +716,4 @@ pub async fn run_scenarios_parallel(runner: &ScenarioRunner, scenarios: &[Scenar
   let results = join_all(futures).await;
 
   results.into_iter().filter_map(|r| r.ok()).collect()
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn test_default_socket_path() {
-    let path = ScenarioRunner::default_socket_path();
-    assert!(path.ends_with("ccengram.sock"));
-  }
-
-  #[test]
-  fn test_step_result_serialization() {
-    let result = StepResult {
-      step_index: 0,
-      query: "test query".to_string(),
-      result_count: 5,
-      noise_ratio: 0.2,
-      result_ids: vec!["id1".to_string()],
-      files_found: vec!["file.rs".to_string()],
-      symbols_found: vec!["func".to_string()],
-      callers: vec!["caller_func".to_string()],
-      callees: vec!["callee_func".to_string()],
-      latency_ms: 100,
-      passed: true,
-    };
-
-    let json = serde_json::to_string(&result).unwrap();
-    assert!(json.contains("test query"));
-    assert!(json.contains("result_count"));
-  }
 }

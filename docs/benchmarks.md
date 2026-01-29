@@ -35,6 +35,21 @@ cargo run -p benchmark -- run --scenarios "zed*" --output ./results
 cargo run -p benchmark -- compare baseline.json current.json --threshold 10
 ```
 
+### Performance Benchmarks
+
+For indexing and watcher performance testing:
+
+```bash
+# Incremental indexing performance
+cargo run -p benchmark -- incremental-perf --repos zed
+
+# File watcher performance
+cargo run -p benchmark -- watcher-perf --repo zed
+
+# Large file handling
+cargo run -p benchmark -- large-file-perf --repo zed
+```
+
 The flow is: **download → index → run**. Each step is explicit:
 - `download` downloads repos to cache
 - `index` indexes code and docs via daemon (with streaming progress)
@@ -156,6 +171,82 @@ Options:
   -i, --iterations <N>    Iterations per repo [default: 3]
       --cold              Clear index between iterations
 ```
+
+### `incremental-perf` - Incremental Indexing Performance
+
+Measures how quickly the system detects and reindexes modified files.
+
+```bash
+cargo run -p benchmark -- incremental-perf [OPTIONS]
+
+Options:
+  -r, --repos <LIST>        Repos to benchmark [default: all]
+  -f, --files-per-iter <N>  Files to modify per iteration [default: 10]
+  -i, --iterations <N>      Iterations per repo [default: 3]
+  -o, --output <DIR>        Output directory [default: ./benchmark-results]
+      --cache-dir <DIR>     Cache directory for repositories
+```
+
+**What it measures:**
+- Time per changed file (target: < 200ms)
+- Detection accuracy (true positives, false positives, false negatives)
+- Large file handling (1MB, 5MB, 10MB, 50MB files)
+
+**Output:** `incremental.json` and `incremental.md`
+
+### `watcher-perf` - File Watcher Performance
+
+Comprehensive benchmarks for the file watcher subsystem.
+
+```bash
+cargo run -p benchmark -- watcher-perf [OPTIONS]
+
+Options:
+  -r, --repo <NAME>         Repository to test [default: zed]
+  -i, --iterations <N>      Iterations per test [default: 5]
+  -o, --output <DIR>        Output directory [default: ./benchmark-results]
+      --cache-dir <DIR>     Cache directory for repositories
+      --test <TYPE>         Run specific test only (see below)
+```
+
+**Test types** (use with `--test`):
+| Type | Description |
+|------|-------------|
+| `lifecycle` | Watcher startup/shutdown latency, resource leak detection |
+| `single` | End-to-end latency from file save to searchable |
+| `batch` | Debounce accuracy (50 rapid file changes) |
+| `operations` | Create/modify/delete/rename handling |
+| `gitignore` | Respect rate for ignored vs tracked files |
+
+**Examples:**
+```bash
+# Run all watcher tests
+cargo run -p benchmark -- watcher-perf --repo zed --iterations 5
+
+# Run only end-to-end latency test
+cargo run -p benchmark -- watcher-perf --repo zed --test single
+
+# Run only gitignore respect test
+cargo run -p benchmark -- watcher-perf --repo zed --test gitignore
+```
+
+**Output:** `watcher.json` and `watcher.md`
+
+### `large-file-perf` - Large File Handling
+
+Tests indexing behavior with files of various sizes.
+
+```bash
+cargo run -p benchmark -- large-file-perf [OPTIONS]
+
+Options:
+  -o, --output <DIR>        Output directory [default: ./benchmark-results]
+      --sizes-mb <LIST>     File sizes in MB [default: 1,5,10,50]
+  -r, --repo <NAME>         Repository for testing [default: zed]
+      --cache-dir <DIR>     Cache directory for repositories
+```
+
+**Output:** `large_file.json`
 
 ## Creating Scenarios
 
@@ -380,6 +471,24 @@ example_indicators = ["SelectAll", "Copy"]
 | Dead End Ratio | <= 20% | Steps with no discoveries |
 | File Diversity | >= 60% | Unique files in top-5 |
 
+### Incremental Indexing
+
+| Metric | Target | Description |
+|--------|--------|-------------|
+| Time per file | < 200ms | Reindex latency for changed files |
+| Detection accuracy | >= 90% | Changed files correctly detected |
+| False positive rate | < 10% | Unchanged files incorrectly reprocessed |
+
+### File Watcher
+
+| Metric | Target | Description |
+|--------|--------|-------------|
+| E2E latency | < 200ms | Time from file save to searchable |
+| p95 E2E latency | < 500ms | 95th percentile latency |
+| Debounce accuracy | 100% | Rapid changes coalesced correctly |
+| Gitignore respect | 100% | Ignored files not indexed |
+| Resource leaks | 0 | No file descriptor leaks |
+
 ## Diagnostic Reports
 
 When metrics fail, the JSON report includes diagnostics explaining why:
@@ -444,6 +553,16 @@ Benchmarks create data in three locations:
 | `~/.cache/ccengram-bench/repos/` | Downloaded repos | ~2GB | `benchmark clean --all` |
 | `~/.local/share/ccengram/projects/` | CCEngram indexes | ~500MB | `ccengram projects clean-all` |
 | `./benchmark-results/` | Reports | ~1MB | `rm -rf ./benchmark-results` |
+
+### Output Files
+
+| Command | JSON Output | Markdown Output |
+|---------|-------------|-----------------|
+| `run` | `results.json` | `report.md` |
+| `index-perf` | `indexing.json` | `indexing.md` |
+| `incremental-perf` | `incremental.json` | `incremental.md` |
+| `watcher-perf` | `watcher.json` | `watcher.md` |
+| `large-file-perf` | `large_file.json` | - |
 
 **Full cleanup:**
 ```bash

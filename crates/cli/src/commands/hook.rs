@@ -1,62 +1,54 @@
 //! Hook command for handling hook events
 
+use std::io::Read;
+
 use anyhow::{Context, Result};
-use cli::to_daemon_request;
-use daemon::{Client, HookEvent, HookHandler, ProjectRegistry, default_socket_path, is_running};
-use ipc::{HookParams, Method, Request};
-use std::sync::Arc;
+use ccengram::ipc::{Client, hook::HookParams};
 use tracing::error;
+
+/// Read hook input from stdin (JSON parameters from Claude Code)
+fn read_hook_input() -> Result<serde_json::Value> {
+  let mut input = String::new();
+  std::io::stdin().read_to_string(&mut input)?;
+
+  if input.trim().is_empty() {
+    return Ok(serde_json::Value::Object(serde_json::Map::new()));
+  }
+
+  serde_json::from_str(&input).context("Invalid JSON in hook input")
+}
 
 /// Handle a hook event
 pub async fn cmd_hook(name: &str) -> Result<()> {
-  // Parse hook event name
-  let event: HookEvent = name.parse().map_err(|e| anyhow::anyhow!("Unknown hook: {}", e))?;
-
   // Read input from stdin
-  let input = daemon::hooks::read_hook_input().context("Failed to read hook input")?;
+  let input = read_hook_input().context("Failed to read hook input")?;
 
   // Try to connect to running daemon first
-  let socket_path = default_socket_path();
-  if is_running(&socket_path) {
-    let mut client = Client::connect_to(&socket_path)
-      .await
-      .context("Failed to connect to daemon")?;
+  if ccengram::dirs::is_daemon_running() {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd_str = cwd.to_string_lossy().to_string();
+    let client = Client::connect(cwd).await.context("Failed to connect to daemon")?;
 
     let params = HookParams {
       hook_name: name.to_string(),
       session_id: None,
-      cwd: None,
+      cwd: Some(cwd_str),
       data: input,
     };
 
-    let request = Request {
-      id: Some(1),
-      method: Method::Hook,
-      params,
-    };
-
-    let response = client
-      .request(to_daemon_request(request))
-      .await
-      .context("Failed to send hook to daemon")?;
-
-    if let Some(err) = response.error {
-      error!("Hook error: {}", err.message);
-    }
-  } else {
-    // Handle hook directly (stateless mode)
-    let registry = Arc::new(ProjectRegistry::new());
-    let handler = HookHandler::new(registry);
-
-    match handler.handle(event, input).await {
+    match client.call(params).await {
       Ok(result) => {
+        // Output the hook result
         println!("{}", serde_json::to_string(&result)?);
       }
       Err(e) => {
         error!("Hook error: {}", e);
-        std::process::exit(1);
       }
     }
+  } else {
+    // Daemon not running - can't process hook without daemon
+    error!("Daemon is not running. Start with: ccengram daemon");
+    std::process::exit(1);
   }
 
   Ok(())

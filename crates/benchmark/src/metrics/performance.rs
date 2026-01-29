@@ -1,8 +1,213 @@
 //! Performance metrics collection.
 
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 use sysinfo::{Pid, System};
+
+// ============================================================================
+// Incremental Indexing Metrics
+// ============================================================================
+
+/// Result of an incremental indexing benchmark run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncrementalBenchResult {
+  /// Repository name
+  pub repo: String,
+  /// Number of files modified
+  pub files_modified: usize,
+  /// Time per file in milliseconds
+  pub time_per_file_ms: f64,
+  /// Files correctly detected as changed
+  pub true_positives: usize,
+  /// Files incorrectly detected as changed
+  pub false_positives: usize,
+  /// Changed files missed
+  pub false_negatives: usize,
+  /// Total reindexing time in milliseconds
+  pub total_time_ms: u64,
+  /// Peak memory usage during reindex
+  pub peak_memory_bytes: u64,
+}
+
+/// Result of large file handling benchmark.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LargeFileBenchResult {
+  /// File size in bytes
+  pub file_size_bytes: u64,
+  /// Whether the file was indexed
+  pub indexed: bool,
+  /// Number of chunks created (if indexed)
+  pub chunks_created: Option<usize>,
+  /// Processing time in milliseconds
+  pub processing_time_ms: u64,
+  /// Peak memory usage
+  pub peak_memory_bytes: u64,
+  /// Reason for skipping (if not indexed)
+  pub skip_reason: Option<String>,
+}
+
+/// Full incremental indexing benchmark report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncrementalReport {
+  /// Timestamp of the benchmark run
+  pub timestamp: String,
+  /// CCEngram version
+  pub version: String,
+  /// Incremental benchmark results
+  pub results: Vec<IncrementalBenchResult>,
+  /// Large file benchmark results
+  pub large_file_results: Vec<LargeFileBenchResult>,
+  /// Summary statistics
+  pub summary: IncrementalSummary,
+}
+
+/// Summary statistics for incremental benchmarks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IncrementalSummary {
+  /// Average time per file across all tests
+  pub avg_time_per_file_ms: f64,
+  /// Maximum time per file
+  pub max_time_per_file_ms: f64,
+  /// Detection accuracy (true positives / (TP + FN))
+  pub detection_accuracy: f64,
+  /// False positive rate
+  pub false_positive_rate: f64,
+  /// Largest file successfully indexed
+  pub max_indexed_file_bytes: u64,
+  /// Whether all tests passed thresholds
+  pub passes: bool,
+}
+
+// ============================================================================
+// File Watcher Metrics
+// ============================================================================
+
+/// Result of watcher lifecycle benchmark.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatcherLifecycleResult {
+  /// Startup latency in milliseconds
+  pub startup_latency_ms: u64,
+  /// Shutdown latency in milliseconds
+  pub shutdown_latency_ms: u64,
+  /// File descriptors before test (if available)
+  pub fd_before: Option<usize>,
+  /// File descriptors after test (if available)
+  pub fd_after: Option<usize>,
+  /// Whether a resource leak was detected
+  pub leak_detected: bool,
+}
+
+/// Result of single file change benchmark.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SingleChangeResult {
+  /// Time to detect the change
+  pub detection_latency_ms: u64,
+  /// Time to complete indexing
+  pub indexing_latency_ms: u64,
+  /// Total end-to-end latency (save to searchable)
+  pub end_to_end_latency_ms: u64,
+  /// Whether the file became searchable
+  pub searchable: bool,
+  /// Type of operation (create, modify, delete, rename)
+  pub operation: String,
+}
+
+/// Result of batch file change benchmark.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchChangeResult {
+  /// Number of files modified
+  pub files_modified: usize,
+  /// Number of reindex triggers observed
+  pub reindex_triggers: usize,
+  /// Whether debouncing worked correctly (1 trigger for batch)
+  pub debounce_correct: bool,
+  /// Total processing time for the batch
+  pub total_processing_time_ms: u64,
+}
+
+/// Result of a single file operation test.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationResult {
+  /// Operation type
+  pub operation: String,
+  /// Detection latency
+  pub detection_latency_ms: u64,
+  /// Whether it was handled correctly
+  pub success: bool,
+  /// Optional error message
+  pub error: Option<String>,
+}
+
+/// Result of file operations benchmark (create/modify/delete/rename).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileOperationsResult {
+  /// Create operation result
+  pub create: OperationResult,
+  /// Modify operation result
+  pub modify: OperationResult,
+  /// Delete operation result
+  pub delete: OperationResult,
+  /// Rename operation result
+  pub rename: OperationResult,
+}
+
+/// Result of gitignore respect benchmark.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitignoreResult {
+  /// Number of ignored files modified
+  pub ignored_files_modified: usize,
+  /// Triggers observed for ignored files (should be 0)
+  pub false_positive_triggers: usize,
+  /// Number of tracked files modified
+  pub tracked_files_modified: usize,
+  /// Tracked files correctly detected
+  pub tracked_files_detected: usize,
+  /// Gitignore respect rate (1.0 = perfect)
+  pub respect_rate: f64,
+}
+
+/// Full watcher benchmark report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatcherReport {
+  /// Timestamp of the benchmark run
+  pub timestamp: String,
+  /// CCEngram version
+  pub version: String,
+  /// Repository tested
+  pub repo: String,
+  /// Lifecycle test results
+  pub lifecycle: Vec<WatcherLifecycleResult>,
+  /// Single change test results
+  pub single_change: Vec<SingleChangeResult>,
+  /// Batch change test results
+  pub batch_change: Vec<BatchChangeResult>,
+  /// File operations test results
+  pub file_operations: Vec<FileOperationsResult>,
+  /// Gitignore test results
+  pub gitignore: Vec<GitignoreResult>,
+  /// Summary statistics
+  pub summary: WatcherSummary,
+}
+
+/// Summary statistics for watcher benchmarks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WatcherSummary {
+  /// Average end-to-end latency
+  pub avg_e2e_latency_ms: f64,
+  /// p95 end-to-end latency
+  pub p95_e2e_latency_ms: u64,
+  /// Maximum end-to-end latency
+  pub max_e2e_latency_ms: u64,
+  /// Debounce accuracy (correct batches / total batches)
+  pub debounce_accuracy: f64,
+  /// Gitignore respect rate
+  pub gitignore_respect_rate: f64,
+  /// Resource leak count
+  pub resource_leaks: usize,
+  /// Whether all tests passed thresholds
+  pub passes: bool,
+}
 
 /// Latency statistics with percentiles.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -89,19 +294,6 @@ pub struct IndexingMetrics {
   pub embeddings_per_sec: f64,
 }
 
-/// Metrics for search operations.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SearchMetrics {
-  /// Latency statistics
-  pub latency: LatencyStats,
-  /// Queries per second throughput
-  pub qps: f64,
-  /// Average result count per query
-  pub avg_result_count: f64,
-  /// Total queries executed
-  pub total_queries: usize,
-}
-
 /// Metrics for a single exploration step.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StepMetrics {
@@ -185,11 +377,6 @@ impl ResourceMonitor {
     let sum: f32 = self.snapshots.iter().map(|s| s.cpu_percent).sum();
     sum / self.snapshots.len() as f32
   }
-
-  /// Clear all snapshots.
-  pub fn clear(&mut self) {
-    self.snapshots.clear();
-  }
 }
 
 impl Default for ResourceMonitor {
@@ -218,21 +405,6 @@ impl LatencyTracker {
   /// Get statistics from recorded durations.
   pub fn stats(&self) -> LatencyStats {
     LatencyStats::from_durations(&self.durations)
-  }
-
-  /// Get the number of recorded samples.
-  pub fn count(&self) -> usize {
-    self.durations.len()
-  }
-
-  /// Get total time in milliseconds.
-  pub fn total_ms(&self) -> u64 {
-    self.durations.iter().map(|d| d.as_millis() as u64).sum()
-  }
-
-  /// Clear all recorded durations.
-  pub fn clear(&mut self) {
-    self.durations.clear();
   }
 }
 
@@ -265,27 +437,9 @@ mod tests {
   }
 
   #[test]
-  fn test_latency_tracker() {
-    let mut tracker = LatencyTracker::new();
-    tracker.record(Duration::from_millis(100));
-    tracker.record(Duration::from_millis(200));
-
-    assert_eq!(tracker.count(), 2);
-    let stats = tracker.stats();
-    assert_eq!(stats.count, 2);
-  }
-
-  #[test]
   fn test_percentile() {
     let values = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     assert_eq!(percentile(&values, 50), 5);
     assert_eq!(percentile(&values, 90), 9);
-  }
-
-  #[test]
-  fn test_resource_monitor() {
-    let mut monitor = ResourceMonitor::new();
-    let snapshot = monitor.snapshot();
-    assert!(snapshot.timestamp_ms > 0);
   }
 }

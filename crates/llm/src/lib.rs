@@ -1,109 +1,122 @@
-//! LLM inference for CCEngram via Claude CLI
-//!
-//! This crate provides LLM inference capabilities by invoking the `claude` CLI
-//! in print mode with JSON output. It disables all hooks and plugins to avoid
-//! recursive calls when invoked from within CCEngram hooks.
+use serde::{Deserialize, Serialize};
 
 pub mod extraction;
-pub mod prompts;
+mod prompts;
+mod provider;
 
-pub use extraction::{classify_signal, detect_superseding, extract_high_priority, extract_memories};
-pub use prompts::ExtractionContext;
+#[cfg(feature = "claude")]
+mod claude;
 
-use serde::{Deserialize, Serialize};
-use std::process::Stdio;
-use std::time::{Duration, Instant};
-use thiserror::Error;
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
-use tokio::time::timeout;
-use tracing::{debug, error, trace, warn};
+// Re-export provider trait and types
+// Re-export prompts and context types
+pub use prompts::{ExtractionContext, ToolUse};
+pub use provider::{LlmProvider, Result};
 
-/// Errors that can occur during LLM inference
-#[derive(Debug, Error)]
-pub enum LlmError {
-  #[error("Claude executable not found. Ensure 'claude' is in your PATH.")]
-  ClaudeNotFound,
-
-  #[error("Failed to spawn claude process: {0}")]
-  SpawnFailed(#[from] std::io::Error),
-
-  #[error("Claude process timed out after {0} seconds")]
-  Timeout(u64),
-
-  #[error("Claude process exited with non-zero status: {0}")]
-  ProcessFailed(i32),
-
-  #[error("Failed to parse JSON response: {0}")]
-  ParseError(#[from] serde_json::Error),
-
-  #[error("No assistant message in response")]
-  NoResponse,
-
-  #[error("Claude returned an error: {0}")]
-  ClaudeError(String),
+/// Semantic type for extracted memories
+///
+/// Used by both LLM extraction (with json-schema validation) and storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryType {
+  /// User's expressed preferences
+  Preference,
+  /// How code is organized/works
+  Codebase,
+  /// Architectural decisions with rationale
+  Decision,
+  /// Pitfalls to avoid
+  Gotcha,
+  /// Workflows/conventions to follow
+  Pattern,
+  /// Narrative of work completed
+  TurnSummary,
+  /// Record of completed task
+  TaskCompletion,
 }
 
-pub type Result<T> = std::result::Result<T, LlmError>;
-
-/// Model selection for inference
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Model {
-  /// Claude 3.5 Haiku - fastest, cheapest
-  #[default]
-  Haiku,
-  /// Claude Sonnet 4 - balanced
-  Sonnet,
-  /// Claude Opus 4 - most capable
-  Opus,
-}
-
-impl Model {
+impl MemoryType {
   pub fn as_str(&self) -> &'static str {
     match self {
-      Model::Haiku => "haiku",
-      Model::Sonnet => "sonnet",
-      Model::Opus => "opus",
+      MemoryType::Preference => "preference",
+      MemoryType::Codebase => "codebase",
+      MemoryType::Decision => "decision",
+      MemoryType::Gotcha => "gotcha",
+      MemoryType::Pattern => "pattern",
+      MemoryType::TurnSummary => "turn_summary",
+      MemoryType::TaskCompletion => "task_completion",
     }
   }
 }
 
+impl std::fmt::Display for MemoryType {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.as_str())
+  }
+}
+
+impl std::str::FromStr for MemoryType {
+  type Err = ();
+
+  fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    match s.to_lowercase().as_str() {
+      "preference" => Ok(MemoryType::Preference),
+      "codebase" => Ok(MemoryType::Codebase),
+      "decision" => Ok(MemoryType::Decision),
+      "gotcha" => Ok(MemoryType::Gotcha),
+      "pattern" => Ok(MemoryType::Pattern),
+      "turn_summary" | "turnsummary" => Ok(MemoryType::TurnSummary),
+      "task_completion" | "taskcompletion" => Ok(MemoryType::TaskCompletion),
+      _ => Err(()),
+    }
+  }
+}
+
+/// Create the default LLM provider based on available features
+///
+/// Returns the first available provider in priority order:
+/// 1. Claude CLI (if `claude` feature is enabled)
+///
+/// Returns an error if no provider is available.
+pub fn create_provider() -> Result<Box<dyn LlmProvider>> {
+  #[cfg(feature = "claude")]
+  {
+    let provider = claude::ClaudeProvider::new();
+    if provider.is_available() {
+      return Ok(Box::new(provider));
+    }
+    Err(LlmError::ClaudeNotFound)
+  }
+
+  #[cfg(not(feature = "claude"))]
+  {
+    Err(LlmError::NoProviderAvailable)
+  }
+}
+
 /// Request for LLM inference
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct InferenceRequest {
   /// The prompt to send
   pub prompt: String,
   /// Optional system prompt
   pub system_prompt: Option<String>,
   /// Model to use (default: Haiku)
-  pub model: Model,
+  pub model: String,
   /// Timeout in seconds (default: 60)
   pub timeout_secs: u64,
+  /// Optional JSON schema for structured output
+  pub json_schema: String,
 }
 
 impl InferenceRequest {
-  pub fn new(prompt: impl Into<String>) -> Self {
+  pub fn new(prompt: impl Into<String>, json_schema: String) -> Self {
     Self {
       prompt: prompt.into(),
       system_prompt: None,
-      model: Model::default(),
+      model: Default::default(),
       timeout_secs: 60,
+      json_schema,
     }
-  }
-
-  pub fn with_system_prompt(mut self, system: impl Into<String>) -> Self {
-    self.system_prompt = Some(system.into());
-    self
-  }
-
-  pub fn with_model(mut self, model: Model) -> Self {
-    self.model = model;
-    self
-  }
-
-  pub fn with_timeout(mut self, secs: u64) -> Self {
-    self.timeout_secs = secs;
-    self
   }
 }
 
@@ -122,348 +135,6 @@ pub struct InferenceResponse {
   pub duration_ms: u64,
 }
 
-// Internal types for parsing Claude CLI JSON output
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-#[serde(rename_all = "snake_case")]
-enum ClaudeMessage {
-  System {},
-  Assistant(AssistantMessage),
-  Result(ResultMessage),
-}
-
-#[derive(Debug, Deserialize)]
-struct AssistantMessage {
-  message: MessageContent,
-}
-
-#[derive(Debug, Deserialize)]
-struct MessageContent {
-  content: Vec<ContentBlock>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-#[serde(rename_all = "snake_case")]
-enum ContentBlock {
-  Text {
-    text: String,
-  },
-  #[serde(other)]
-  Other,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResultMessage {
-  #[serde(default)]
-  is_error: bool,
-  #[serde(default)]
-  duration_ms: u64,
-  #[serde(default)]
-  total_cost_usd: f64,
-  usage: Option<Usage>,
-  result: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Usage {
-  input_tokens: u32,
-  output_tokens: u32,
-}
-
-/// Find the claude executable in PATH
-fn find_claude() -> Result<String> {
-  let which_cmd = if cfg!(windows) { "where" } else { "which" };
-
-  let output = std::process::Command::new(which_cmd)
-    .arg("claude")
-    .output()
-    .map_err(|e| {
-      debug!(err = %e, "Failed to execute 'which claude'");
-      LlmError::ClaudeNotFound
-    })?;
-
-  if !output.status.success() {
-    debug!("Claude executable not found in PATH");
-    return Err(LlmError::ClaudeNotFound);
-  }
-
-  let path = String::from_utf8_lossy(&output.stdout)
-    .lines()
-    .next()
-    .map(|s| s.trim().to_string())
-    .ok_or(LlmError::ClaudeNotFound)?;
-
-  if path.is_empty() {
-    debug!("Claude path is empty");
-    return Err(LlmError::ClaudeNotFound);
-  }
-
-  trace!(claude_path = %path, "Found claude executable");
-  Ok(path)
-}
-
-/// Perform LLM inference using the Claude CLI
-///
-/// This function:
-/// 1. Spawns the `claude` CLI with `--print` mode
-/// 2. Disables all hooks/plugins to avoid recursion
-/// 3. Parses the JSON output
-/// 4. Returns the text response and usage stats
-pub async fn infer(request: InferenceRequest) -> Result<InferenceResponse> {
-  let start = Instant::now();
-  let claude_path = find_claude()?;
-
-  let full_prompt = if let Some(system) = &request.system_prompt {
-    format!("{}\n\n{}", system, request.prompt)
-  } else {
-    request.prompt.clone()
-  };
-
-  debug!(
-    model = %request.model.as_str(),
-    prompt_len = full_prompt.len(),
-    timeout_secs = request.timeout_secs,
-    has_system_prompt = request.system_prompt.is_some(),
-    "Starting inference request"
-  );
-
-  let mut cmd = Command::new(&claude_path);
-  cmd
-    .arg("-p") // Print mode
-    .arg("--model")
-    .arg(request.model.as_str())
-    .arg("--output-format")
-    .arg("json")
-    .arg("--no-session-persistence")
-    // Disable all hooks and plugins to avoid recursion
-    .arg("--settings")
-    .arg(r#"{"hooks":{}}"#)
-    .arg("--setting-sources")
-    .arg("")
-    // Disable all tools - we only want text generation
-    .arg("--tools")
-    .arg("")
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
-
-  trace!(
-    claude_path = %claude_path,
-    model = %request.model.as_str(),
-    "Spawning Claude CLI process"
-  );
-
-  let mut child = match cmd.spawn() {
-    Ok(child) => child,
-    Err(e) => {
-      error!(err = %e, "Failed to spawn Claude CLI process");
-      return Err(e.into());
-    }
-  };
-
-  // Write prompt to stdin
-  if let Some(mut stdin) = child.stdin.take() {
-    use tokio::io::AsyncWriteExt;
-    stdin.write_all(full_prompt.as_bytes()).await?;
-    drop(stdin); // Close stdin to signal end of input
-  }
-
-  let stdout = child
-    .stdout
-    .take()
-    .ok_or_else(|| std::io::Error::other("stdout not piped"))?;
-  let mut reader = tokio::io::BufReader::new(stdout);
-
-  // Read with timeout
-  let read_future = async {
-    let mut output = String::new();
-    reader.read_to_string(&mut output).await?;
-    Ok::<_, std::io::Error>(output)
-  };
-
-  let output = match timeout(Duration::from_secs(request.timeout_secs), read_future).await {
-    Ok(Ok(output)) => output,
-    Ok(Err(e)) => {
-      error!(err = %e, "Failed to read Claude CLI output");
-      return Err(e.into());
-    }
-    Err(_) => {
-      warn!(
-        timeout_secs = request.timeout_secs,
-        elapsed_ms = start.elapsed().as_millis() as u64,
-        model = %request.model.as_str(),
-        "Claude CLI timed out"
-      );
-      return Err(LlmError::Timeout(request.timeout_secs));
-    }
-  };
-
-  // Wait for process to complete
-  let status = child.wait().await?;
-  if !status.success() {
-    let exit_code = status.code().unwrap_or(-1);
-    error!(
-      exit_code = exit_code,
-      model = %request.model.as_str(),
-      "Claude CLI process failed"
-    );
-    return Err(LlmError::ProcessFailed(exit_code));
-  }
-
-  trace!(
-    output_len = output.len(),
-    elapsed_ms = start.elapsed().as_millis() as u64,
-    "Claude CLI process completed"
-  );
-
-  // Parse JSON array output
-  // The output is a JSON array: [{system}, {assistant}, {result}]
-  let messages: Vec<ClaudeMessage> = match serde_json::from_str::<Vec<ClaudeMessage>>(&output) {
-    Ok(msgs) => {
-      trace!(message_count = msgs.len(), "Parsed Claude CLI JSON response");
-      msgs
-    }
-    Err(e) => {
-      warn!(
-        err = %e,
-        output_len = output.len(),
-        output_preview = %output.chars().take(200).collect::<String>(),
-        "Failed to parse Claude CLI JSON response"
-      );
-      return Err(e.into());
-    }
-  };
-
-  let mut response_text = String::new();
-  let mut input_tokens = 0u32;
-  let mut output_tokens = 0u32;
-  let mut cost_usd = None;
-  let mut duration_ms = 0u64;
-
-  for msg in messages {
-    match msg {
-      ClaudeMessage::System {} => {
-        // Session init, nothing to extract
-      }
-      ClaudeMessage::Assistant(assistant) => {
-        for block in assistant.message.content {
-          if let ContentBlock::Text { text } = block {
-            response_text.push_str(&text);
-          }
-        }
-      }
-      ClaudeMessage::Result(result) => {
-        if result.is_error {
-          let error_msg = result.result.unwrap_or_else(|| "Unknown error".to_string());
-          error!(
-            error_msg = %error_msg,
-            model = %request.model.as_str(),
-            "Claude returned an error"
-          );
-          return Err(LlmError::ClaudeError(error_msg));
-        }
-
-        duration_ms = result.duration_ms;
-        cost_usd = Some(result.total_cost_usd);
-
-        if let Some(usage) = result.usage {
-          input_tokens = usage.input_tokens;
-          output_tokens = usage.output_tokens;
-        }
-      }
-    }
-  }
-
-  if response_text.is_empty() {
-    warn!(
-      model = %request.model.as_str(),
-      elapsed_ms = start.elapsed().as_millis() as u64,
-      "Claude returned no response text"
-    );
-    return Err(LlmError::NoResponse);
-  }
-
-  debug!(
-    response_len = response_text.len(),
-    input_tokens,
-    output_tokens,
-    duration_ms,
-    cost_usd = ?cost_usd,
-    elapsed_ms = start.elapsed().as_millis() as u64,
-    model = %request.model.as_str(),
-    "Inference completed successfully"
-  );
-
-  Ok(InferenceResponse {
-    text: response_text,
-    input_tokens,
-    output_tokens,
-    cost_usd,
-    duration_ms,
-  })
-}
-
-/// Parse JSON from an LLM response text
-///
-/// Handles responses that may be wrapped in markdown code blocks:
-/// - ```json ... ```
-/// - ``` ... ```
-/// - Raw JSON
-pub fn parse_json<T: for<'de> Deserialize<'de>>(text: &str) -> std::result::Result<T, serde_json::Error> {
-  // Try to extract JSON from markdown code blocks
-  let (json_str, extracted_from_block) = if let Some(captures) = extract_code_block(text) {
-    (captures, true)
-  } else {
-    (text.trim(), false)
-  };
-
-  trace!(
-    input_len = text.len(),
-    json_len = json_str.len(),
-    extracted_from_code_block = extracted_from_block,
-    "Parsing JSON from LLM response"
-  );
-
-  match serde_json::from_str(json_str) {
-    Ok(result) => {
-      debug!(
-        json_len = json_str.len(),
-        extracted_from_code_block = extracted_from_block,
-        "Successfully parsed JSON from LLM response"
-      );
-      Ok(result)
-    }
-    Err(e) => {
-      warn!(
-        err = %e,
-        json_len = json_str.len(),
-        json_preview = %json_str.chars().take(200).collect::<String>(),
-        "Failed to parse JSON from LLM response"
-      );
-      Err(e)
-    }
-  }
-}
-
-fn extract_code_block(text: &str) -> Option<&str> {
-  // Match ```json ... ``` or ``` ... ```
-  let text = text.trim();
-
-  if !text.starts_with("```") {
-    return None;
-  }
-
-  // Find the end of the first line (after ```)
-  let first_newline = text.find('\n')?;
-  let after_fence = &text[first_newline + 1..];
-
-  // Find closing fence
-  let end = after_fence.rfind("```")?;
-  Some(after_fence[..end].trim())
-}
-
 /// Structured extraction result for memory extraction
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractionResult {
@@ -473,9 +144,10 @@ pub struct ExtractionResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedMemory {
   pub content: String,
+  #[serde(default)]
   pub summary: Option<String>,
-  pub memory_type: String,
-  pub sector: Option<String>,
+  pub memory_type: MemoryType,
+  #[serde(default)]
   pub tags: Vec<String>,
   pub confidence: f32,
 }
@@ -523,66 +195,25 @@ pub struct SupersedingResult {
   pub confidence: f32,
 }
 
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn test_extract_code_block_json() {
-    let text = r#"```json
-{"key": "value"}
-```"#;
-    assert_eq!(extract_code_block(text), Some(r#"{"key": "value"}"#));
-  }
-
-  #[test]
-  fn test_extract_code_block_plain() {
-    let text = r#"```
-{"key": "value"}
-```"#;
-    assert_eq!(extract_code_block(text), Some(r#"{"key": "value"}"#));
-  }
-
-  #[test]
-  fn test_extract_code_block_none() {
-    let text = r#"{"key": "value"}"#;
-    assert_eq!(extract_code_block(text), None);
-  }
-
-  #[test]
-  fn test_parse_json_raw() {
-    let text = r#"{"key": "value"}"#;
-    let result: serde_json::Value = parse_json(text).unwrap();
-    assert_eq!(result["key"], "value");
-  }
-
-  #[test]
-  fn test_parse_json_code_block() {
-    let text = r#"```json
-{"key": "value"}
-```"#;
-    let result: serde_json::Value = parse_json(text).unwrap();
-    assert_eq!(result["key"], "value");
-  }
-
-  #[test]
-  fn test_signal_category_high_priority() {
-    assert!(SignalCategory::Correction.is_high_priority());
-    assert!(SignalCategory::Preference.is_high_priority());
-    assert!(!SignalCategory::Task.is_high_priority());
-    assert!(!SignalCategory::Question.is_high_priority());
-  }
-
-  // Integration test - requires `claude` CLI to be available
-  #[tokio::test]
-  #[ignore = "requires claude CLI"]
-  async fn test_infer_real() {
-    let request = InferenceRequest::new("Say 'hello' and nothing else")
-      .with_model(Model::Haiku)
-      .with_timeout(30);
-
-    let response = infer(request).await.unwrap();
-    assert!(response.text.to_lowercase().contains("hello"));
-    assert!(response.output_tokens > 0);
-  }
+/// Errors that can occur during LLM inference
+#[derive(Debug, thiserror::Error)]
+pub enum LlmError {
+  #[error("Failed to spawn process: {0}")]
+  SpawnFailed(#[from] std::io::Error),
+  #[error("process timed out after {0} seconds")]
+  Timeout(u64),
+  #[error("process exited with non-zero status: {0}")]
+  ProcessFailed(i32),
+  #[error("Failed to parse JSON response: {0}")]
+  ParseError(#[from] serde_json::Error),
+  #[error("No assistant message in response")]
+  NoResponse,
+  #[error("No LLM provider available. Enable a provider feature (e.g., 'claude').")]
+  NoProviderAvailable,
+  #[cfg(feature = "claude")]
+  #[error("Claude executable not found. Ensure 'claude' is in your PATH.")]
+  ClaudeNotFound,
+  #[cfg(feature = "claude")]
+  #[error("Claude returned an error: {0}")]
+  ClaudeError(String),
 }

@@ -6,11 +6,12 @@
 mod clone;
 mod registry;
 
+use std::path::PathBuf;
+
 pub use clone::RepoCache;
-pub use registry::{RepoConfig, RepoRegistry, TargetRepo};
+pub use registry::{RepoRegistry, TargetRepo};
 
 use crate::Result;
-use std::path::PathBuf;
 
 /// Get the default cache directory for benchmark repositories.
 pub fn default_cache_dir() -> PathBuf {

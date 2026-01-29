@@ -1,11 +1,10 @@
 //! Markdown report generation.
 
-use crate::Result;
-use crate::metrics::MetricTargets;
-use crate::scenarios::ScenarioResult;
+use std::{fmt::Write as _, path::Path};
+
 use chrono::Utc;
-use std::fmt::Write as _;
-use std::path::Path;
+
+use crate::{Result, metrics::MetricTargets, scenarios::ScenarioResult};
 
 /// Markdown report generator.
 pub struct MarkdownReport {
@@ -406,23 +405,21 @@ impl MarkdownReport {
   }
 
   /// Save to a markdown file.
-  pub fn save(&self, path: &Path) -> Result<()> {
-    std::fs::write(path, &self.content)?;
+  pub async fn save(&self, path: &Path) -> Result<()> {
+    tokio::fs::write(path, &self.content).await?;
     Ok(())
-  }
-
-  /// Get the markdown content.
-  pub fn content(&self) -> &str {
-    &self.content
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use super::*;
-  use crate::metrics::{AccuracyMetrics, LatencyStats, PerformanceMetrics};
-  use crate::scenarios::StepResult;
   use tempfile::TempDir;
+
+  use super::*;
+  use crate::{
+    metrics::{AccuracyMetrics, PerformanceMetrics, performance::LatencyStats},
+    scenarios::runner::StepResult,
+  };
 
   fn sample_result(id: &str, passed: bool) -> ScenarioResult {
     ScenarioResult {
@@ -493,43 +490,18 @@ mod tests {
     }
   }
 
-  #[test]
-  fn test_markdown_generation() {
-    let results = vec![sample_result("test-1", true), sample_result("test-2", false)];
-
-    let report = MarkdownReport::from_results(&results);
-    let content = report.content();
-
-    assert!(content.contains("# CCEngram Benchmark Report"));
-    assert!(content.contains("## Summary"));
-    assert!(content.contains("## Performance"));
-    assert!(content.contains("## Accuracy"));
-    assert!(content.contains("test-1"));
-    assert!(content.contains("✅"));
-    assert!(content.contains("❌"));
-  }
-
-  #[test]
-  fn test_save_markdown() {
+  #[tokio::test]
+  async fn test_save_markdown() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("report.md");
 
     let results = vec![sample_result("test-1", true)];
     let report = MarkdownReport::from_results(&results);
 
-    report.save(&path).unwrap();
+    report.save(&path).await.unwrap();
     assert!(path.exists());
 
-    let content = std::fs::read_to_string(&path).unwrap();
+    let content = tokio::fs::read_to_string(&path).await.unwrap();
     assert!(content.contains("# CCEngram Benchmark Report"));
-  }
-
-  #[test]
-  fn test_empty_results() {
-    let report = MarkdownReport::from_results(&[]);
-    let content = report.content();
-
-    assert!(content.contains("# CCEngram Benchmark Report"));
-    assert!(content.contains("0%"));
   }
 }

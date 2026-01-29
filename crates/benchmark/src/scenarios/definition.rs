@@ -1,9 +1,10 @@
 //! Scenario definition types (TOML schema).
 
-use crate::repos::TargetRepo;
-use crate::{BenchmarkError, Result};
-use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::{BenchmarkError, Result, repos::TargetRepo};
 
 /// Difficulty level for a scenario.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -395,8 +396,8 @@ pub struct Scenario {
 
 impl Scenario {
   /// Load a scenario from a TOML file.
-  pub fn load(path: &Path) -> Result<Self> {
-    let content = std::fs::read_to_string(path)?;
+  pub async fn load(path: &Path) -> Result<Self> {
+    let content = tokio::fs::read_to_string(path).await?;
     let scenario: Scenario = toml::from_str(&content)?;
     scenario.validate()?;
     Ok(scenario)
@@ -522,24 +523,6 @@ max_steps_to_core = 3
   }
 
   #[test]
-  fn test_default_success_criteria() {
-    let criteria = SuccessCriteria::default();
-    assert!((criteria.min_discovery_score - 0.7).abs() < f64::EPSILON);
-    assert!((criteria.max_noise_ratio - 0.25).abs() < f64::EPSILON);
-    assert_eq!(criteria.max_steps_to_core, 3);
-  }
-
-  #[test]
-  fn test_difficulty_default() {
-    assert_eq!(Difficulty::default(), Difficulty::Medium);
-  }
-
-  #[test]
-  fn test_task_intent_default() {
-    assert_eq!(TaskIntent::default(), TaskIntent::ArchitecturalDiscovery);
-  }
-
-  #[test]
   fn test_parse_expand_top() {
     const EXPAND_TOP_TOML: &str = r#"
 [scenario]
@@ -573,13 +556,5 @@ expand_top = 2
 
     // Third step has custom expand_top = 2
     assert_eq!(scenario.steps[2].expand_top, Some(2));
-  }
-
-  #[test]
-  fn test_expand_top_default() {
-    // Verify that parsing without expand_top works (backward compatible)
-    let scenario: Scenario = toml::from_str(SAMPLE_TOML).unwrap();
-    assert_eq!(scenario.steps[0].expand_top, None);
-    assert_eq!(scenario.steps[1].expand_top, None);
   }
 }

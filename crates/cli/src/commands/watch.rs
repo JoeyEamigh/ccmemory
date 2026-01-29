@@ -1,9 +1,7 @@
 //! Watch command for file change monitoring
 
 use anyhow::{Context, Result};
-use cli::to_daemon_request;
-use daemon::connect_or_start;
-use ipc::{Method, Request, WatchStatusParams, WatchStopParams};
+use ccengram::ipc::watch::{WatchStartParams, WatchStatusParams, WatchStopParams};
 use tracing::error;
 
 /// Watch for file changes
@@ -17,143 +15,74 @@ use tracing::error;
 pub async fn cmd_watch(
   stop: bool,
   status: bool,
-  no_startup_scan: bool,
-  startup_scan_mode: Option<String>,
-  startup_scan_sync: bool,
+  _no_startup_scan: bool,
+  _startup_scan_mode: Option<String>,
+  _startup_scan_sync: bool,
 ) -> Result<()> {
-  let mut client = connect_or_start().await.context("Failed to connect to daemon")?;
-
-  let cwd = std::env::current_dir()
-    .map(|p| p.to_string_lossy().to_string())
-    .unwrap_or_else(|_| ".".to_string());
+  let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+  let client = ccengram::Daemon::connect_or_start(cwd.clone())
+    .await
+    .context("Failed to connect to daemon")?;
 
   if stop {
-    let params = WatchStopParams { cwd: Some(cwd) };
-
-    let request = Request {
-      id: Some(1),
-      method: Method::WatchStop,
-      params,
-    };
-
-    let response = client
-      .request(to_daemon_request(request))
-      .await
-      .context("Failed to stop watcher")?;
-
-    if let Some(err) = response.error {
-      error!("Stop error: {}", err.message);
-      std::process::exit(1);
-    }
-
-    println!("File watcher stopped");
-    return Ok(());
-  }
-
-  if status {
-    let params = WatchStatusParams { cwd: Some(cwd) };
-
-    let request = Request {
-      id: Some(1),
-      method: Method::WatchStatus,
-      params,
-    };
-
-    let response = client
-      .request(to_daemon_request(request))
-      .await
-      .context("Failed to get watcher status")?;
-
-    if let Some(err) = response.error {
-      error!("Status error: {}", err.message);
-      std::process::exit(1);
-    }
-
-    if let Some(result) = response.result {
-      let is_running = result.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
-      let is_scanning = result.get("scanning").and_then(|v| v.as_bool()).unwrap_or(false);
-      println!("Watcher Status: {}", if is_running { "RUNNING" } else { "STOPPED" });
-
-      if is_running {
-        if is_scanning {
-          println!("Startup Scan: IN PROGRESS");
-          if let Some(progress) = result.get("scan_progress")
-            && let (Some(processed), Some(total)) = (
-              progress.get(0).and_then(|v| v.as_u64()),
-              progress.get(1).and_then(|v| v.as_u64()),
-            )
-          {
-            println!("  Progress: {}/{}", processed, total);
-          }
-        }
-        if let Some(paths) = result.get("watched_paths").and_then(|v| v.as_u64()) {
-          println!("Watched Paths: {}", paths);
-        }
-        if let Some(changes) = result.get("pending_changes").and_then(|v| v.as_u64()) {
-          println!("Pending Changes: {}", changes);
-        }
+    match client.call(WatchStopParams).await {
+      Ok(result) => {
+        println!("File watcher stopped: {}", result.status);
+      }
+      Err(e) => {
+        error!("Stop error: {}", e);
+        std::process::exit(1);
       }
     }
     return Ok(());
   }
 
-  // Extended params for watch_start with startup scan options
-  #[derive(serde::Serialize)]
-  struct ExtendedWatchStartParams {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cwd: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    startup_scan: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    startup_scan_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    startup_scan_blocking: Option<bool>,
-  }
+  if status {
+    match client.call(WatchStatusParams).await {
+      Ok(result) => {
+        println!("Watcher Status: {}", if result.running { "RUNNING" } else { "STOPPED" });
 
-  let params = ExtendedWatchStartParams {
-    cwd: Some(cwd.clone()),
-    startup_scan: if no_startup_scan { Some(false) } else { None },
-    startup_scan_mode: startup_scan_mode.clone(),
-    startup_scan_blocking: if startup_scan_sync { Some(true) } else { None },
-  };
+        if result.running {
+          if result.scanning {
+            println!("Startup Scan: IN PROGRESS");
+            if let Some(progress) = result.scan_progress {
+              println!("  Progress: {}/{}", progress[0], progress[1]);
+            }
+          }
+          println!("Pending Changes: {}", result.pending_changes);
+          println!("Project ID: {}", result.project_id);
+          if let Some(root) = &result.root {
+            println!("Root: {}", root);
+          }
+        }
+      }
+      Err(e) => {
+        error!("Status error: {}", e);
+        std::process::exit(1);
+      }
+    }
+    return Ok(());
+  }
 
   // Start watching
-  let request = Request {
-    id: Some(1),
-    method: Method::WatchStart,
-    params,
-  };
-
-  let response = client
-    .request(to_daemon_request(request))
-    .await
-    .context("Failed to start watcher")?;
-
-  if let Some(err) = response.error {
-    error!("Watch error: {}", err.message);
-    std::process::exit(1);
-  }
-
-  println!("File watcher started for {}", cwd);
-  if !no_startup_scan {
-    if startup_scan_sync {
-      println!("Startup scan completed (blocking mode)");
-    } else {
-      println!("Startup scan running in background");
+  match client.call(WatchStartParams).await {
+    Ok(result) => {
+      println!("File watcher started: {}", result.status);
+      println!("Path: {}", result.path);
+      println!("Project ID: {}", result.project_id);
+      println!("Press Ctrl+C to stop watching");
+    }
+    Err(e) => {
+      error!("Watch error: {}", e);
+      std::process::exit(1);
     }
   }
-  println!("Press Ctrl+C to stop watching");
 
   // Keep the CLI alive until interrupted
   tokio::signal::ctrl_c().await?;
 
   // Send stop command on exit
-  let stop_request = Request {
-    id: Some(1),
-    method: Method::WatchStop,
-    params: WatchStopParams { cwd: Some(cwd) },
-  };
-  let _ = client.request(to_daemon_request(stop_request)).await;
+  let _ = client.call(WatchStopParams).await;
 
   println!("\nWatcher stopped");
   Ok(())
