@@ -33,7 +33,10 @@ use super::{
   message::{ProjectActorMessage, ProjectActorPayload},
   project::{ProjectActor, ProjectActorConfig, ProjectActorError},
 };
-use crate::{domain::project::ProjectId, embedding::EmbeddingProvider};
+use crate::{
+  domain::{config::DaemonSettings, project::ProjectId},
+  embedding::EmbeddingProvider,
+};
 
 // ============================================================================
 // Error Types
@@ -91,6 +94,13 @@ pub struct ProjectRouter {
   /// and thread-safe, we just clone the Arc for each project.
   embedding: Arc<dyn EmbeddingProvider>,
 
+  /// Daemon-level settings (embedding batch size, hooks config, etc.)
+  ///
+  /// These settings are read from the global config at daemon startup and
+  /// passed to each ProjectActor. They should NOT be overridden by project
+  /// configs.
+  daemon_settings: Arc<DaemonSettings>,
+
   /// Parent cancellation token
   ///
   /// Each spawned ProjectActor gets a child token. When this token is
@@ -104,14 +114,21 @@ impl ProjectRouter {
   /// # Arguments
   ///
   /// * `data_dir` - Base directory for project databases
-  /// * `embedding` - Optional shared embedding provider
+  /// * `embedding` - Shared embedding provider
+  /// * `daemon_settings` - Daemon-level settings from global config
   /// * `cancel` - Parent cancellation token for coordinated shutdown
-  pub fn new(data_dir: PathBuf, embedding: Arc<dyn EmbeddingProvider>, cancel: CancellationToken) -> Self {
+  pub fn new(
+    data_dir: PathBuf,
+    embedding: Arc<dyn EmbeddingProvider>,
+    daemon_settings: DaemonSettings,
+    cancel: CancellationToken,
+  ) -> Self {
     Self {
       projects: DashMap::new(),
       path_cache: DashMap::new(),
       data_dir,
       embedding,
+      daemon_settings: Arc::new(daemon_settings),
       cancel,
     }
   }
@@ -188,9 +205,14 @@ impl ProjectRouter {
     };
 
     // Spawn the actor with a child cancellation token
-    let handle = ProjectActor::spawn(config, self.embedding.clone(), self.cancel.child_token())
-      .await
-      .map_err(ProjectRouterError::SpawnFailed)?;
+    let handle = ProjectActor::spawn(
+      config,
+      self.embedding.clone(),
+      Arc::clone(&self.daemon_settings),
+      self.cancel.child_token(),
+    )
+    .await
+    .map_err(ProjectRouterError::SpawnFailed)?;
 
     info!(project_id = %id, root = %root.display(), "Spawned new ProjectActor");
 
@@ -292,7 +314,7 @@ impl ProjectRouter {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config::Config;
+  use crate::domain::config::Config;
 
   #[tokio::test]
   async fn test_project_id_consistency() {
@@ -307,8 +329,9 @@ mod tests {
   async fn test_router_shutdown_nonexistent() {
     let config = Config::default();
     let embedding = <dyn EmbeddingProvider>::from_config(&config.embedding).expect("embedding provider required");
+    let daemon_settings = DaemonSettings::from_config(&config);
     let cancel = CancellationToken::new();
-    let router = ProjectRouter::new(PathBuf::from("/tmp/data"), embedding, cancel);
+    let router = ProjectRouter::new(PathBuf::from("/tmp/data"), embedding, daemon_settings, cancel);
 
     // Should not panic when shutting down nonexistent project
     let fake_id = ProjectId::from_path_exact(Path::new("/fake/project"));
@@ -319,8 +342,9 @@ mod tests {
   async fn test_router_shutdown_all_empty() {
     let config = Config::default();
     let embedding = <dyn EmbeddingProvider>::from_config(&config.embedding).expect("embedding provider required");
+    let daemon_settings = DaemonSettings::from_config(&config);
     let cancel = CancellationToken::new();
-    let router = ProjectRouter::new(PathBuf::from("/tmp/data"), embedding, cancel);
+    let router = ProjectRouter::new(PathBuf::from("/tmp/data"), embedding, daemon_settings, cancel);
 
     // Should not panic when no projects exist
     router.shutdown_all().await;

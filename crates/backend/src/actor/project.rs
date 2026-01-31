@@ -37,7 +37,11 @@ use super::{
 };
 use crate::{
   db::{DbError, ProjectDb},
-  domain::{code::Language, config::Config, project::ProjectId},
+  domain::{
+    code::Language,
+    config::{Config, DaemonSettings},
+    project::ProjectId,
+  },
   embedding::EmbeddingProvider,
   ipc::{
     RequestData, ResponseData,
@@ -126,7 +130,10 @@ pub enum ProjectActorError {
 pub struct ProjectActor {
   config: ProjectActorConfig,
   db: Arc<ProjectDb>,
+  /// Project-level config (tools, decay, search, index, docs, workspace)
   project_config: Arc<Config>,
+  /// Daemon-level settings (embedding batch size, hooks, etc.)
+  daemon_settings: Arc<DaemonSettings>,
   embedding: Arc<dyn EmbeddingProvider>,
   /// Deterministic UUID for this project (used in memory creation)
   project_uuid: Uuid,
@@ -148,9 +155,17 @@ impl ProjectActor {
   ///
   /// This opens the database, spawns the IndexerActor, and starts the
   /// actor's event loop. The returned handle can be used to send requests.
+  ///
+  /// # Arguments
+  ///
+  /// * `config` - Project-specific actor config (id, root, data_dir)
+  /// * `embedding` - Shared embedding provider
+  /// * `daemon_settings` - Daemon-level settings (embedding batch size, hooks, etc.)
+  /// * `cancel` - Cancellation token for coordinated shutdown
   pub async fn spawn(
     config: ProjectActorConfig,
     embedding: Arc<dyn EmbeddingProvider>,
+    daemon_settings: Arc<DaemonSettings>,
     cancel: CancellationToken,
   ) -> Result<ProjectHandle, ProjectActorError> {
     info!(
@@ -158,7 +173,7 @@ impl ProjectActor {
         root = %config.root.display(),
         "Spawning ProjectActor"
     );
-    // Load project-specific config
+    // Load project-specific config (tools, decay, search, index, docs, workspace)
     let project_config = Config::load_for_project(&config.root).await;
     let project_config = Arc::new(project_config);
 
@@ -169,16 +184,15 @@ impl ProjectActor {
     let db = Arc::new(db);
 
     // Spawn indexer actor with a child cancellation token
-    // Calculate embedding batch size from config (use max_batch_size if set, otherwise default to 512)
-    // Both OpenRouter and Ollama handle their own internal limits, so 512 is a reasonable default.
-    let embedding_batch_size = project_config.embedding.max_batch_size.unwrap_or(512);
+    // Use daemon-level embedding settings (from global config, not project config)
+    let embedding_batch_size = daemon_settings.embedding_batch_size.unwrap_or(512);
 
     let indexer_config = IndexerConfig {
       root: config.root.clone(),
       index: project_config.index.clone(),
       embedding_batch_size,
-      embedding_context_length: project_config.embedding.context_length,
-      log_cache_stats: project_config.database.log_cache_stats,
+      embedding_context_length: daemon_settings.embedding_context_length,
+      log_cache_stats: daemon_settings.log_cache_stats,
     };
     let indexer = IndexerActor::spawn(indexer_config, Arc::clone(&db), embedding.clone(), cancel.child_token());
 
@@ -192,6 +206,7 @@ impl ProjectActor {
       config,
       db,
       project_config,
+      daemon_settings,
       embedding,
       project_uuid,
       hook_state: service::hooks::HookState::new(),
@@ -222,6 +237,22 @@ impl ProjectActor {
       root = %self.config.root.display(),
       "ProjectActor started"
     );
+
+    // Auto-start watcher for previously indexed projects
+    match self.db.is_manually_indexed(self.config.id.as_str()).await {
+      Ok(true) => {
+        info!(project_id = %self.config.id, "Project was previously indexed, auto-starting watcher");
+        if let Err(e) = self.start_watcher().await {
+          warn!(project_id = %self.config.id, error = %e, "Failed to auto-start watcher");
+        }
+      }
+      Ok(false) => {
+        debug!(project_id = %self.config.id, "Project not previously indexed, watcher will not auto-start");
+      }
+      Err(e) => {
+        warn!(project_id = %self.config.id, error = %e, "Failed to check if project was indexed");
+      }
+    }
 
     loop {
       tokio::select! {
@@ -915,6 +946,14 @@ impl ProjectActor {
     self.scan_in_progress = false;
     self.scan_progress = None;
 
+    // Auto-start watcher after successful indexing
+    if result.status == "complete" && result.files_indexed > 0 && self.watcher_cancel.is_none() {
+      info!(project_id = %self.config.id, "Auto-starting watcher after initial indexing");
+      if let Err(e) = self.start_watcher().await {
+        warn!(project_id = %self.config.id, error = %e, "Failed to auto-start watcher after indexing");
+      }
+    }
+
     // Convert service result to IPC response
     let response = ProjectActorResponse::Done(ResponseData::Code(CodeResponse::Index(CodeIndexResult {
       status: result.status,
@@ -1491,13 +1530,13 @@ impl ProjectActor {
       }
     };
 
-    // Build hook context
+    // Build hook context (use daemon-level hooks config, not project config)
     let hook_ctx = service::hooks::HookContext::new(
       &self.db,
       self.embedding.as_ref(),
       None, // LLM provider not currently available in actor
       self.project_uuid,
-      &self.project_config.hooks,
+      &self.daemon_settings.hooks,
     );
 
     // For SessionStart, provide project info

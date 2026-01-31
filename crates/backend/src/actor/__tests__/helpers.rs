@@ -15,7 +15,10 @@ use crate::{
     message::{ProjectActorPayload, ProjectActorResponse},
     project::{ProjectActor, ProjectActorConfig},
   },
-  domain::{config::Config, project::ProjectId},
+  domain::{
+    config::{Config, DaemonSettings},
+    project::ProjectId,
+  },
   embedding::EmbeddingProvider,
   ipc::{
     RequestData, ResponseData,
@@ -82,7 +85,10 @@ impl ActorTestContext {
       data_dir: self.data_dir.path().to_path_buf(),
     };
 
-    let handle = ProjectActor::spawn(config, self.embedding.clone(), cancel.clone()).await?;
+    // Create daemon settings from the test config
+    let daemon_settings = Arc::new(DaemonSettings::from_config(&self.config));
+
+    let handle = ProjectActor::spawn(config, self.embedding.clone(), daemon_settings, cancel.clone()).await?;
 
     Ok((handle, cancel))
   }

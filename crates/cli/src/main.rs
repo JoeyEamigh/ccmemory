@@ -237,7 +237,7 @@ pub enum ConfigCommand {
     Creates .claude/ccengram.toml with the specified tool preset.")]
   Init {
     /// Tool preset: minimal, standard, or full
-    #[arg(long, default_value = "standard", value_parser = ["minimal", "standard", "full"])]
+    #[arg(long, default_value = "minimal", value_parser = ["minimal", "standard", "full"])]
     preset: String,
   },
 
@@ -351,10 +351,11 @@ SUPPORTED LANGUAGES:
   /// Manage configuration
   #[command(after_help = "\
 PRESETS:
-  minimal   - memory_search, code_search, docs_search (3 tools)
+  minimal   - explore, context (2 tools; recommended)
   standard  - Above + memory_add, memory_reinforce, memory_deemphasize,
-              memory_timeline, entity_top, project_stats (9 tools)
-  full      - All available tools
+              code_index, code_stats, watch_start, watch_stop,
+              watch_status, project_stats (11 tools)
+  full      - All 34 available tools
 
 CONFIG LOCATIONS:
   Project: .claude/ccengram.toml
@@ -427,9 +428,9 @@ USAGE:
     #[arg(long)]
     force: bool,
   },
-  /// Generate a MemExplore subagent for Claude Code
+  /// Generate a SemExplore subagent for Claude Code
   Agent {
-    /// Output path (default: .claude/agents/MemExplore.md)
+    /// Output path (default: .claude/agents/SemExplore.md)
     #[arg(long)]
     output: Option<String>,
     /// Overwrite existing file

@@ -634,6 +634,44 @@ impl Default for DatabaseConfig {
 }
 
 // ============================================================================
+// Daemon-Level Settings (for passing to ProjectActors)
+// ============================================================================
+
+/// Daemon-level settings that ProjectActors need access to.
+///
+/// These settings are read from the global config at daemon startup and should
+/// NOT be overridden by project-level configs. They are passed from the daemon
+/// through ProjectRouter to each ProjectActor.
+///
+/// This separation ensures that:
+/// - Embedding settings are consistent across all projects (shared provider)
+/// - Hook behavior is uniform (uses shared Claude subscription)
+/// - Database cache settings are daemon-wide
+#[derive(Debug, Clone)]
+pub struct DaemonSettings {
+  /// Maximum batch size for embedding requests (from embedding.max_batch_size)
+  pub embedding_batch_size: Option<usize>,
+  /// Context length for batch sizing (from embedding.context_length)
+  pub embedding_context_length: usize,
+  /// Whether to log cache stats during indexing (from database.log_cache_stats)
+  pub log_cache_stats: bool,
+  /// Hook behavior configuration (from hooks section)
+  pub hooks: HooksConfig,
+}
+
+impl DaemonSettings {
+  /// Create DaemonSettings from a global Config
+  pub fn from_config(config: &Config) -> Self {
+    Self {
+      embedding_batch_size: config.embedding.max_batch_size,
+      embedding_context_length: config.embedding.context_length,
+      log_cache_stats: config.database.log_cache_stats,
+      hooks: config.hooks.clone(),
+    }
+  }
+}
+
+// ============================================================================
 // Hooks Configuration
 // ============================================================================
 
@@ -668,7 +706,7 @@ pub struct HooksConfig {
 impl Default for HooksConfig {
   fn default() -> Self {
     Self {
-      enabled: true,
+      enabled: false,
       llm_extraction: true,
       background_extraction: true,
       tool_observations: true,
@@ -849,17 +887,70 @@ impl Config {
     }
   }
 
-  /// Load config for a project, with fallback to user config
+  /// Load config for a project, merging with global config.
+  ///
+  /// The merge strategy is:
+  /// 1. Load global config as the base
+  /// 2. Load project config and overlay it on top
+  /// 3. Only fields actually present in the project config override global values
+  ///
+  /// This allows sparse project configs that only override specific settings.
   pub async fn load_for_project(project_path: &Path) -> Self {
-    let project_config = Self::project_config_path(project_path);
+    let project_config_path = Self::project_config_path(project_path);
 
-    if project_config.exists()
-      && let Ok(content) = tokio::fs::read_to_string(&project_config).await
-      && let Ok(config) = toml::from_str(&content)
-    {
-      config
-    } else {
-      Self::load_global().await
+    // If no project config, just use global
+    if !project_config_path.exists() {
+      return Self::load_global().await;
+    }
+
+    // Load project config content
+    let Ok(project_content) = tokio::fs::read_to_string(&project_config_path).await else {
+      return Self::load_global().await;
+    };
+
+    // Trim whitespace from project config before parsing
+    let project_content = project_content.trim();
+
+    // Parse project config as TOML value for merging
+    let Ok(project_toml) = toml::from_str::<toml::Value>(project_content) else {
+      return Self::load_global().await;
+    };
+
+    // Load global config and serialize to TOML value
+    let global_config = Self::load_global().await;
+    let Ok(global_str) = toml::to_string(&global_config) else {
+      return toml::from_str(project_content).unwrap_or(global_config);
+    };
+    let Ok(global_toml) = toml::from_str::<toml::Value>(&global_str) else {
+      return toml::from_str(project_content).unwrap_or(global_config);
+    };
+
+    // Merge project on top of global
+    let merged_toml = Self::merge_toml(global_toml, project_toml);
+
+    // Deserialize merged config
+    merged_toml.try_into().unwrap_or(global_config)
+  }
+
+  /// Recursively merge two TOML values, with `overlay` taking precedence.
+  ///
+  /// For tables, this merges keys recursively. For other types, overlay replaces base.
+  fn merge_toml(base: toml::Value, overlay: toml::Value) -> toml::Value {
+    match (base, overlay) {
+      // Both are tables: merge recursively
+      (toml::Value::Table(mut base_table), toml::Value::Table(overlay_table)) => {
+        for (key, overlay_value) in overlay_table {
+          let merged_value = if let Some(base_value) = base_table.remove(&key) {
+            Self::merge_toml(base_value, overlay_value)
+          } else {
+            overlay_value
+          };
+          base_table.insert(key, merged_value);
+        }
+        toml::Value::Table(base_table)
+      }
+      // Overlay is not a table (or base isn't): overlay wins
+      (_, overlay) => overlay,
     }
   }
 
@@ -901,12 +992,13 @@ impl Config {
       r#"# CCEngram Project Configuration
 # Place in .claude/ccengram.toml
 #
-# NOTE: This is a project-level config. The following sections are daemon-level
+# NOTE: This is a project-level config. The following are daemon-level
 # and should be configured in ~/.config/ccengram/config.toml instead:
-#   [embedding] - Embedding provider (shared across all projects)
-#   [daemon]    - Daemon lifecycle settings
-#   [hooks]     - Hook behavior settings
-#   [database]  - Database cache settings
+#   [embedding]  - Embedding provider (shared across all projects)
+#   [daemon]     - Daemon lifecycle settings
+#   [hooks]      - Hook behavior settings
+#   [database]   - Database cache settings
+#   decay.decay_interval_hours, decay.session_cleanup_hours, decay.max_session_age_hours
 
 # ============================================================================
 # Tool Filtering
@@ -930,24 +1022,17 @@ preset = "{preset_name}"
 # disabled = ["memory_delete", "memory_supersede"]
 
 # ============================================================================
-# Decay & Memory Lifecycle
+# Decay & Memory Lifecycle (project-level settings only)
 # ============================================================================
+# NOTE: Timing settings (decay_interval_hours, session_cleanup_hours,
+# max_session_age_hours) are daemon-level and configured in global config.
 
 [decay]
-# How often to run decay (hours)
-decay_interval_hours = 60
-
-# Threshold below which memories are archived
+# Salience threshold below which memories are archived
 archive_threshold = 0.1
 
-# Days without access before forced consideration
+# Days without access before forced decay consideration
 max_idle_days = 90
-
-# Session cleanup interval (hours)
-session_cleanup_hours = 6
-
-# Maximum session age before cleanup (hours)
-max_session_age_hours = 6
 
 # ============================================================================
 # Search Defaults
@@ -1428,14 +1513,18 @@ idle_check_interval_secs = 30
 # disable_worktree_detection = false
 
 # ============================================================================
-# Hook Behavior
+# Hook Behavior (Automatic Memory Creation)
 # ============================================================================
 
 [hooks]
-# Enable automatic memory capture from hooks (default: true)
+# Enable automatic memory capture from hooks (default: false)
+# When true, memories are automatically created from your Claude Code sessions.
 # When false, hooks still run but don't create memories automatically.
 # Manual memory creation via memory_add tool is still available.
-enabled = true
+#
+# Recommendation: Enable per-project for codebases where you want Claude to
+# remember preferences, decisions, and patterns across sessions.
+enabled = false
 
 # Enable LLM-based memory extraction (default: true)
 # When false, uses basic summary extraction without LLM inference.
@@ -1503,38 +1592,6 @@ mod tests {
   }
 
   #[test]
-  fn test_preset_standard() {
-    let config = Config::default();
-    let tools = config.enabled_tool_set();
-    assert_eq!(tools.len(), 11);
-    assert!(tools.contains("explore"));
-    assert!(tools.contains("context"));
-    assert!(tools.contains("memory_add"));
-    assert!(tools.contains("memory_reinforce"));
-    assert!(tools.contains("memory_deemphasize"));
-    assert!(tools.contains("code_index"));
-    assert!(tools.contains("code_stats"));
-    assert!(tools.contains("watch_start"));
-    assert!(tools.contains("watch_stop"));
-    assert!(tools.contains("watch_status"));
-    assert!(tools.contains("project_stats"));
-    assert!(!tools.contains("memory_delete")); // Not in standard
-  }
-
-  #[test]
-  fn test_preset_full() {
-    let config = Config {
-      tools: ToolConfig {
-        preset: ToolPreset::Full,
-        ..Default::default()
-      },
-      ..Default::default()
-    };
-    let tools = config.enabled_tool_set();
-    assert_eq!(tools.len(), ALL_TOOLS.len());
-  }
-
-  #[test]
   fn test_enabled_tools_overrides_preset() {
     let config = Config {
       tools: ToolConfig {
@@ -1584,20 +1641,21 @@ mod tests {
     let claude_dir = temp.path().join(".claude");
     tokio::fs::create_dir_all(&claude_dir).await.unwrap();
 
-    let config_content = r#"
-[tools]
+    let config_content = r#"[tools]
 preset = "minimal"
 
 [embedding]
 dimensions = 4096
 "#;
-    tokio::fs::write(claude_dir.join("ccengram.toml"), config_content)
-      .await
-      .unwrap();
+    let config_path = claude_dir.join("ccengram.toml");
+    tokio::fs::write(&config_path, config_content).await.unwrap();
+
+    // Verify file was written
+    assert!(config_path.exists(), "Config file should exist at {:?}", config_path);
 
     let config = Config::load_for_project(temp.path()).await;
-    assert_eq!(config.tools.preset, ToolPreset::Minimal);
-    assert_eq!(config.embedding.dimensions, 4096);
+    assert_eq!(config.tools.preset, ToolPreset::Minimal, "preset should be minimal");
+    assert_eq!(config.embedding.dimensions, 4096, "dimensions should be 4096");
   }
 
   #[tokio::test]
@@ -1606,6 +1664,114 @@ dimensions = 4096
     let config = Config::load_for_project(temp.path()).await;
     assert_eq!(config.tools.preset, ToolPreset::Standard);
     assert_eq!(config.embedding.dimensions, 4096);
+  }
+
+  #[tokio::test]
+  async fn test_project_config_merges_with_global() {
+    let temp = TempDir::new().unwrap();
+    let claude_dir = temp.path().join(".claude");
+    tokio::fs::create_dir_all(&claude_dir).await.unwrap();
+
+    // Project config only sets tools.preset and search.default_limit
+    // Other values should come from global/defaults
+    let config_content = r#"[tools]
+preset = "minimal"
+
+[search]
+default_limit = 25
+"#;
+    tokio::fs::write(claude_dir.join("ccengram.toml"), config_content)
+      .await
+      .unwrap();
+
+    let config = Config::load_for_project(temp.path()).await;
+
+    // Project overrides should be applied
+    assert_eq!(
+      config.tools.preset,
+      ToolPreset::Minimal,
+      "tools.preset should be overridden"
+    );
+    assert_eq!(
+      config.search.default_limit, 25,
+      "search.default_limit should be overridden"
+    );
+
+    // Values not in project config should come from global/defaults
+    assert_eq!(
+      config.embedding.dimensions, 4096,
+      "embedding.dimensions should use default"
+    );
+    assert_eq!(
+      config.search.semantic_weight, 0.5,
+      "search.semantic_weight should use default"
+    );
+    assert_eq!(
+      config.index.max_file_size,
+      1024 * 1024,
+      "index.max_file_size should use default"
+    );
+    assert_eq!(
+      config.decay.archive_threshold, 0.1,
+      "decay.archive_threshold should use default"
+    );
+  }
+
+  #[test]
+  fn test_merge_toml_tables() {
+    use toml::Value;
+
+    let base: Value = toml::from_str(
+      r#"
+[section]
+a = 1
+b = 2
+"#,
+    )
+    .unwrap();
+
+    let overlay: Value = toml::from_str(
+      r#"
+[section]
+b = 99
+c = 3
+"#,
+    )
+    .unwrap();
+
+    let merged = Config::merge_toml(base, overlay);
+    let table = merged.as_table().unwrap();
+    let section = table.get("section").unwrap().as_table().unwrap();
+
+    assert_eq!(section.get("a").unwrap().as_integer(), Some(1), "base value preserved");
+    assert_eq!(section.get("b").unwrap().as_integer(), Some(99), "overlay value wins");
+    assert_eq!(section.get("c").unwrap().as_integer(), Some(3), "overlay adds new key");
+  }
+
+  #[test]
+  fn test_config_to_toml_value() {
+    // Ensure Config can be serialized to toml::Value
+    let config = Config::default();
+    let toml_value = toml::Value::try_from(&config).expect("Config should serialize to toml::Value");
+    assert!(toml_value.is_table(), "Config should serialize to a table");
+
+    // Verify we can merge with it
+    let overlay: toml::Value = toml::from_str(
+      r#"[tools]
+preset = "minimal"
+"#,
+    )
+    .unwrap();
+
+    let merged = Config::merge_toml(toml_value, overlay);
+
+    // Verify the merge worked
+    let merged_config: Config = merged.try_into().expect("Merged should deserialize");
+    assert_eq!(
+      merged_config.tools.preset,
+      ToolPreset::Minimal,
+      "preset should be overridden"
+    );
   }
 
   #[test]
@@ -1676,6 +1842,38 @@ max_batch_size = 16
     let config: Config = toml::from_str(toml_content).unwrap();
     assert_eq!(config.embedding.context_length, 8192);
     assert_eq!(config.embedding.max_batch_size, Some(16));
+  }
+
+  #[test]
+  fn test_preset_standard() {
+    let config = Config::default();
+    let tools = config.enabled_tool_set();
+    assert_eq!(tools.len(), 11);
+    assert!(tools.contains("explore"));
+    assert!(tools.contains("context"));
+    assert!(tools.contains("memory_add"));
+    assert!(tools.contains("memory_reinforce"));
+    assert!(tools.contains("memory_deemphasize"));
+    assert!(tools.contains("code_index"));
+    assert!(tools.contains("code_stats"));
+    assert!(tools.contains("watch_start"));
+    assert!(tools.contains("watch_stop"));
+    assert!(tools.contains("watch_status"));
+    assert!(tools.contains("project_stats"));
+    assert!(!tools.contains("memory_delete")); // Not in standard
+  }
+
+  #[test]
+  fn test_preset_full() {
+    let config = Config {
+      tools: ToolConfig {
+        preset: ToolPreset::Full,
+        ..Default::default()
+      },
+      ..Default::default()
+    };
+    let tools = config.enabled_tool_set();
+    assert_eq!(tools.len(), ALL_TOOLS.len());
   }
 
   #[test]
@@ -1764,7 +1962,7 @@ preset = "minimal"
   fn test_hooks_config_in_template() {
     let template = Config::generate_template(ToolPreset::Standard);
     assert!(template.contains("[hooks]"));
-    assert!(template.contains("enabled = true"));
+    assert!(template.contains("enabled = false")); // Default is now false
     assert!(template.contains("llm_extraction = true"));
     assert!(template.contains("background_extraction"));
     assert!(template.contains("tool_observations"));
@@ -1775,7 +1973,7 @@ preset = "minimal"
   fn test_hooks_config_roundtrip() {
     let config = Config {
       hooks: HooksConfig {
-        enabled: false,
+        enabled: true,
         llm_extraction: false,
         background_extraction: false,
         tool_observations: false,
@@ -1787,7 +1985,7 @@ preset = "minimal"
     let toml_str = toml::to_string_pretty(&config).unwrap();
     let parsed: Config = toml::from_str(&toml_str).unwrap();
 
-    assert!(!parsed.hooks.enabled);
+    assert!(parsed.hooks.enabled);
     assert!(!parsed.hooks.llm_extraction);
     assert!(!parsed.hooks.background_extraction);
     assert!(!parsed.hooks.tool_observations);
@@ -1798,11 +1996,11 @@ preset = "minimal"
   fn test_hooks_config_parsing() {
     let toml_content = r#"
 [hooks]
-enabled = false
+enabled = true
 llm_extraction = false
 "#;
     let config: Config = toml::from_str(toml_content).unwrap();
-    assert!(!config.hooks.enabled);
+    assert!(config.hooks.enabled);
     assert!(!config.hooks.llm_extraction);
     // Other fields should default to true
     assert!(config.hooks.background_extraction);
@@ -1818,7 +2016,7 @@ llm_extraction = false
 preset = "minimal"
 "#;
     let config: Config = toml::from_str(toml_content).unwrap();
-    assert!(config.hooks.enabled);
+    assert!(!config.hooks.enabled); // Default is now false
     assert!(config.hooks.llm_extraction);
   }
 }

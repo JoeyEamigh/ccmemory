@@ -39,7 +39,7 @@ use crate::{
     lifecycle::{activity::KeepAlive, session::SessionTracker},
   },
   dirs,
-  domain::config::Config,
+  domain::config::{Config, DaemonSettings},
   embedding::EmbeddingProvider,
   ipc::{Client, IpcError},
   server::{DaemonState, Server, ServerConfig},
@@ -67,6 +67,9 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
   pub async fn load() -> Self {
+    // Auto-create user config on first run if it doesn't exist
+    Self::ensure_user_config().await;
+
     let config = Config::load_global().await;
 
     Self {
@@ -74,6 +77,34 @@ impl RuntimeConfig {
       data_dir: dirs::default_data_dir(),
       foreground: false,
       config,
+    }
+  }
+
+  /// Ensure user config file exists, creating it with defaults if not.
+  async fn ensure_user_config() {
+    use crate::domain::config::ToolPreset;
+
+    let Some(user_config_path) = Config::user_config_path() else {
+      return;
+    };
+
+    if user_config_path.exists() {
+      return;
+    }
+
+    // Create parent directory if needed
+    if let Some(parent) = user_config_path.parent()
+      && let Err(e) = tokio::fs::create_dir_all(parent).await
+    {
+      warn!("Failed to create config directory: {}", e);
+      return;
+    }
+
+    // Write default config
+    let template = Config::generate_template(ToolPreset::Standard);
+    match tokio::fs::write(&user_config_path, &template).await {
+      Ok(()) => info!("Created user config: {:?}", user_config_path),
+      Err(e) => warn!("Failed to create user config: {}", e),
     }
   }
 }
@@ -247,10 +278,14 @@ impl Daemon {
       embedding.dimensions()
     );
 
+    // Create daemon-level settings to pass to project actors
+    let daemon_settings = DaemonSettings::from_config(&self.runtime_config.config);
+
     // Create the project router (replaces ProjectRegistry)
     let router = Arc::new(ProjectRouter::new(
       self.runtime_config.data_dir.clone(),
       embedding,
+      daemon_settings,
       cancel.child_token(),
     ));
 
