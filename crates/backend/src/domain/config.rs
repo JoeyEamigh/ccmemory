@@ -1183,7 +1183,7 @@ pipeline_parser_workers = 0
 [docs]
 # Directory to watch for documents (relative to project root)
 # When set, file watcher will auto-index files in this directory
-# directory = "docs"
+directory = "docs"
 
 # File extensions to treat as documents
 extensions = ["md", "txt", "rst", "adoc", "org"]

@@ -97,7 +97,7 @@ checkpoint_interval_secs = 30
 watcher_debounce_ms = 1000
 
 # Maximum file size to index (bytes)
-max_file_size = 1048576  # 1MB
+max_file_size = 1048576 # 1MB
 
 # Maximum chunk size (characters)
 max_chunk_chars = 2000
@@ -143,7 +143,7 @@ watcher_poll_secs = 2
 content_cache_size = 1000
 
 # Maximum file size to cache in bytes
-max_cached_file_size = 524288  # 512KB
+max_cached_file_size = 524288 # 512KB
 
 # Number of files to batch before processing (default: 32)
 # Larger batches improve embedding API efficiency but increase latency.
@@ -192,13 +192,13 @@ pipeline_parser_workers = 0
 [docs]
 # Directory to watch for documents (relative to project root)
 # When set, file watcher will auto-index files in this directory
-# directory = "docs"
+directory = "docs"
 
 # File extensions to treat as documents
 extensions = ["md", "txt", "rst", "adoc", "org"]
 
 # Maximum document file size (bytes)
-max_file_size = 5242880  # 5MB
+max_file_size = 5242880 # 5MB
 
 # ============================================================================
 # Workspace Aliasing
