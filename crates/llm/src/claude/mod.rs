@@ -69,6 +69,7 @@ impl LlmProvider for ClaudeProvider {
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum ClaudeMessage {
+  User {},
   System {},
   Assistant(AssistantMessage),
   Result(ResultMessage),
@@ -105,6 +106,8 @@ struct ResultMessage {
   total_cost_usd: f64,
   usage: Option<Usage>,
   result: Option<String>,
+  /// Structured output when --json-schema is used
+  structured_output: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -278,6 +281,7 @@ async fn infer_internal(claude_path: &str, request: InferenceRequest) -> Result<
   };
 
   let mut response_text = String::new();
+  let mut structured_output: Option<serde_json::Value> = None;
   let mut input_tokens = 0u32;
   let mut output_tokens = 0u32;
   let mut cost_usd = None;
@@ -285,6 +289,9 @@ async fn infer_internal(claude_path: &str, request: InferenceRequest) -> Result<
 
   for msg in messages {
     match msg {
+      ClaudeMessage::User {} => {
+        // User input echo, nothing to extract
+      }
       ClaudeMessage::System {} => {
         // Session init, nothing to extract
       }
@@ -309,6 +316,9 @@ async fn infer_internal(claude_path: &str, request: InferenceRequest) -> Result<
         duration_ms = result.duration_ms;
         cost_usd = Some(result.total_cost_usd);
 
+        // Capture structured_output when --json-schema was used
+        structured_output = result.structured_output;
+
         if let Some(usage) = result.usage {
           input_tokens = usage.input_tokens;
           output_tokens = usage.output_tokens;
@@ -317,7 +327,23 @@ async fn infer_internal(claude_path: &str, request: InferenceRequest) -> Result<
     }
   }
 
-  if response_text.is_empty() {
+  // When using --json-schema, the structured output is in structured_output field
+  // Otherwise, use the assistant text response
+  let final_response = if let Some(structured) = structured_output {
+    trace!(
+      structured_output_type = %structured.as_object().map(|_| "object").unwrap_or("other"),
+      "Using structured_output from result"
+    );
+    // Serialize back to string for the caller to parse
+    serde_json::to_string(&structured).map_err(|e| {
+      error!(err = %e, "Failed to serialize structured_output");
+      LlmError::ParseError(e)
+    })?
+  } else {
+    response_text
+  };
+
+  if final_response.is_empty() {
     warn!(
       model = %request.model.as_str(),
       elapsed_ms = start.elapsed().as_millis() as u64,
@@ -327,7 +353,7 @@ async fn infer_internal(claude_path: &str, request: InferenceRequest) -> Result<
   }
 
   debug!(
-    response_len = response_text.len(),
+    response_len = final_response.len(),
     input_tokens,
     output_tokens,
     duration_ms,
@@ -338,7 +364,7 @@ async fn infer_internal(claude_path: &str, request: InferenceRequest) -> Result<
   );
 
   Ok(InferenceResponse {
-    text: response_text,
+    text: final_response,
     input_tokens,
     output_tokens,
     cost_usd,

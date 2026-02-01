@@ -253,7 +253,6 @@ max_idle_days = 90
 [hooks]
 enabled = false                   # Set to true to enable automatic memory creation
 llm_extraction = true             # Use LLM for smart memory extraction
-tool_observations = true          # Create episodic memories from tool uses
 high_priority_signals = true      # Detect corrections/preferences immediately
 
 [workspace]

@@ -315,13 +315,8 @@ impl Daemon {
     // Log hooks configuration
     if !self.runtime_config.config.hooks.enabled || !cfg!(feature = "automemory") {
       info!("Automatic memory capture is DISABLED");
-    } else {
-      if !self.runtime_config.config.hooks.llm_extraction {
-        info!("LLM extraction is disabled, using basic summary extraction");
-      }
-      if !self.runtime_config.config.hooks.tool_observations {
-        info!("Tool observation memories are disabled");
-      }
+    } else if !self.runtime_config.config.hooks.llm_extraction {
+      info!("LLM extraction is disabled, no memories will be created");
     }
 
     // Create daemon state for Status/Metrics requests

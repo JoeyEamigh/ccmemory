@@ -192,6 +192,9 @@ pub async fn store_extracted_memory(
 
 /// Extract memories using LLM from segment context.
 ///
+/// Uses retry logic on failure (max 3 attempts). On final failure,
+/// discards the segment rather than falling back to low-quality extraction.
+///
 /// # Arguments
 /// * `ctx` - Extraction context with database and providers
 /// * `segment` - The segment context to extract from
@@ -210,55 +213,51 @@ pub async fn extract_with_llm(
   }
 
   let Some(llm) = ctx.llm else {
-    // No LLM provider, fall back to basic extraction
-    return extract_with_summary(ctx, segment, seen_hashes).await;
+    // No LLM provider, skip extraction entirely
+    debug!("No LLM provider available, skipping extraction");
+    return Ok(Vec::new());
   };
 
   let extraction_context = segment.to_extraction_context();
   let mut memories_created = Vec::new();
 
-  match llm::extraction::extract_memories(llm, &extraction_context).await {
-    Ok(result) => {
-      for extracted in &result.memories {
-        if let Ok(res) = store_extracted_memory(ctx, extracted, seen_hashes).await
-          && let Some(id) = res.memory_id
-        {
-          memories_created.push(id);
+  const MAX_ATTEMPTS: u32 = 3;
+
+  for attempt in 1..=MAX_ATTEMPTS {
+    match llm::extraction::extract_memories(llm, &extraction_context).await {
+      Ok(result) => {
+        for extracted in &result.memories {
+          if let Ok(res) = store_extracted_memory(ctx, extracted, seen_hashes).await
+            && let Some(id) = res.memory_id
+          {
+            memories_created.push(id);
+          }
+        }
+        debug!(
+          "LLM extraction completed: {} memories created from {} candidates",
+          memories_created.len(),
+          result.memories.len()
+        );
+        return Ok(memories_created);
+      }
+      Err(e) => {
+        if attempt < MAX_ATTEMPTS {
+          warn!(
+            "LLM extraction attempt {}/{} failed: {}, retrying",
+            attempt, MAX_ATTEMPTS, e
+          );
+        } else {
+          warn!(
+            "LLM extraction failed after {} attempts: {}, discarding segment",
+            MAX_ATTEMPTS, e
+          );
         }
       }
-      debug!(
-        "LLM extraction completed: {} memories created from {} candidates",
-        memories_created.len(),
-        result.memories.len()
-      );
-    }
-    Err(e) => {
-      warn!("LLM extraction failed, falling back to basic summary: {}", e);
-      // Fall back to basic summary extraction
-      return extract_with_summary(ctx, segment, seen_hashes).await;
     }
   }
 
-  Ok(memories_created)
-}
-
-/// Extract memories using basic summary (fallback when LLM unavailable).
-async fn extract_with_summary(
-  ctx: &ExtractionContext<'_>,
-  segment: &SegmentContext,
-  seen_hashes: &mut std::collections::HashSet<String>,
-) -> Result<Vec<String>, ServiceError> {
-  let mut memories_created = Vec::new();
-
-  if segment.has_meaningful_work()
-    && let Some(summary) = segment.summary()
-    && let Ok(res) = extract_memory(ctx, &summary, seen_hashes).await
-    && let Some(id) = res.memory_id
-  {
-    memories_created.push(id);
-  }
-
-  Ok(memories_created)
+  // All retries exhausted - return empty (discard memory)
+  Ok(Vec::new())
 }
 
 /// Extract high-priority memories (corrections/preferences) immediately.

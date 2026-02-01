@@ -7,7 +7,7 @@
 //! 3. Call service methods
 //! 4. Build responses
 //!
-//! Business logic lives in the service modules (extraction, observation, etc.)
+//! Business logic lives in the service modules (extraction).
 
 use std::collections::HashSet;
 
@@ -19,7 +19,6 @@ use super::{
   context::SegmentContext,
   event::HookEvent,
   extraction::{self, ExtractionContext},
-  observation::{self, ObservationContext},
 };
 use crate::{
   db::ProjectDb,
@@ -71,11 +70,6 @@ impl<'a> HookContext<'a> {
     ExtractionContext::new(self.db, self.embedding, self.llm, self.project_id)
   }
 
-  /// Create an observation context from this hook context
-  fn observation_context(&self) -> ObservationContext<'_> {
-    ObservationContext::new(self.db, self.embedding, self.project_id)
-  }
-
   /// Check if hooks are enabled
   fn is_enabled(&self) -> bool {
     self.config.enabled
@@ -89,11 +83,6 @@ impl<'a> HookContext<'a> {
   /// Check if background extraction is enabled
   fn use_background_extraction(&self) -> bool {
     self.config.background_extraction
-  }
-
-  /// Check if tool observations are enabled
-  fn tool_observations_enabled(&self) -> bool {
-    self.config.tool_observations
   }
 
   /// Check if high-priority signal detection is enabled
@@ -256,32 +245,11 @@ pub async fn handle_user_prompt_submit(
 
   let mut memories_created = Vec::new();
 
-  // Extract from previous segment if meaningful work was done
-  if let Some(segment_ctx) = state.session_contexts.get_mut(session_id) {
-    if ctx.is_enabled() && segment_ctx.has_meaningful_work() {
-      if ctx.use_llm_extraction() {
-        let ext_ctx = ctx.extraction_context();
-        if let Ok(ids) = extraction::extract_with_llm(&ext_ctx, segment_ctx, &mut state.seen_hashes).await {
-          memories_created.extend(ids);
-        }
-      } else if let Some(summary) = segment_ctx.summary() {
-        let ext_ctx = ctx.extraction_context();
-        if let Ok(res) = extraction::extract_memory(&ext_ctx, &summary, &mut state.seen_hashes).await
-          && let Some(id) = res.memory_id
-        {
-          memories_created.push(id);
-        }
-      }
-    }
-    // Reset for new segment
-    segment_ctx.reset();
-    segment_ctx.user_prompt = Some(prompt.to_string());
-  } else {
-    // New session context
-    state
-      .session_contexts
-      .insert(session_id.to_string(), SegmentContext::with_prompt(prompt.to_string()));
-  }
+  // Get or create session context, record user prompt
+  // Note: We don't reset here - tool uses accumulate until Stop/PreCompact
+  // First prompt becomes user_prompt, subsequent ones go to additional_prompts
+  let segment_ctx = state.session_contexts.entry(session_id.to_string()).or_default();
+  segment_ctx.record_user_prompt(prompt.to_string());
 
   // Check for high-priority signals (corrections/preferences)
   if ctx.is_enabled()
@@ -323,18 +291,6 @@ pub async fn handle_post_tool_use(
   let tool_result = params.get("tool_response"); // Claude Code sends "tool_response", not "tool_result"
 
   debug!(session_id = %session_id, tool = %tool_name, "Tool use recorded");
-
-  let mut observation_memory_id = None;
-
-  // Create tool observation memory if enabled
-  if ctx.is_enabled() && ctx.tool_observations_enabled() {
-    let obs_ctx = ctx.observation_context();
-    if let Ok(res) =
-      observation::create_tool_observation(&obs_ctx, tool_name, &tool_params, tool_result, &mut state.seen_hashes).await
-    {
-      observation_memory_id = res.memory_id;
-    }
-  }
 
   // Accumulate tool use data in session context
   let segment_ctx = state.session_contexts.entry(session_id.to_string()).or_default();
@@ -391,7 +347,6 @@ pub async fn handle_post_tool_use(
 
   Ok(PostToolUseHookResult {
     status: "ok".to_string(),
-    observation_memory_id,
   })
 }
 
@@ -410,30 +365,13 @@ pub async fn handle_pre_compact(
 
   // Extract from current segment before compaction
   if let Some(segment_ctx) = state.session_contexts.get_mut(session_id) {
-    if ctx.is_enabled() && segment_ctx.has_meaningful_work() {
-      if ctx.use_llm_extraction() {
-        let ext_ctx = ctx.extraction_context();
-        match extraction::extract_with_llm(&ext_ctx, segment_ctx, &mut state.seen_hashes).await {
-          Ok(ids) => memories_created.extend(ids),
-          Err(e) => {
-            warn!("LLM extraction failed in pre-compact: {}", e);
-            // Fallback to basic summary
-            if let Some(ctx_summary) = segment_ctx.summary() {
-              let ext_ctx = ctx.extraction_context();
-              if let Ok(res) = extraction::extract_memory(&ext_ctx, &ctx_summary, &mut state.seen_hashes).await
-                && let Some(id) = res.memory_id
-              {
-                memories_created.push(id);
-              }
-            }
-          }
-        }
-      } else if let Some(ctx_summary) = segment_ctx.summary() {
-        let ext_ctx = ctx.extraction_context();
-        if let Ok(res) = extraction::extract_memory(&ext_ctx, &ctx_summary, &mut state.seen_hashes).await
-          && let Some(id) = res.memory_id
-        {
-          memories_created.push(id);
+    if ctx.is_enabled() && segment_ctx.has_meaningful_work() && ctx.use_llm_extraction() {
+      let ext_ctx = ctx.extraction_context();
+      match extraction::extract_with_llm(&ext_ctx, segment_ctx, &mut state.seen_hashes).await {
+        Ok(ids) => memories_created.extend(ids),
+        Err(e) => {
+          warn!("LLM extraction failed in pre-compact: {}", e);
+          // No fallback - extract_with_llm already handles retries
         }
       }
     }
@@ -478,30 +416,14 @@ pub async fn handle_stop(
   if let Some(segment_ctx) = state.session_contexts.remove(session_id)
     && ctx.is_enabled()
     && segment_ctx.has_meaningful_work()
+    && ctx.use_llm_extraction()
   {
-    if ctx.use_llm_extraction() {
-      let ext_ctx = ctx.extraction_context();
-      match extraction::extract_with_llm(&ext_ctx, &segment_ctx, &mut state.seen_hashes).await {
-        Ok(ids) => memories_created.extend(ids),
-        Err(e) => {
-          warn!("LLM extraction failed: {}", e);
-          // Fallback to basic summary
-          if let Some(ctx_summary) = segment_ctx.summary() {
-            let ext_ctx = ctx.extraction_context();
-            if let Ok(res) = extraction::extract_memory(&ext_ctx, &ctx_summary, &mut state.seen_hashes).await
-              && let Some(id) = res.memory_id
-            {
-              memories_created.push(id);
-            }
-          }
-        }
-      }
-    } else if let Some(ctx_summary) = segment_ctx.summary() {
-      let ext_ctx = ctx.extraction_context();
-      if let Ok(res) = extraction::extract_memory(&ext_ctx, &ctx_summary, &mut state.seen_hashes).await
-        && let Some(id) = res.memory_id
-      {
-        memories_created.push(id);
+    let ext_ctx = ctx.extraction_context();
+    match extraction::extract_with_llm(&ext_ctx, &segment_ctx, &mut state.seen_hashes).await {
+      Ok(ids) => memories_created.extend(ids),
+      Err(e) => {
+        warn!("LLM extraction failed: {}", e);
+        // No fallback - extract_with_llm already handles retries
       }
     }
   }
@@ -527,14 +449,47 @@ pub async fn handle_stop(
   })
 }
 
-/// Handle SubagentStop hook event.
-pub async fn handle_subagent_stop(
+/// Handle SubagentStart hook event.
+pub async fn handle_subagent_start(
   _ctx: &HookContext<'_>,
-  _state: &mut HookState,
+  state: &mut HookState,
   params: &serde_json::Value,
 ) -> Result<SimpleHookResult, ServiceError> {
   let session_id = params.get("session_id").and_then(|v| v.as_str()).unwrap_or("unknown");
-  debug!(session_id = %session_id, "Subagent stop");
+
+  // Increment subagent depth
+  let segment_ctx = state.session_contexts.entry(session_id.to_string()).or_default();
+  segment_ctx.subagent_depth += 1;
+  debug!(
+    session_id = %session_id,
+    depth = segment_ctx.subagent_depth,
+    "Subagent started"
+  );
+
+  Ok(SimpleHookResult {
+    status: "ok".to_string(),
+  })
+}
+
+/// Handle SubagentStop hook event.
+pub async fn handle_subagent_stop(
+  _ctx: &HookContext<'_>,
+  state: &mut HookState,
+  params: &serde_json::Value,
+) -> Result<SimpleHookResult, ServiceError> {
+  let session_id = params.get("session_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+
+  // Decrement subagent depth
+  if let Some(segment_ctx) = state.session_contexts.get_mut(session_id) {
+    segment_ctx.subagent_depth = segment_ctx.subagent_depth.saturating_sub(1);
+    debug!(
+      session_id = %session_id,
+      depth = segment_ctx.subagent_depth,
+      "Subagent stopped"
+    );
+  } else {
+    debug!(session_id = %session_id, "Subagent stop (no session context)");
+  }
 
   Ok(SimpleHookResult {
     status: "ok".to_string(),
@@ -600,6 +555,10 @@ pub async fn dispatch(
     }
     HookEvent::Stop => {
       let result = handle_stop(ctx, state, params).await?;
+      serde_json::to_value(result).map_err(|e| ServiceError::validation(e.to_string()))
+    }
+    HookEvent::SubagentStart => {
+      let result = handle_subagent_start(ctx, state, params).await?;
       serde_json::to_value(result).map_err(|e| ServiceError::validation(e.to_string()))
     }
     HookEvent::SubagentStop => {

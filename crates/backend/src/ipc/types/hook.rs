@@ -49,12 +49,9 @@ pub struct UserPromptHookResult {
 }
 
 /// Result from PostToolUse hook
-#[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostToolUseHookResult {
   pub status: String,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub observation_memory_id: Option<String>,
 }
 
 /// Result from PreCompact hook

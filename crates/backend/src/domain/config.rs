@@ -680,7 +680,7 @@ pub struct HooksConfig {
   pub enabled: bool,
 
   /// Enable LLM-based memory extraction (default: true)
-  /// When false, uses basic summary extraction without LLM inference.
+  /// When false, no memories are created.
   /// This uses your Claude Code subscription.
   pub llm_extraction: bool,
 
@@ -688,10 +688,6 @@ pub struct HooksConfig {
   /// When true, extraction runs asynchronously without blocking hook responses.
   /// It is not recommended to disable this unless debugging.
   pub background_extraction: bool,
-
-  /// Enable tool observation memories (default: true)
-  /// Tool observations are episodic memories capturing individual tool uses.
-  pub tool_observations: bool,
 
   /// Enable high-priority signal detection (default: true)
   /// When true, user prompts are scanned for corrections/preferences for immediate extraction.
@@ -704,7 +700,6 @@ impl Default for HooksConfig {
       enabled: false,
       llm_extraction: true,
       background_extraction: true,
-      tool_observations: true,
       high_priority_signals: true,
     }
   }
@@ -1216,10 +1211,6 @@ llm_extraction = true
 # Enable background extraction for PreCompact/Stop hooks (default: true)
 # When true, extraction runs asynchronously without blocking hook responses.
 background_extraction = true
-
-# Enable tool observation memories (default: true)
-# Creates episodic memories for individual tool uses (the "tool trail").
-tool_observations = true
 
 # Enable high-priority signal detection (default: true)
 # Scans user prompts for corrections/preferences for immediate extraction.
@@ -1904,7 +1895,6 @@ preset = "minimal"
         enabled: true,
         llm_extraction: false,
         background_extraction: false,
-        tool_observations: false,
         high_priority_signals: false,
       },
       ..Default::default()
@@ -1916,7 +1906,6 @@ preset = "minimal"
     assert!(parsed.hooks.enabled);
     assert!(!parsed.hooks.llm_extraction);
     assert!(!parsed.hooks.background_extraction);
-    assert!(!parsed.hooks.tool_observations);
     assert!(!parsed.hooks.high_priority_signals);
   }
 
@@ -1932,7 +1921,6 @@ llm_extraction = false
     assert!(!config.hooks.llm_extraction);
     // Other fields should default to true
     assert!(config.hooks.background_extraction);
-    assert!(config.hooks.tool_observations);
     assert!(config.hooks.high_priority_signals);
   }
 
@@ -1975,7 +1963,6 @@ enabled = true
         enabled: false, // Global disables hooks
         llm_extraction: true,
         background_extraction: true,
-        tool_observations: true,
         high_priority_signals: true,
       },
       ..Default::default()

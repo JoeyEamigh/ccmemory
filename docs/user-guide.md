@@ -291,7 +291,6 @@ decay_interval_hours = 60         # How often to run decay
 [hooks]
 enabled = true                    # Master toggle for automatic memory capture
 llm_extraction = true             # Use LLM for smart memory extraction
-tool_observations = true          # Create episodic memories from tool uses
 high_priority_signals = true      # Detect corrections/preferences immediately
 background_extraction = true      # Extract in background for some hooks
 

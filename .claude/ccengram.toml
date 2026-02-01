@@ -230,10 +230,6 @@ llm_extraction = true
 # When true, extraction runs asynchronously without blocking hook responses.
 background_extraction = true
 
-# Enable tool observation memories (default: true)
-# Creates episodic memories for individual tool uses (the "tool trail").
-tool_observations = true
-
 # Enable high-priority signal detection (default: true)
 # Scans user prompts for corrections/preferences for immediate extraction.
 high_priority_signals = true

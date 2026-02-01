@@ -82,7 +82,24 @@ Memory types:
 - turn_summary: Summary of what was accomplished
 - task_completion: Record of completed task
 
-Only extract memories with confidence >= 0.6. Return empty array if nothing worth extracting.
+Guidelines:
+- Only extract memories with confidence >= 0.6
+- Return EMPTY ARRAY if nothing worth extracting (routine file reads, simple searches, trivial changes)
+- Extract MULTIPLE memories when the segment contains distinct valuable insights
+- Each memory should be self-contained and useful in isolation
+
+Do NOT create memories for:
+- Routine exploration (reading files to understand code)
+- Simple searches with no notable findings
+- Trivial one-line fixes or typo corrections
+- Standard tool usage without learnings
+
+DO create memories for:
+- User corrections or preferences
+- Non-obvious code behavior discovered
+- Architectural decisions with rationale
+- Bugs found and their causes
+- Patterns that should be followed
 
 Conversation:
 "#;

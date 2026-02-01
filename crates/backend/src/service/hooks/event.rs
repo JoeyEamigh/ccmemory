@@ -14,6 +14,7 @@ pub enum HookEvent {
   PostToolUse,
   PreCompact,
   Stop,
+  SubagentStart,
   SubagentStop,
   Notification,
 }
@@ -27,6 +28,7 @@ impl std::fmt::Display for HookEvent {
       Self::PostToolUse => write!(f, "PostToolUse"),
       Self::PreCompact => write!(f, "PreCompact"),
       Self::Stop => write!(f, "Stop"),
+      Self::SubagentStart => write!(f, "SubagentStart"),
       Self::SubagentStop => write!(f, "SubagentStop"),
       Self::Notification => write!(f, "Notification"),
     }
@@ -45,6 +47,7 @@ impl std::str::FromStr for HookEvent {
       "PostToolUse" | "post-tool" | "post-tool-use" => Ok(Self::PostToolUse),
       "PreCompact" | "pre-compact" => Ok(Self::PreCompact),
       "Stop" | "stop" => Ok(Self::Stop),
+      "SubagentStart" | "subagent-start" => Ok(Self::SubagentStart),
       "SubagentStop" | "subagent-stop" => Ok(Self::SubagentStop),
       "Notification" | "notification" => Ok(Self::Notification),
       _ => Err(ServiceError::validation(format!("Unknown hook event: {}", s))),

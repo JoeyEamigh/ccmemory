@@ -10,7 +10,7 @@
 //! - **Context** (`HookContext`) - Bundles dependencies for hook processing
 //! - **State** (`HookState`) - Mutable state for session tracking and deduplication
 //! - **Handlers** - Thin adapters that call service functions
-//! - **Services** - Business logic (extraction, observation, etc.)
+//! - **Services** - Business logic (extraction)
 //!
 //! ## Module Structure
 //!
@@ -20,7 +20,6 @@
 //! ├── event.rs        # HookEvent enum and parsing
 //! ├── context.rs      # SegmentContext for session accumulation
 //! ├── extraction.rs   # Memory extraction service
-//! ├── observation.rs  # Tool observation memory creation
 //! └── handler.rs      # Event dispatch and handling
 //! ```
 //!
@@ -42,13 +41,11 @@
 //! - **Handlers are thin** - No business logic, just request/response transformation
 //! - **Services are testable** - Pure functions with injected dependencies
 //! - **State is explicit** - HookState passed through handlers, not hidden
-//! - **LLM is optional** - Falls back to basic extraction when unavailable
 
 mod context;
 mod event;
 mod extraction;
 mod handler;
-mod observation;
 
 // Re-export public types
 pub use event::HookEvent;
