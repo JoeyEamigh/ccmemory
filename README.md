@@ -337,8 +337,14 @@ Launch with `ccengram tui`
 | Logs           | `~/.local/share/ccengram/ccengram.log*`  |
 | Socket         | `$XDG_RUNTIME_DIR/ccengram.sock`         |
 
+## Other Notes
+
 > [!NOTE]
 > **Windows is not currently supported.** Should work on WSL though.
+
+> Why jemalloc?
+
+CCEngram uses LanceDB which relies on Arrow, which for some reason on Linux wasn't releasing memory back to the OS with the default allocator. The program now idles at around 40MiB vs about 12GiB.
 
 ## Documentation
 
