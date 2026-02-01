@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "plugin/.claude-plugin/plugin.json"
+  workflow_dispatch:
 
 jobs:
   check-version:
