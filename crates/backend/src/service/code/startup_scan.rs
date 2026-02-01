@@ -233,11 +233,13 @@ fn scan_source_files(root: &PathBuf, gitignore: Option<&Gitignore>) -> Vec<PathB
       continue;
     }
 
-    // Check gitignore
-    if let Some(gi) = gitignore
-      && gi.matched(path, false).is_ignore()
-    {
-      continue;
+    // Check gitignore - must use relative path and check parent directories too
+    // because patterns like "ignored_dir/" only match the directory itself
+    if let Some(gi) = gitignore {
+      let relative_path = path.strip_prefix(root).unwrap_or(path);
+      if gi.matched_path_or_any_parents(relative_path, false).is_ignore() {
+        continue;
+      }
     }
 
     // Check if this is a supported file type (code or document)
@@ -284,4 +286,56 @@ fn build_gitignore(root: &PathBuf) -> Option<Gitignore> {
   let _ = builder.add_line(None, ".venv/");
 
   builder.build().ok()
+}
+
+#[cfg(test)]
+mod tests {
+  use tempfile::TempDir;
+
+  use super::*;
+
+  #[test]
+  fn test_scan_source_files_respects_gitignore() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().to_path_buf();
+
+    // Create .gitignore
+    std::fs::write(root.join(".gitignore"), "ignored_dir/\n*.skip.rs\n").unwrap();
+
+    // Create test files
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+    std::fs::create_dir_all(root.join("ignored_dir")).unwrap();
+    std::fs::write(root.join("ignored_dir/hidden.rs"), "fn hidden() {}").unwrap();
+    std::fs::write(root.join("src/skip.skip.rs"), "fn skip() {}").unwrap();
+
+    // Build gitignore
+    let gi = build_gitignore(&root);
+    assert!(gi.is_some(), "gitignore should be built");
+    let gi = gi.unwrap();
+
+    // Test scan_source_files - this is what startup_scan uses
+    let files = scan_source_files(&root, Some(&gi));
+
+    let file_names: Vec<_> = files
+      .iter()
+      .map(|p| p.strip_prefix(&root).unwrap_or(p).to_string_lossy().to_string())
+      .collect();
+
+    assert!(
+      !file_names.iter().any(|f| f.contains("ignored_dir")),
+      "scan_source_files should not find ignored_dir files, found: {:?}",
+      file_names
+    );
+    assert!(
+      !file_names.iter().any(|f| f.contains("skip.skip")),
+      "scan_source_files should not find *.skip.rs files, found: {:?}",
+      file_names
+    );
+    assert!(
+      file_names.iter().any(|f| f.contains("main.rs")),
+      "scan_source_files should find main.rs, found: {:?}",
+      file_names
+    );
+  }
 }

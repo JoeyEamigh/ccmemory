@@ -1244,7 +1244,6 @@ dependencies = [
  "dhat",
  "dirs",
  "filetime",
- "fork",
  "futures",
  "hex",
  "ignore",
@@ -2896,15 +2895,6 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
-
-[[package]]
-name = "fork"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29714eb48a54d35d6f107e38cc58003f2e26825f222119db8369d28b24b79f2a"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "form_urlencoded"

@@ -1,0 +1,215 @@
+# CCEngram Project Configuration
+# Place in .claude/ccengram.toml
+#
+# NOTE: This is a project-level config. The following are daemon-level
+# and should be configured in ~/.config/ccengram/config.toml instead:
+#   [embedding]  - Embedding provider (shared across all projects)
+#   [daemon]     - Daemon lifecycle settings
+#   [hooks]      - Hook behavior settings
+#   [database]   - Database cache settings
+#   decay.decay_interval_hours, decay.session_cleanup_hours, decay.max_session_age_hours
+
+# ============================================================================
+# Tool Filtering
+# ============================================================================
+
+[tools]
+# Preset: minimal, standard, or full
+#   minimal  = explore, context (2 tools - recommended for exploration)
+#   standard = explore, context, memory management, code maintenance, diagnostics (11 tools)
+#   full     = all 34 tools including legacy search tools
+preset = "minimal"
+
+# Override preset with explicit tool list (uncomment to use):
+# enabled = [
+#     "memory_search",
+#     "memory_add",
+#     "code_search",
+# ]
+
+# Disable specific tools (applied after preset/enabled):
+# disabled = ["memory_delete", "memory_supersede"]
+
+# ============================================================================
+# Decay & Memory Lifecycle (project-level settings only)
+# ============================================================================
+# NOTE: Timing settings (decay_interval_hours, session_cleanup_hours,
+# max_session_age_hours) are daemon-level and configured in global config.
+
+[decay]
+# Salience threshold below which memories are archived
+archive_threshold = 0.1
+
+# Days without access before forced decay consideration
+max_idle_days = 90
+
+# ============================================================================
+# Search Defaults
+# ============================================================================
+
+[search]
+# Default number of results
+default_limit = 10
+
+# Include superseded memories by default
+include_superseded = false
+
+# Ranking weights (should sum to 1.0)
+semantic_weight = 0.5
+salience_weight = 0.3
+recency_weight = 0.2
+
+# ---- Explore tool settings ----
+
+# How many top results include full context (callers, callees, memories)
+# Higher = fewer tool calls needed, but larger responses
+explore_expand_top = 3
+
+# Max results per scope in explore
+explore_limit = 10
+
+# Items per section in context (callers, callees, siblings, memories)
+context_depth = 5
+
+# Max IDs in a single batch context call
+context_max_batch = 5
+
+# Max suggestions to generate from explore results
+explore_max_suggestions = 5
+
+# ---- Query embedding cache settings ----
+
+# Embedding cache size for query embeddings
+embedding_cache_size = 1000
+
+# Embedding cache TTL in seconds
+embedding_cache_ttl_secs = 300
+
+# ============================================================================
+# Code Indexing
+# ============================================================================
+
+[index]
+# Checkpoint save interval (seconds)
+checkpoint_interval_secs = 30
+
+# File watcher debounce (milliseconds)
+watcher_debounce_ms = 1000
+
+# Maximum file size to index (bytes)
+max_file_size = 1048576  # 1MB
+
+# Maximum chunk size (characters)
+max_chunk_chars = 2000
+
+# Number of files to process in parallel (default: 32)
+# Higher values improve throughput by parallelizing file preparation
+# Reduce if experiencing memory pressure
+parallel_files = 32
+
+# Number of files per indexing batch (default: 512)
+# Larger batches allow more concurrent embedding API requests
+index_batch_size = 512
+
+# ---- Startup Scan Settings ----
+
+# Enable startup scan when watcher starts (default: true)
+# Reconciles database with filesystem state to detect files added/modified/deleted
+# while the watcher was stopped. Only runs if project was previously indexed.
+startup_scan = true
+
+# Startup scan mode (default: full)
+#   deleted_only   = Only detect and remove deleted files (fastest)
+#   deleted_and_new = Detect deleted and new files
+#   full           = Full reconciliation including modified file detection
+startup_scan_mode = "full"
+
+# Block watcher startup until scan completes (default: false)
+# When false, watcher starts immediately and scan runs in background.
+# When true, watcher waits for scan to complete before processing events.
+# Note: Searches will block until scan completes regardless of this setting.
+startup_scan_blocking = false
+
+# Timeout for startup scan in seconds (default: 300)
+# Set to 0 for no timeout.
+startup_scan_timeout_secs = 300
+
+# ---- Watcher Settings ----
+
+# Watcher poll interval in seconds
+watcher_poll_secs = 2
+
+# Maximum files to cache content for watcher
+content_cache_size = 1000
+
+# Maximum file size to cache in bytes
+max_cached_file_size = 524288  # 512KB
+
+# Number of files to batch before processing (default: 32)
+# Larger batches improve embedding API efficiency but increase latency.
+watcher_batch_size = 32
+
+# Timeout to flush watcher batch even if not full, in milliseconds (default: 100)
+# Balances latency vs batching efficiency for incremental updates.
+watcher_batch_timeout_ms = 100
+
+# ---- Pipeline Tuning (advanced) ----
+
+# Scanner buffer size for bulk indexing
+pipeline_scanner_buffer = 256
+
+# Reader buffer size
+pipeline_reader_buffer = 128
+
+# Parser buffer size
+pipeline_parser_buffer = 256
+
+# Embedder buffer size
+pipeline_embedder_buffer = 1024
+
+# Embedding batch timeout in ms
+pipeline_embedding_timeout_ms = 250
+
+# Chunks before DB flush
+pipeline_db_flush_count = 500
+
+# DB flush timeout in ms
+pipeline_db_flush_timeout_ms = 1000
+
+# Maximum pending embedding batches
+pipeline_max_pending_batches = 64
+
+# Reader workers
+pipeline_reader_workers = 16
+
+# Parser workers (0 = num_cpus)
+pipeline_parser_workers = 0
+
+# ============================================================================
+# Document Indexing
+# ============================================================================
+
+[docs]
+# Directory to watch for documents (relative to project root)
+# When set, file watcher will auto-index files in this directory
+# directory = "docs"
+
+# File extensions to treat as documents
+extensions = ["md", "txt", "rst", "adoc", "org"]
+
+# Maximum document file size (bytes)
+max_file_size = 5242880  # 5MB
+
+# ============================================================================
+# Workspace Aliasing
+# ============================================================================
+
+[workspace]
+# Alias this project to share memory with another project.
+# Useful for multiple clones of the same repo or custom workspace groupings.
+# Git worktrees are automatically detected and don't need this setting.
+# alias = "/home/user/main-repo"
+
+# Disable automatic worktree detection (default: false)
+# Set to true to treat git worktrees as separate projects.
+# disable_worktree_detection = false

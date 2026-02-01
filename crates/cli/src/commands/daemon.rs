@@ -62,6 +62,13 @@ pub async fn cmd_daemon(
     bail!("Daemon is already running at {:?}", socket_path);
   }
 
+  // If --background, we're the spawned child process - run directly
+  if background {
+    info!("Running daemon in background mode");
+    ccengram::Daemon::run_background().await;
+    return Ok(());
+  }
+
   // Create config based on mode
   let mut config = ccengram::RuntimeConfig::load().await;
   config.foreground = foreground;

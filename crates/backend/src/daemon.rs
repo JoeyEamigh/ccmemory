@@ -158,7 +158,8 @@ impl Daemon {
     }
 
     info!("Daemon is not running, starting in background...");
-    let _pid = Self::spawn_background().await?;
+    let pid = Self::spawn_background().await?;
+    debug!("Spawned daemon with PID {}", pid);
 
     // Poll for socket to become available (up to 5 seconds)
     let delay = std::time::Duration::from_millis(500);
@@ -182,29 +183,47 @@ impl Daemon {
     Err(IpcError::Connection("Failed to connect to daemon after startup".into()))
   }
 
+  /// Spawn the daemon process.
+  ///
+  /// If `config.foreground` is false, this spawns a detached child process
+  /// running `ccengram daemon --background` and returns the child PID.
+  /// The child process will run with its own fresh Tokio runtime.
+  ///
+  /// If `config.foreground` is true, runs the daemon in the current process.
   pub async fn spawn(config: RuntimeConfig) -> std::io::Result<i32> {
     if !config.foreground {
-      if let fork::Fork::Parent(pid) = fork::daemon(false, false).map_err(std::io::Error::other)? {
-        return Ok(pid);
-      }
-
-      // We're in the child process
-      info!("Successfully forked into daemon process");
-
-      let config = RuntimeConfig {
-        foreground: false,
-        ..RuntimeConfig::load().await
-      };
-
-      let daemon = Self::new(config);
-      daemon.run().await;
-
-      std::process::exit(0);
+      // Spawn a detached child process instead of forking.
+      // This avoids issues with Tokio runtime not surviving fork.
+      return Self::spawn_detached().await;
     }
 
+    // Foreground mode: run directly in this process
     let daemon = Self::new(config);
     daemon.run().await;
     std::process::exit(0);
+  }
+
+  /// Spawn a detached daemon process using the current executable.
+  ///
+  /// This re-executes the current binary with `daemon --background`,
+  /// ensuring a clean process with its own Tokio runtime.
+  async fn spawn_detached() -> std::io::Result<i32> {
+    use std::process::{Command, Stdio};
+
+    let exe = std::env::current_exe()?;
+
+    let child = Command::new(&exe)
+      .arg("daemon")
+      .arg("--background")
+      .stdin(Stdio::null())
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .spawn()?;
+
+    let pid = child.id() as i32;
+    info!("Spawned daemon process with PID {}", pid);
+
+    Ok(pid)
   }
 
   /// Spawn the daemon in foreground mode.
@@ -223,16 +242,16 @@ impl Daemon {
 
   /// Spawn the daemon in background mode.
   ///
-  /// Forks the process and runs the daemon in the child.
-  /// Returns the child PID to the parent process.
+  /// Spawns a detached child process and returns its PID.
   pub async fn spawn_background() -> std::io::Result<i32> {
-    if let fork::Fork::Parent(pid) = fork::daemon(false, false).map_err(std::io::Error::other)? {
-      return Ok(pid);
-    }
+    Self::spawn_detached().await
+  }
 
-    // We're in the child process
-    info!("Successfully forked into daemon process");
-
+  /// Run the daemon directly in this process (background mode).
+  ///
+  /// Called when the process was spawned with `--background`.
+  /// This runs the daemon without trying to spawn another process.
+  pub async fn run_background() {
     let config = RuntimeConfig {
       foreground: false,
       ..RuntimeConfig::load().await
@@ -240,8 +259,6 @@ impl Daemon {
 
     let daemon = Self::new(config);
     daemon.run().await;
-
-    std::process::exit(0);
   }
 
   /// Run the daemon (blocking until shutdown).
