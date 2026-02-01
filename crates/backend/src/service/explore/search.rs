@@ -370,6 +370,50 @@ async fn compute_memory_hints(db: &ProjectDb, memory: &Memory) -> ExploreHints {
 // Context Expansion (for search results)
 // ============================================================================
 
+/// Threshold for truncating large chunks in expanded context (in lines)
+const EXPANSION_LINE_THRESHOLD: usize = 80;
+
+/// Number of lines to show when truncating large chunks
+const EXPANSION_PREVIEW_LINES: usize = 20;
+
+/// Create adaptive content for a chunk - truncates large chunks to signature + preview.
+fn adaptive_content(content: &str, signature: Option<&str>) -> String {
+  let line_count = content.lines().count();
+
+  if line_count <= EXPANSION_LINE_THRESHOLD {
+    return content.to_string();
+  }
+
+  // Large chunk - show signature + first N lines + truncation indicator
+  let mut result = String::new();
+
+  // Include signature if available and not already at start of content
+  if let Some(sig) = signature {
+    let first_line = content.lines().next().unwrap_or("");
+    if !first_line.trim().starts_with(sig.lines().next().unwrap_or("").trim()) {
+      result.push_str(sig);
+      result.push_str("\n\n");
+    }
+  }
+
+  // Add first N lines of content
+  let preview: String = content
+    .lines()
+    .take(EXPANSION_PREVIEW_LINES)
+    .collect::<Vec<_>>()
+    .join("\n");
+  result.push_str(&preview);
+
+  // Add truncation indicator
+  let remaining = line_count - EXPANSION_PREVIEW_LINES;
+  result.push_str(&format!(
+    "\n\n... ({} more lines, use `context` tool for full content)",
+    remaining
+  ));
+
+  result
+}
+
 /// Expand a code result with full context.
 async fn expand_code_result(db: &ProjectDb, chunk_id: &str, depth: usize) -> Option<ExpandedContext> {
   // Look up the chunk
@@ -378,7 +422,8 @@ async fn expand_code_result(db: &ProjectDb, chunk_id: &str, depth: usize) -> Opt
     _ => return None,
   };
 
-  let content = chunk.content.clone();
+  // Use adaptive content to handle large chunks
+  let content = adaptive_content(&chunk.content, chunk.signature.as_deref());
 
   // Fetch all context in parallel for better performance
   let (callers, callees, siblings, memories) = tokio::join!(

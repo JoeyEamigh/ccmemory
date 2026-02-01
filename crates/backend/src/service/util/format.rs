@@ -397,6 +397,10 @@ fn format_call_info(info: &CallInfo) -> String {
   {
     output.push_str(&format!("    Symbols: {}\n", symbols.join(", ")));
   }
+  if let Some(ref sig) = info.signature {
+    let clean_sig = sig.lines().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+    output.push_str(&format!("    Sig: {}\n", truncate(&clean_sig, 100)));
+  }
   output.push_str(&format!("    {}\n", truncate(&info.preview, 80)));
   output
 }
@@ -564,6 +568,7 @@ mod tests {
           lines: (5, 15),
           preview: "fn caller()".to_string(),
           symbols: Some(vec!["caller".to_string()]),
+          signature: None,
         }],
         callees: vec![],
         siblings: vec![],

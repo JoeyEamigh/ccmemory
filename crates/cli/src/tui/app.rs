@@ -785,6 +785,7 @@ impl App {
         scope,
         expand_top: Some(3),
         limit: Some(50),
+        depth: None,
       })
       .await
     {

@@ -390,6 +390,7 @@ impl ScenarioRunner {
         scope: Some(step.scope.as_deref().unwrap_or("all").to_string()),
         expand_top: Some(expand_top),
         limit: Some(10),
+        depth: None,
       })
       .await?;
     let latency = start.elapsed();

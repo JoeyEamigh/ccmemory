@@ -482,7 +482,7 @@ impl Chunker {
     let content_hash = compute_content_hash(&content);
 
     CodeChunk {
-      id: Uuid::now_v7(),
+      id: Uuid::new_v4(),
       file_path: file_path.to_string(),
       content,
       language,
@@ -529,7 +529,7 @@ impl Chunker {
     let content_hash = compute_content_hash(content);
 
     CodeChunk {
-      id: Uuid::now_v7(),
+      id: Uuid::new_v4(),
       file_path: file_path.to_string(),
       content: content.to_string(),
       language,
@@ -914,7 +914,7 @@ impl Chunker {
       let content_hash = compute_content_hash(source);
 
       return vec![CodeChunk {
-        id: Uuid::now_v7(),
+        id: Uuid::new_v4(),
         file_path: file_path.to_string(),
         content: source.to_string(),
         language,
@@ -957,7 +957,7 @@ impl Chunker {
         let content_hash = compute_content_hash(&content);
 
         chunks.push(CodeChunk {
-          id: Uuid::now_v7(),
+          id: Uuid::new_v4(),
           file_path: file_path.to_string(),
           content,
           language,
@@ -995,7 +995,7 @@ impl Chunker {
       let content_hash = compute_content_hash(&content);
 
       chunks.push(CodeChunk {
-        id: Uuid::now_v7(),
+        id: Uuid::new_v4(),
         file_path: file_path.to_string(),
         content,
         language,
@@ -1279,7 +1279,7 @@ impl Chunker {
       let content_hash = compute_content_hash(&content);
 
       chunks.push(CodeChunk {
-        id: Uuid::now_v7(),
+        id: Uuid::new_v4(),
         file_path: file_path.to_string(),
         content,
         language,

@@ -12,6 +12,7 @@ pub struct ExploreParams {
   pub scope: Option<String>, // "code" | "memory" | "docs" | "all"
   pub expand_top: Option<usize>,
   pub limit: Option<usize>,
+  pub depth: Option<usize>,
 }
 
 #[serde_with::skip_serializing_none]

@@ -994,7 +994,7 @@ impl ProjectActor {
       scope,
       expand_top: params.expand_top.unwrap_or(3),
       limit: params.limit.unwrap_or(10),
-      depth: 5,
+      depth: params.depth.unwrap_or(5),
       max_suggestions: 5,
     };
 

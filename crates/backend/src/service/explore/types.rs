@@ -63,6 +63,8 @@ pub struct CallInfo {
   pub preview: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub symbols: Option<Vec<String>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub signature: Option<String>,
 }
 
 /// Sibling symbol info

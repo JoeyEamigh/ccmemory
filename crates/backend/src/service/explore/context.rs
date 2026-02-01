@@ -191,6 +191,7 @@ pub async fn get_callers(db: &ProjectDb, chunk: &CodeChunk, limit: usize) -> Vec
           lines: (caller.start_line, caller.end_line),
           preview: truncate_preview(&caller.content, 100),
           symbols: Some(caller.symbols.clone()),
+          signature: caller.signature.clone(),
         });
 
         if callers.len() >= limit {
@@ -235,6 +236,7 @@ pub async fn get_callees(db: &ProjectDb, chunk: &CodeChunk, limit: usize) -> Vec
         lines: (callee.start_line, callee.end_line),
         preview: truncate_preview(&callee.content, 100),
         symbols: Some(callee.symbols.clone()),
+        signature: callee.signature.clone(),
       });
     }
   }
