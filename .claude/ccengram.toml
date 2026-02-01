@@ -221,11 +221,6 @@ max_file_size = 5242880 # 5MB
 # Manual memory creation via memory_add tool is still available.
 enabled = true
 
-# Enable LLM-based memory extraction (default: true)
-# When false, uses basic summary extraction without LLM inference.
-# This uses your Claude Code subscription.
-llm_extraction = true
-
 # Enable background extraction for PreCompact/Stop hooks (default: true)
 # When true, extraction runs asynchronously without blocking hook responses.
 background_extraction = true

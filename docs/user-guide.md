@@ -290,9 +290,8 @@ decay_interval_hours = 60         # How often to run decay
 
 [hooks]
 enabled = true                    # Master toggle for automatic memory capture
-llm_extraction = true             # Use LLM for smart memory extraction
 high_priority_signals = true      # Detect corrections/preferences immediately
-background_extraction = true      # Extract in background for some hooks
+background_extraction = true      # Extract in background (makes sure Claude Code isn't blocked by hooks - don't disable unless debugging)
 
 [workspace]
 # alias = "/path/to/main-repo"    # Share memories with another project
@@ -327,6 +326,7 @@ third_party/
 ```
 
 Both `.gitignore` and `.ccengramignore` patterns are applied during:
+
 - Initial indexing (`ccengram index`)
 - File watching (real-time updates)
 - Startup scans (detecting changes after daemon restart)

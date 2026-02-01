@@ -75,11 +75,6 @@ impl<'a> HookContext<'a> {
     self.config.enabled
   }
 
-  /// Check if LLM extraction is enabled
-  fn use_llm_extraction(&self) -> bool {
-    self.config.llm_extraction && self.llm.is_some()
-  }
-
   /// Check if background extraction is enabled
   fn use_background_extraction(&self) -> bool {
     self.config.background_extraction
@@ -332,7 +327,7 @@ pub async fn handle_post_tool_use(
   // Check for todo completion trigger: ≥3 tasks completed AND ≥5 tool calls
   let should_trigger = segment_ctx.completed_tasks.len() >= 3 && segment_ctx.tool_call_count() >= 5;
 
-  if should_trigger && ctx.is_enabled() && ctx.use_llm_extraction() {
+  if should_trigger && ctx.is_enabled() {
     debug!(
       "Todo completion trigger: extracting memories for session {}",
       session_id
@@ -365,7 +360,7 @@ pub async fn handle_pre_compact(
 
   // Extract from current segment before compaction
   if let Some(segment_ctx) = state.session_contexts.get_mut(session_id) {
-    if ctx.is_enabled() && segment_ctx.has_meaningful_work() && ctx.use_llm_extraction() {
+    if ctx.is_enabled() && segment_ctx.has_meaningful_work() {
       let ext_ctx = ctx.extraction_context();
       match extraction::extract_with_llm(&ext_ctx, segment_ctx, &mut state.seen_hashes).await {
         Ok(ids) => memories_created.extend(ids),
@@ -416,7 +411,6 @@ pub async fn handle_stop(
   if let Some(segment_ctx) = state.session_contexts.remove(session_id)
     && ctx.is_enabled()
     && segment_ctx.has_meaningful_work()
-    && ctx.use_llm_extraction()
   {
     let ext_ctx = ctx.extraction_context();
     match extraction::extract_with_llm(&ext_ctx, &segment_ctx, &mut state.seen_hashes).await {

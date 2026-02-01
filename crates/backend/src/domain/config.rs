@@ -679,11 +679,6 @@ pub struct HooksConfig {
   /// Manual memory creation via memory_add tool is still available.
   pub enabled: bool,
 
-  /// Enable LLM-based memory extraction (default: true)
-  /// When false, no memories are created.
-  /// This uses your Claude Code subscription.
-  pub llm_extraction: bool,
-
   /// Enable background extraction for PreCompact/Stop hooks (default: true)
   /// When true, extraction runs asynchronously without blocking hook responses.
   /// It is not recommended to disable this unless debugging.
@@ -698,7 +693,6 @@ impl Default for HooksConfig {
   fn default() -> Self {
     Self {
       enabled: false,
-      llm_extraction: true,
       background_extraction: true,
       high_priority_signals: true,
     }
@@ -1202,11 +1196,6 @@ max_file_size = 5242880  # 5MB
 # When false, hooks still run but don't create memories automatically.
 # Manual memory creation via memory_add tool is still available.
 enabled = false
-
-# Enable LLM-based memory extraction (default: true)
-# When false, uses basic summary extraction without LLM inference.
-# This uses your Claude Code subscription.
-llm_extraction = true
 
 # Enable background extraction for PreCompact/Stop hooks (default: true)
 # When true, extraction runs asynchronously without blocking hook responses.
@@ -1893,7 +1882,6 @@ preset = "minimal"
     let config = Config {
       hooks: HooksConfig {
         enabled: true,
-        llm_extraction: false,
         background_extraction: false,
         high_priority_signals: false,
       },
@@ -1904,7 +1892,6 @@ preset = "minimal"
     let parsed: Config = toml::from_str(&toml_str).unwrap();
 
     assert!(parsed.hooks.enabled);
-    assert!(!parsed.hooks.llm_extraction);
     assert!(!parsed.hooks.background_extraction);
     assert!(!parsed.hooks.high_priority_signals);
   }
@@ -1914,11 +1901,9 @@ preset = "minimal"
     let toml_content = r#"
 [hooks]
 enabled = true
-llm_extraction = false
 "#;
     let config: Config = toml::from_str(toml_content).unwrap();
     assert!(config.hooks.enabled);
-    assert!(!config.hooks.llm_extraction);
     // Other fields should default to true
     assert!(config.hooks.background_extraction);
     assert!(config.hooks.high_priority_signals);
@@ -1961,7 +1946,6 @@ enabled = true
     let global_config = Config {
       hooks: HooksConfig {
         enabled: false, // Global disables hooks
-        llm_extraction: true,
         background_extraction: true,
         high_priority_signals: true,
       },
@@ -1985,7 +1969,6 @@ enabled = true
       "project hooks.enabled=true should override global hooks.enabled=false"
     );
     // Other hooks fields should retain global values
-    assert!(merged_config.hooks.llm_extraction);
     assert!(merged_config.hooks.background_extraction);
   }
 
