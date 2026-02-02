@@ -52,42 +52,34 @@ jobs:
   build-linux:
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            artifact: ccengram-linux-x64
-          - target: aarch64-unknown-linux-gnu
-            artifact: ccengram-linux-arm64
+          - artifact: ccengram-linux-x64
+            runner: ubuntu-latest
+          - artifact: ccengram-linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.artifact }}
           add-rust-environment-hash-key: "false"
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
 
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild
-
       - name: Build
-        run: cargo zigbuild --release --target ${{ matrix.target }} -p cli
+        run: cargo build --release -p cli
 
       - name: Rename binary
-        run: mv target/${{ matrix.target }}/release/ccengram ${{ matrix.artifact }}
+        run: mv target/release/ccengram ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
@@ -98,21 +90,21 @@ jobs:
   build-macos:
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
-    runs-on: macos-latest
     strategy:
       matrix:
         include:
           - target: x86_64-apple-darwin
             artifact: ccengram-darwin-x64
+            runner: macos-15-intel
           - target: aarch64-apple-darwin
             artifact: ccengram-darwin-arm64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -124,10 +116,10 @@ jobs:
         uses: arduino/setup-protoc@v3
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p cli
+        run: cargo build --release -p cli
 
       - name: Rename binary
-        run: mv target/${{ matrix.target }}/release/ccengram ${{ matrix.artifact }}
+        run: mv target/release/ccengram ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
